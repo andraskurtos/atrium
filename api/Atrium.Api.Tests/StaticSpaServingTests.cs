@@ -9,7 +9,7 @@ using Xunit;
 
 namespace Atrium.Api.Tests;
 
-public class StaticSpaServingTests : IDisposable
+public sealed class StaticSpaServingTests : IDisposable
 {
     private readonly string _tempDistDir;
 

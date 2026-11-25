@@ -39,7 +39,7 @@ app.MapGet("/api/health", async (IDatabaseHealthCheck dbHealth, ILogger<Program>
     }
     catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
     {
-        logger.LogWarning(ex, "Database health check failed.");
+        LogDatabaseHealthCheckFailed(logger, ex);
         canConnect = false;
     }
 
@@ -85,4 +85,8 @@ if (!string.IsNullOrWhiteSpace(resolvedDistPath) && Directory.Exists(resolvedDis
 
 app.Run();
 
-public partial class Program;
+public partial class Program
+{
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Database health check failed.")]
+    private static partial void LogDatabaseHealthCheckFailed(ILogger logger, Exception exception);
+}

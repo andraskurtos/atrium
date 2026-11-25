@@ -1,0 +1,100 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  branch-policy:
+    name: Branch Policy
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Enforce feature/* or bugfix/* branch name
+        run: node scripts/check-branch-name.mjs "${{ github.head_ref }}"
+
+  suppression-audit:
+    name: Suppression Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run suppression auditor tests
+        run: node --test scripts/check-suppressions.test.mjs
+
+      - name: Audit codebase for undocumented warnings/errors
+        run: node scripts/check-suppressions.mjs
+
+  backend:
+    name: Backend (.NET 10)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore api/Atrium.sln
+
+      - name: Build (Release, Warnings as Errors)
+        run: dotnet build api/Atrium.sln -c Release --no-restore -warnaserror
+
+      - name: Run tests
+        run: dotnet test api/Atrium.sln -c Release --no-build --verbosity normal
+
+  frontend:
+    name: Frontend (Web PWA)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix web ci
+
+      - name: TypeScript strict typecheck
+        run: npm --prefix web run typecheck
+
+      - name: Production PWA build
+        run: npm --prefix web run build
+
+      - name: Verify PWA artifacts generated
+        run: |
+          test -f web/dist/manifest.webmanifest
+          test -f web/dist/sw.js
+
+      - name: Validate Docker Compose config
+        run: docker compose config --quiet

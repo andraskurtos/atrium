@@ -1,6 +1,8 @@
 <Project>
   <PropertyGroup>
-    <!-- Workaround for Linux distro .NET 10 SDK packages missing AspNetCore prune metadata (NETSDK1226) -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <!-- Justification: Arch/Linux distro .NET 10 SDK packages omit AspNetCore prune metadata (NETSDK1226); see docs/engineering/warning-justifications.md -->
     <AllowMissingPrunePackageData>true</AllowMissingPrunePackageData>
   </PropertyGroup>
 </Project>

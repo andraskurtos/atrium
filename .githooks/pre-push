@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Local pre-push guard: mirrors GitHub branch protection & PR branch naming rules.
+# Enable with: npm run hooks:install
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [[ "$remote_ref" == "refs/heads/main" ]]; then
+    echo "ERROR: Direct pushes to 'main' are blocked." >&2
+    echo "Create a feature/* or bugfix/* branch and open a Pull Request instead." >&2
+    exit 1
+  fi
+
+  if [[ "$remote_ref" == refs/heads/* ]]; then
+    branch="${remote_ref#refs/heads/}"
+    if [[ "$local_sha" != "0000000000000000000000000000000000000000" ]]; then
+      node scripts/check-branch-name.mjs "$branch"
+    fi
+  fi
+done

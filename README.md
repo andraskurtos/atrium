@@ -5,15 +5,21 @@ A private, self-hosted personal everything-app for storing personal data, calend
 ## Architecture
 
 - **`web/`** — React + Vite + TypeScript Progressive Web App (`vite-plugin-pwa`)
-- **`api/`** — Lightweight ASP.NET Core (.NET 10) Minimal API + Entity Framework Core (`Npgsql`), serving both `/api/*` and the built PWA in production
-- **`Dockerfile`** & **`docker-compose.yml`** — Unified containerized stack (Frontend PWA + `.NET 10` API + PostgreSQL 17 + optional Caddy automatic-HTTPS profile)
-- **`scripts/`** — Zero-dependency Node dev/prod runners plus one-click server setup (`scripts/setup-server.sh`)
+- **`api/`** — Lightweight ASP.NET Core (.NET 10) Minimal API + Entity Framework Core (`Npgsql`)
+- **`docker-compose.yml`** — Local PostgreSQL 17 database bound strictly to `127.0.0.1`
+- **`scripts/`** — Zero-dependency Node runners for Postgres auto-start, full-stack dev, production, and CI checks
+
+## Documentation
+
+- **UI Style Guide:** [docs/design/style-guide.md](docs/design/style-guide.md) — Warm Tactile Swiss (*"Atelier"*) + Focus Stream design system
+- **Contributing, Branching & CI Policy:** [docs/engineering/contributing-and-ci.md](docs/engineering/contributing-and-ci.md) — `main` PR workflow, `feature/*` & `bugfix/*` branches, and zero undocumented warnings policy
+- **Warning Justification Registry:** [docs/engineering/warning-justifications.md](docs/engineering/warning-justifications.md) — Logged project-wide workarounds and suppressions
 
 ## Prerequisites
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/) (for local development)
-- [Node.js 20+](https://nodejs.org/) (for local development)
-- [Docker](https://www.docker.com/) (for local PostgreSQL and containerized hosting)
+- [.NET 10 SDK](https://dotnet.microsoft.com/)
+- [Node.js 20+](https://nodejs.org/)
+- [Docker](https://www.docker.com/) (for local PostgreSQL)
 
 ## Quickstart (F5 or CLI)
 
@@ -31,37 +37,22 @@ To run the **Production Build** from the IDE, switch the launch dropdown to **`A
 # Optional: customize local ports/credentials
 cp .env.example .env
 
+# Install local git pre-push hook (blocks direct pushes to main & checks feature/* / bugfix/* names)
+npm run hooks:install
+
 # Full-stack development (auto-starts Postgres + API watch + Vite)
 npm run dev
 
 # Production build & start (auto-starts Postgres + builds PWA & Release API + serves on :5000)
 npm run prod
 
-# Run containerized full-stack server (Frontend PWA + API + Postgres)
-npm run server:up
-
-# Run tests and typecheck
-npm test
-
-# Build everything
-npm run build
+# Run all PR checks locally (suppression audit + .NET Release warnaserror + tests + web typecheck & build)
+npm run check:all
 ```
-
-## Self-Hosting (One-Click Container Setup)
-
-Host the entire stack — **Frontend PWA + `.NET 10` API + PostgreSQL 17** (+ optional automatic HTTPS via Caddy) — locally, on a home server/LAN, or on a VPS with a single command:
-
-```bash
-./scripts/setup-server.sh
-```
-
-The script installs Docker on Linux if missing, generates a strong PostgreSQL password into `chmod 600 .env`, builds and starts all containers, and verifies both the frontend and `/api/health`.
-
-See the full **[Self-Hosted Server Setup Guide](docs/deployment.md)** for HTTPS options (built-in Caddy, Tailscale Serve, Cloudflare Tunnel, Nginx), manual Docker Compose setup, backups, and troubleshooting.
 
 ## Roadmap
 
-- [x] **Phase 1: Bootstrap** — Monorepo, private GitHub remote, local Postgres, minimal EF Core API skeleton, installable placeholder PWA, F5 dev & production runners
+- [x] **Phase 1: Bootstrap** — Monorepo, private GitHub remote, local Postgres, minimal EF Core API skeleton, installable placeholder PWA, F5 dev & production runners, CI & style guide
 - [ ] **Phase 2: Authentication & Security** — Strong local auth (passkeys / WebAuthn + session hardening), secret management, scoped API tokens for agents
 - [ ] **Phase 3: Core Data & Calendar** — Flexible personal knowledge/data store, calendar/events, adaptive native-feeling UI modules
 - [ ] **Phase 4: MCP Server** — Model Context Protocol tools so AI agents can safely read/write Atrium data with user-controlled permissions
