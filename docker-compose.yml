@@ -17,5 +17,50 @@ services:
       timeout: 5s
       retries: 10
 
+  atrium:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: atrium:latest
+    container_name: atrium-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      Atrium__WebDistPath: /app/wwwroot
+      ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=${POSTGRES_DB:-atrium};Username=${POSTGRES_USER:-atrium};Password=${POSTGRES_PASSWORD:-atrium_dev_password}
+    ports:
+      - "${API_BIND_ADDRESS:-0.0.0.0}:${API_PORT:-5000}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: atrium-caddy
+    restart: unless-stopped
+    profiles: ["https"]
+    depends_on:
+      atrium:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      ATRIUM_DOMAIN: ${ATRIUM_DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - atrium_caddy_data:/data
+      - atrium_caddy_config:/config
+
 volumes:
   atrium_pgdata:
+  atrium_caddy_data:
+  atrium_caddy_config:

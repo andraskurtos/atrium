@@ -5,15 +5,15 @@ A private, self-hosted personal everything-app for storing personal data, calend
 ## Architecture
 
 - **`web/`** — React + Vite + TypeScript Progressive Web App (`vite-plugin-pwa`)
-- **`api/`** — Lightweight ASP.NET Core (.NET 10) Minimal API + Entity Framework Core (`Npgsql`)
-- **`docker-compose.yml`** — Local PostgreSQL 17 database bound strictly to `127.0.0.1`
-- **`scripts/`** — Zero-dependency Node runners for Postgres auto-start, full-stack dev, and single-origin production
+- **`api/`** — Lightweight ASP.NET Core (.NET 10) Minimal API + Entity Framework Core (`Npgsql`), serving both `/api/*` and the built PWA in production
+- **`Dockerfile`** & **`docker-compose.yml`** — Unified containerized stack (Frontend PWA + `.NET 10` API + PostgreSQL 17 + optional Caddy automatic-HTTPS profile)
+- **`scripts/`** — Zero-dependency Node dev/prod runners plus one-click server setup (`scripts/setup-server.sh`)
 
 ## Prerequisites
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/)
-- [Node.js 20+](https://nodejs.org/)
-- [Docker](https://www.docker.com/) (for local PostgreSQL)
+- [.NET 10 SDK](https://dotnet.microsoft.com/) (for local development)
+- [Node.js 20+](https://nodejs.org/) (for local development)
+- [Docker](https://www.docker.com/) (for local PostgreSQL and containerized hosting)
 
 ## Quickstart (F5 or CLI)
 
@@ -37,12 +37,27 @@ npm run dev
 # Production build & start (auto-starts Postgres + builds PWA & Release API + serves on :5000)
 npm run prod
 
+# Run containerized full-stack server (Frontend PWA + API + Postgres)
+npm run server:up
+
 # Run tests and typecheck
 npm test
 
 # Build everything
 npm run build
 ```
+
+## Self-Hosting (One-Click Container Setup)
+
+Host the entire stack — **Frontend PWA + `.NET 10` API + PostgreSQL 17** (+ optional automatic HTTPS via Caddy) — locally, on a home server/LAN, or on a VPS with a single command:
+
+```bash
+./scripts/setup-server.sh
+```
+
+The script installs Docker on Linux if missing, generates a strong PostgreSQL password into `chmod 600 .env`, builds and starts all containers, and verifies both the frontend and `/api/health`.
+
+See the full **[Self-Hosted Server Setup Guide](docs/deployment.md)** for HTTPS options (built-in Caddy, Tailscale Serve, Cloudflare Tunnel, Nginx), manual Docker Compose setup, backups, and troubleshooting.
 
 ## Roadmap
 
