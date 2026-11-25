@@ -1,0 +1,16 @@
+{
+  "name": "atrium",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Private self-hosted personal everything-app and AI agent hub",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "prod": "node scripts/prod.mjs",
+    "start": "node scripts/prod.mjs",
+    "db:up": "node scripts/ensure-postgres.mjs",
+    "db:down": "docker compose down",
+    "build": "npm --prefix web run build && dotnet build -c Release api/Atrium.sln",
+    "test": "dotnet test api/Atrium.sln && npm --prefix web run typecheck"
+  }
+}
+

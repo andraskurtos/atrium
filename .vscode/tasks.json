@@ -1,0 +1,64 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "atrium:ensure-postgres",
+      "type": "shell",
+      "command": "node",
+      "args": ["scripts/ensure-postgres.mjs"],
+      "problemMatcher": []
+    },
+    {
+      "label": "atrium:api-build",
+      "type": "process",
+      "command": "dotnet",
+      "args": ["build", "api/Atrium.Api/Atrium.Api.csproj"],
+      "problemMatcher": "$msCompile"
+    },
+    {
+      "label": "atrium:api-prepare",
+      "dependsOrder": "sequence",
+      "dependsOn": ["atrium:ensure-postgres", "atrium:api-build"],
+      "problemMatcher": []
+    },
+    {
+      "label": "atrium:dev",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "dev"],
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "atrium:prod",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "prod"],
+      "isBackground": true,
+      "problemMatcher": []
+    },
+    {
+      "label": "atrium:build",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "build"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$msCompile", "$tsc"]
+    },
+    {
+      "label": "atrium:test",
+      "type": "shell",
+      "command": "npm",
+      "args": ["test"],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}
+

@@ -1,0 +1,40 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Atrium: Dev (Full Stack)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/dev.mjs",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Atrium: Production (Build & Start)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/prod.mjs",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Atrium: API (C# Debugger)",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "atrium:api-prepare",
+      "program": "${workspaceFolder}/api/Atrium.Api/bin/Debug/net10.0/Atrium.Api.dll",
+      "cwd": "${workspaceFolder}/api/Atrium.Api",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "env": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "ASPNETCORE_URLS": "http://localhost:5000"
+      }
+    }
+  ]
+}
+
