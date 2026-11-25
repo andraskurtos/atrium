@@ -25,8 +25,10 @@ export function App() {
         const data = (await res.json().catch(() => ({}))) as HealthPayload;
         if (res.ok && data.status === 'ok') {
           setApiState('ok');
-        } else {
+        } else if (res.status === 503 && data.status === 'degraded') {
           setApiState('degraded');
+        } else {
+          setApiState('offline');
         }
       })
       .catch((err: unknown) => {
