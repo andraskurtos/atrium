@@ -1,3 +1,4 @@
+using Atrium.Api.Auth;
 using Atrium.Api.Data;
 using Atrium.Api.Health;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -13,6 +14,11 @@ if (string.IsNullOrWhiteSpace(connectionString))
         "Missing required database connection string 'ConnectionStrings:DefaultConnection'.");
 }
 
+var authOptions = new AuthOptions();
+builder.Configuration.GetSection(AuthOptions.SectionName).Bind(authOptions);
+authOptions.ValidateForEnvironment(builder.Environment.IsDevelopment());
+builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
+
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(connectionString));
 
@@ -26,6 +32,13 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 
 var app = builder.Build();
+
+if (builder.Configuration.GetValue("Atrium:Database:AutoMigrate", true))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+}
 
 app.UseForwardedHeaders();
 

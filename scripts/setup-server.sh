@@ -381,11 +381,12 @@ configure_env() {
   step "Configuring server environment (.env)"
 
   local env_file="${INSTALL_DIR}/.env"
-  local existing_db existing_user existing_pass existing_pg_port existing_api_port existing_bind existing_domain
+  local existing_db existing_user existing_pass existing_jwt existing_pg_port existing_api_port existing_bind existing_domain
 
   existing_db="$(read_env_key "$env_file" "POSTGRES_DB")"
   existing_user="$(read_env_key "$env_file" "POSTGRES_USER")"
   existing_pass="$(read_env_key "$env_file" "POSTGRES_PASSWORD")"
+  existing_jwt="$(read_env_key "$env_file" "ATRIUM_JWT_SECRET")"
   existing_pg_port="$(read_env_key "$env_file" "POSTGRES_PORT")"
   existing_api_port="$(read_env_key "$env_file" "API_PORT")"
   existing_bind="$(read_env_key "$env_file" "API_BIND_ADDRESS")"
@@ -410,6 +411,14 @@ configure_env() {
   else
     POSTGRES_PASSWORD="$(generate_password)"
     success "Generated strong 32-character PostgreSQL password."
+  fi
+
+  if [[ -n "$existing_jwt" && ${#existing_jwt} -ge 32 ]]; then
+    ATRIUM_JWT_SECRET="$existing_jwt"
+    info "Preserving existing ATRIUM_JWT_SECRET from .env."
+  else
+    ATRIUM_JWT_SECRET="$(generate_password)$(generate_password)"
+    success "Generated strong 64-character JWT signing secret."
   fi
 
   if [[ "$CLI_DOMAIN_SET" -eq 0 ]]; then
@@ -471,6 +480,7 @@ POSTGRES_PORT=${POSTGRES_PORT}
 # Atrium server (serves both frontend PWA and API)
 API_PORT=${API_PORT}
 API_BIND_ADDRESS=${API_BIND_ADDRESS}
+ATRIUM_JWT_SECRET=${ATRIUM_JWT_SECRET}
 
 # Optional domain for automatic HTTPS via Caddy (--profile https)
 ATRIUM_DOMAIN=${DOMAIN}
