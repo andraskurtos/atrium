@@ -1,13 +1,8 @@
 import type {
-  AccountPreferences,
   AgentProposal,
-  AgentToken,
   CalendarEvent,
   NoteItem,
-  PasskeyItem,
-  SessionItem,
   TaskItem,
-  UserProfile,
   VaultItem,
 } from '../types/atrium';
 
@@ -18,98 +13,6 @@ export function getInitials(name: string, username: string): string {
     return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
   }
   return source.slice(0, 2).toUpperCase();
-}
-
-export function detectTimezone(): string {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-  } catch {
-    return 'UTC';
-  }
-}
-
-export function createDefaultProfile(displayName = ''): UserProfile {
-  return {
-    displayName,
-    username: 'owner',
-    email: 'owner@atrium.local',
-    bio: 'Self-hosted Atrium workspace owner',
-    timezone: detectTimezone(),
-    avatarDataUrl: null,
-    passwordUpdatedAt: '14 days ago',
-  };
-}
-
-export function createDefaultPreferences(): AccountPreferences {
-  return {
-    weekStartsOn: 'monday',
-    timeFormat: '24h',
-    requireAgentApproval: true,
-    morningBrief: true,
-    eventReminders: true,
-  };
-}
-
-export function createInitialPasskeys(): PasskeyItem[] {
-  return [
-    {
-      id: 'pk-1',
-      deviceName: 'Workstation · Platform Passkey',
-      addedAt: 'Nov 12, 2026',
-      lastUsed: 'Today',
-    },
-    {
-      id: 'pk-2',
-      deviceName: 'Mobile PWA · Face / Touch ID',
-      addedAt: 'Nov 18, 2026',
-      lastUsed: 'Yesterday',
-    },
-  ];
-}
-
-export function createInitialAgentTokens(): AgentToken[] {
-  return [
-    {
-      id: 'tok-1',
-      name: 'Calendar MCP',
-      prefix: 'atr_cal_8f2a••••',
-      scopes: ['calendar:read', 'calendar:propose'],
-      lastUsed: '12m ago',
-    },
-    {
-      id: 'tok-2',
-      name: 'Home Assistant',
-      prefix: 'atr_ha_3c91••••',
-      scopes: ['tasks:propose'],
-      lastUsed: '48m ago',
-    },
-    {
-      id: 'tok-3',
-      name: 'Local Vault CLI',
-      prefix: 'atr_vlt_6d04••••',
-      scopes: ['vault:read'],
-      lastUsed: '2d ago',
-    },
-  ];
-}
-
-export function createInitialSessions(): SessionItem[] {
-  return [
-    {
-      id: 'sess-1',
-      device: 'Desktop Browser · Standalone PWA',
-      location: 'Local network (127.0.0.1)',
-      lastActive: 'Active now',
-      isCurrent: true,
-    },
-    {
-      id: 'sess-2',
-      device: 'Mobile Safari · iOS PWA',
-      location: 'Local network (Tailscale)',
-      lastActive: '2h ago',
-      isCurrent: false,
-    },
-  ];
 }
 
 export function toDateKey(date: Date): string {

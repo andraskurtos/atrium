@@ -1871,3 +1871,36 @@ select {
     bottom: calc(68px + env(safe-area-inset-bottom));
   }
 }
+
+/* Auth Screen & Dashboard Welcome Badge */
+.auth-card {
+  width: 100%;
+  max-width: 520px;
+}
+
+.auth-loading-shell {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 28px 32px;
+}
+
+.welcome-badge-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.welcome-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccountPage } from './components/AccountPage';
 import { AgentProposalsCard } from './components/AgentProposalsCard';
+import { AuthScreen } from './components/AuthScreen';
 import { CalendarMockupCard } from './components/CalendarMockupCard';
 import { ChecklistCard } from './components/ChecklistCard';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
@@ -10,16 +11,10 @@ import { NotesCard } from './components/NotesCard';
 import { QuickCapture } from './components/QuickCapture';
 import { TopBar } from './components/TopBar';
 import { VaultCard } from './components/VaultCard';
-import { WelcomeScreen } from './components/WelcomeScreen';
 import {
-  createDefaultPreferences,
-  createDefaultProfile,
-  createInitialAgentTokens,
   createInitialEvents,
   createInitialNotes,
-  createInitialPasskeys,
   createInitialProposals,
-  createInitialSessions,
   createInitialTasks,
   createInitialVault,
   formatLongDate,
@@ -30,6 +25,31 @@ import {
 } from './data/mockData';
 import { useApiHealth } from './hooks/useApiHealth';
 import { useTheme } from './hooks/useTheme';
+import {
+  changePassword,
+  clearAccessToken,
+  createInvite,
+  createToken,
+  deleteMember,
+  getAccountMe,
+  getAuthStatus,
+  listInvites,
+  listMembers,
+  listSessions,
+  listTokens,
+  logout,
+  refreshAccessToken,
+  revokeInvite,
+  revokeOtherSessions,
+  revokeSession,
+  revokeToken,
+  setMemberActive,
+  setUnauthorizedHandler,
+  updatePreferences,
+  updateProfile,
+  type AuthSessionPayload,
+  type CreateInvitePayload,
+} from './lib/authClient';
 import type {
   AccountPreferences,
   AgentProposal,
@@ -37,60 +57,24 @@ import type {
   AppView,
   CalendarEvent,
   CaptureKind,
+  HouseholdMember,
+  InviteItem,
   MobileTab,
   NoteItem,
-  PasskeyItem,
   SessionItem,
   TaskItem,
   UserProfile,
 } from './types/atrium';
 
-const WELCOME_STORAGE_KEY = 'atrium.welcomed';
-const PROFILE_STORAGE_KEY = 'atrium.profile';
-const PREFS_STORAGE_KEY = 'atrium.preferences';
-const LEGACY_OWNER_NAME_KEY = 'atrium.ownerName';
+function readInviteCodeFromHash(): string {
+  if (typeof window === 'undefined') return '';
+  const match = window.location.hash.match(/^#invite=([^&]+)/);
+  return match ? decodeURIComponent(match[1]) : '';
+}
 
 function readInitialView(): AppView {
-  if (typeof window === 'undefined') return 'welcome';
-  if (window.location.hash === '#account') return 'account';
-  if (window.location.hash === '#welcome') return 'welcome';
-  if (window.location.hash === '#dashboard') return 'dashboard';
-  try {
-    return window.localStorage.getItem(WELCOME_STORAGE_KEY) === 'true'
-      ? 'dashboard'
-      : 'welcome';
-  } catch {
-    return 'welcome';
-  }
-}
-
-function readInitialProfile(): UserProfile {
-  if (typeof window === 'undefined') return createDefaultProfile();
-  try {
-    const raw = window.localStorage.getItem(PROFILE_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<UserProfile>;
-      return { ...createDefaultProfile(), ...parsed };
-    }
-    const legacyName = window.localStorage.getItem(LEGACY_OWNER_NAME_KEY) ?? '';
-    return createDefaultProfile(legacyName);
-  } catch {
-    return createDefaultProfile();
-  }
-}
-
-function readInitialPreferences(): AccountPreferences {
-  if (typeof window === 'undefined') return createDefaultPreferences();
-  try {
-    const raw = window.localStorage.getItem(PREFS_STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<AccountPreferences>;
-      return { ...createDefaultPreferences(), ...parsed };
-    }
-  } catch {
-    // Ignore storage errors
-  }
-  return createDefaultPreferences();
+  if (typeof window === 'undefined') return 'dashboard';
+  return window.location.hash === '#account' ? 'account' : 'dashboard';
 }
 
 export function App() {
@@ -105,17 +89,24 @@ export function App() {
   } = useApiHealth();
   const { theme, setTheme, cycleTheme } = useTheme();
 
-  const [activeView, setActiveView] = useState<AppView>(readInitialView);
-  const [profile, setProfile] = useState<UserProfile>(readInitialProfile);
-  const [preferences, setPreferences] = useState<AccountPreferences>(
-    readInitialPreferences,
-  );
-  const [passkeys, setPasskeys] = useState<PasskeyItem[]>(createInitialPasskeys);
-  const [agentTokens, setAgentTokens] = useState<AgentToken[]>(
-    createInitialAgentTokens,
-  );
-  const [sessions, setSessions] = useState<SessionItem[]>(createInitialSessions);
+  const [authBooting, setAuthBooting] = useState(true);
+  const [initialized, setInitialized] = useState(true);
+  const [initialInviteCode] = useState(readInviteCodeFromHash);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [preferences, setPreferences] = useState<AccountPreferences>({
+    theme: 'system',
+    weekStartsOn: 'monday',
+    timeFormat: '24h',
+    requireAgentApproval: true,
+    morningBrief: true,
+    eventReminders: true,
+  });
+  const [agentTokens, setAgentTokens] = useState<AgentToken[]>([]);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [invites, setInvites] = useState<InviteItem[]>([]);
+  const [members, setMembers] = useState<HouseholdMember[]>([]);
 
+  const [activeView, setActiveView] = useState<AppView>(readInitialView);
   const [selectedDateKey, setSelectedDateKey] = useState<string>(todayKey);
   const [tasks, setTasks] = useState<TaskItem[]>(createInitialTasks);
   const [events, setEvents] = useState<CalendarEvent[]>(() =>
@@ -134,25 +125,76 @@ export function App() {
 
   const quickCaptureRef = useRef<HTMLInputElement | null>(null);
 
-  const announce = (message: string) => {
+  const announce = useCallback((message: string) => {
     setAnnouncement(message);
-  };
+  }, []);
+
+  const clearAuthState = useCallback(() => {
+    clearAccessToken();
+    setProfile(null);
+    setAgentTokens([]);
+    setSessions([]);
+    setInvites([]);
+    setMembers([]);
+    setIsCommandOpen(false);
+  }, []);
+
+  const loadAccountSecurityData = useCallback(async (role: UserProfile['role']) => {
+    const [nextSessions, nextTokens] = await Promise.all([
+      listSessions(),
+      listTokens(),
+    ]);
+    setSessions(nextSessions);
+    setAgentTokens(nextTokens);
+
+    if (role === 'Owner') {
+      const [nextInvites, nextMembers] = await Promise.all([
+        listInvites(),
+        listMembers(),
+      ]);
+      setInvites(nextInvites);
+      setMembers(nextMembers);
+    } else {
+      setInvites([]);
+      setMembers([]);
+    }
+  }, []);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
-    } catch {
-      // Ignore quota/storage errors
-    }
-  }, [profile]);
+    setUnauthorizedHandler(clearAuthState);
+    return () => setUnauthorizedHandler(null);
+  }, [clearAuthState]);
 
   useEffect(() => {
-    try {
-      window.localStorage.setItem(PREFS_STORAGE_KEY, JSON.stringify(preferences));
-    } catch {
-      // Ignore storage errors
-    }
-  }, [preferences]);
+    let active = true;
+    (async () => {
+      try {
+        const status = await getAuthStatus();
+        if (!active) return;
+        setInitialized(status.initialized);
+
+        if (status.initialized) {
+          const refreshed = await refreshAccessToken();
+          if (refreshed && active) {
+            const me = await getAccountMe();
+            if (!active) return;
+            setProfile(me.user);
+            setPreferences(me.preferences);
+            setTheme(me.preferences.theme);
+            await loadAccountSecurityData(me.user.role);
+          }
+        }
+      } catch {
+        // API offline or unauthenticated; AuthScreen handles retry
+      } finally {
+        if (active) setAuthBooting(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [loadAccountSecurityData, setTheme]);
 
   useEffect(() => {
     if (!announcement) return;
@@ -160,45 +202,140 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [announcement]);
 
-  // Global ⌘K / Ctrl+K shortcut for Command Palette
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
-        if (activeView !== 'welcome') {
+        if (profile) {
           setIsCommandOpen((prev) => !prev);
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeView]);
+  }, [profile]);
 
-  const openTaskCount = tasks.filter((t) => !t.completed).length;
-  const todayEventCount = events.filter((e) => e.dateKey === todayKey).length;
-  const pendingProposalCount = proposals.length;
+  const handleAuthenticated = async (session: AuthSessionPayload) => {
+    setInitialized(true);
+    setProfile(session.user);
+    setPreferences(session.preferences);
+    setTheme(session.preferences.theme);
+    setActiveView('dashboard');
+    if (window.location.hash.startsWith('#invite=')) {
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+    try {
+      await loadAccountSecurityData(session.user.role);
+    } catch {
+      // Non-fatal; AccountPage refreshes when opened
+    }
+    announce(`Signed in as ${session.user.displayName || session.user.username}`);
+  };
+
+  const handleSignOut = async () => {
+    await logout();
+    clearAuthState();
+    announce('Signed out');
+  };
 
   const navigateTo = (view: AppView) => {
     setActiveView(view);
-    if (view !== 'welcome') {
-      try {
-        window.localStorage.setItem(WELCOME_STORAGE_KEY, 'true');
-      } catch {
-        // Ignore storage errors
-      }
+    if (view === 'account' && profile) {
+      void loadAccountSecurityData(profile.role);
     }
     window.scrollTo({ top: 0, behavior: 'auto' });
   };
 
-  const handleEnterDashboard = (name: string, openCalendar = false) => {
-    if (name !== profile.displayName) {
-      setProfile((prev) => ({ ...prev, displayName: name }));
+  const handleUpdateProfile = async (next: {
+    displayName: string;
+    username: string;
+    email: string;
+    bio: string;
+    timezone: string;
+    avatarDataUrl: string | null;
+  }) => {
+    const updated = await updateProfile(next);
+    setProfile(updated);
+  };
+
+  const handleUpdatePreferences = async (next: AccountPreferences) => {
+    setPreferences(next);
+    try {
+      const saved = await updatePreferences(next);
+      setPreferences(saved);
+    } catch {
+      announce('Could not save preferences');
     }
-    navigateTo('dashboard');
-    if (openCalendar) {
-      setIsCalendarExpanded(true);
-      setMobileTab('calendar');
-    }
+  };
+
+  const handleChangePassword = async (
+    currentPassword: string,
+    newPassword: string,
+  ) => {
+    const res = await changePassword({ currentPassword, newPassword });
+    setProfile((prev) =>
+      prev ? { ...prev, passwordUpdatedAt: res.passwordUpdatedAt } : prev,
+    );
+    const refreshedSessions = await listSessions();
+    setSessions(refreshedSessions);
+  };
+
+  const handleCreateToken = async (
+    name: string,
+    scopes: string[],
+  ): Promise<string> => {
+    const created = await createToken(name, scopes);
+    setAgentTokens((prev) => [created.token, ...prev]);
+    announce(`Created scoped token for ${name}`);
+    return created.secret;
+  };
+
+  const handleRevokeToken = async (id: string) => {
+    await revokeToken(id);
+    setAgentTokens((prev) => prev.filter((item) => item.id !== id));
+    announce('MCP agent token revoked');
+  };
+
+  const handleRevokeSession = async (id: string) => {
+    await revokeSession(id);
+    setSessions((prev) => prev.filter((item) => item.id !== id));
+    announce('Session signed out');
+  };
+
+  const handleSignOutOtherSessions = async () => {
+    await revokeOtherSessions();
+    setSessions((prev) => prev.filter((item) => item.isCurrent));
+    announce('Signed out all other sessions');
+  };
+
+  const handleCreateInvite = async (
+    label: string | null,
+    expiresInDays: number,
+  ): Promise<CreateInvitePayload> => {
+    const created = await createInvite(label, expiresInDays);
+    setInvites((prev) => [created.invite, ...prev]);
+    announce('Created household invite');
+    return created;
+  };
+
+  const handleRevokeInvite = async (id: string) => {
+    await revokeInvite(id);
+    setInvites((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, status: 'revoked' } : item)),
+    );
+    announce('Invite revoked');
+  };
+
+  const handleToggleMemberActive = async (id: string, isActive: boolean) => {
+    const updated = await setMemberActive(id, isActive);
+    setMembers((prev) => prev.map((m) => (m.id === id ? updated : m)));
+    announce(isActive ? 'Member reactivated' : 'Member deactivated and sessions revoked');
+  };
+
+  const handleDeleteMember = async (id: string) => {
+    await deleteMember(id);
+    setMembers((prev) => prev.filter((m) => m.id !== id));
+    announce('Household member removed');
   };
 
   const handleCapture = ({
@@ -213,12 +350,7 @@ export function App() {
     const id = `${kind}-${Date.now()}`;
     if (kind === 'task') {
       setTasks((prev) => [
-        {
-          id,
-          title: text,
-          completed: false,
-          category: 'Inbox',
-        },
+        { id, title: text, completed: false, category: 'Inbox' },
         ...prev,
       ]);
       announce(`Added task: ${text}`);
@@ -271,13 +403,7 @@ export function App() {
   };
 
   const handleAddEvent = (eventData: Omit<CalendarEvent, 'id'>) => {
-    setEvents((prev) => [
-      ...prev,
-      {
-        ...eventData,
-        id: `evt-${Date.now()}`,
-      },
-    ]);
+    setEvents((prev) => [...prev, { ...eventData, id: `evt-${Date.now()}` }]);
     announce(`Added event: ${eventData.title}`);
   };
 
@@ -328,65 +454,8 @@ export function App() {
     announce('Dismissed agent proposal');
   };
 
-  const handleAddPasskey = (deviceName: string) => {
-    const addedDate = new Intl.DateTimeFormat('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    }).format(new Date());
-    setPasskeys((prev) => [
-      {
-        id: `pk-${Date.now()}`,
-        deviceName,
-        addedAt: addedDate,
-        lastUsed: 'Just added',
-      },
-      ...prev,
-    ]);
-    announce(`Registered passkey: ${deviceName}`);
-  };
-
-  const handleRevokePasskey = (id: string) => {
-    setPasskeys((prev) => prev.filter((item) => item.id !== id));
-    announce('Passkey revoked');
-  };
-
-  const handleCreateToken = (name: string, scopes: string[]): string => {
-    const randomPart = Math.random().toString(36).slice(2, 10);
-    const tail = Math.random().toString(36).slice(2, 10);
-    const fullSecret = `atr_${randomPart}_${tail}`;
-    const prefix = `atr_${randomPart.slice(0, 4)}••••`;
-
-    setAgentTokens((prev) => [
-      {
-        id: `tok-${Date.now()}`,
-        name,
-        prefix,
-        scopes,
-        lastUsed: 'Never',
-      },
-      ...prev,
-    ]);
-    announce(`Created scoped token for ${name}`);
-    return fullSecret;
-  };
-
-  const handleRevokeToken = (id: string) => {
-    setAgentTokens((prev) => prev.filter((item) => item.id !== id));
-    announce('MCP agent token revoked');
-  };
-
-  const handleRevokeSession = (id: string) => {
-    setSessions((prev) => prev.filter((item) => item.id !== id));
-    announce('Session signed out');
-  };
-
-  const handleSignOutOtherSessions = () => {
-    setSessions((prev) => prev.filter((item) => item.isCurrent));
-    announce('Signed out all other sessions');
-  };
-
   const handleExportData = () => {
+    if (!profile) return;
     const archive = {
       exportedAt: new Date().toISOString(),
       profile: {
@@ -410,25 +479,34 @@ export function App() {
     announce('Exported Atrium JSON archive');
   };
 
-  const handleResetWorkspace = () => {
-    try {
-      window.localStorage.removeItem(PROFILE_STORAGE_KEY);
-      window.localStorage.removeItem(PREFS_STORAGE_KEY);
-      window.localStorage.removeItem(LEGACY_OWNER_NAME_KEY);
-    } catch {
-      // Ignore storage errors
-    }
-    setProfile(createDefaultProfile());
-    setPreferences(createDefaultPreferences());
-    setTasks(createInitialTasks());
-    setEvents(createInitialEvents(today));
-    setProposals(createInitialProposals(today));
-    setNotes(createInitialNotes());
-    setPasskeys(createInitialPasskeys());
-    setAgentTokens(createInitialAgentTokens());
-    setSessions(createInitialSessions());
-    announce('Local workspace data reset to defaults');
-  };
+  if (authBooting) {
+    return (
+      <main className="auth-loading-shell" role="status" aria-live="polite">
+        <div className="card auth-loading-card">
+          <img src="/icon.svg" alt="" width={40} height={40} className="welcome-mark" />
+          <p className="meta-text">Connecting to your Atrium instance…</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <AuthScreen
+        initialized={initialized}
+        initialInviteCode={initialInviteCode}
+        apiState={apiState}
+        apiLabel={apiLabel}
+        theme={theme}
+        onCycleTheme={cycleTheme}
+        onAuthenticated={handleAuthenticated}
+      />
+    );
+  }
+
+  const openTaskCount = tasks.filter((t) => !t.completed).length;
+  const todayEventCount = events.filter((e) => e.dateKey === todayKey).length;
+  const pendingProposalCount = proposals.length;
 
   const commands: CommandItem[] = [
     {
@@ -495,11 +573,11 @@ export function App() {
       },
     },
     {
-      id: 'cmd-welcome',
-      label: 'View Welcome Screen',
-      hint: 'Overview',
-      group: 'Navigation',
-      onSelect: () => navigateTo('welcome'),
+      id: 'cmd-signout',
+      label: 'Sign out of Atrium',
+      hint: 'Session',
+      group: 'Account',
+      onSelect: () => void handleSignOut(),
     },
   ];
 
@@ -509,26 +587,7 @@ export function App() {
       ? 'Today'
       : formatShortDate(parseDateKey(selectedDateKey));
 
-  if (activeView === 'welcome') {
-    return (
-      <WelcomeScreen
-        ownerName={profile.displayName}
-        apiState={apiState}
-        apiLabel={apiLabel}
-        theme={theme}
-        todayFormatted={todayFormatted}
-        openTaskCount={openTaskCount}
-        todayEventCount={todayEventCount}
-        pendingProposalCount={pendingProposalCount}
-        onCycleTheme={cycleTheme}
-        onEnter={handleEnterDashboard}
-      />
-    );
-  }
-
-  const eyebrow = profile.displayName
-    ? `${getGreeting(today).toUpperCase()}, ${profile.displayName.toUpperCase()} · ATRIUM`
-    : `${getGreeting(today).toUpperCase()} · ATRIUM PERSONAL HUB`;
+  const greetingText = `${getGreeting(today)}, ${profile.displayName || profile.username}`;
 
   return (
     <div className="app-shell">
@@ -539,6 +598,7 @@ export function App() {
         onCycleTheme={cycleTheme}
         onOpenCommandPalette={() => setIsCommandOpen(true)}
         onNavigate={navigateTo}
+        onSignOut={() => void handleSignOut()}
       />
 
       {activeView === 'account' ? (
@@ -546,24 +606,28 @@ export function App() {
           profile={profile}
           preferences={preferences}
           theme={theme}
-          passkeys={passkeys}
           agentTokens={agentTokens}
           sessions={sessions}
+          invites={invites}
+          members={members}
           apiState={apiState}
           apiLabel={apiLabel}
           lastChecked={lastChecked}
           onBackToDashboard={() => navigateTo('dashboard')}
-          onUpdateProfile={setProfile}
-          onUpdatePreferences={setPreferences}
+          onUpdateProfile={handleUpdateProfile}
+          onUpdatePreferences={handleUpdatePreferences}
           onSetTheme={setTheme}
-          onAddPasskey={handleAddPasskey}
-          onRevokePasskey={handleRevokePasskey}
+          onChangePassword={handleChangePassword}
           onCreateToken={handleCreateToken}
           onRevokeToken={handleRevokeToken}
           onRevokeSession={handleRevokeSession}
           onSignOutOtherSessions={handleSignOutOtherSessions}
+          onCreateInvite={handleCreateInvite}
+          onRevokeInvite={handleRevokeInvite}
+          onToggleMemberActive={handleToggleMemberActive}
+          onDeleteMember={handleDeleteMember}
           onExportData={handleExportData}
-          onResetWorkspace={handleResetWorkspace}
+          onSignOut={() => void handleSignOut()}
           onRefreshHealth={refreshHealth}
           onAnnounce={announce}
         />
@@ -572,7 +636,11 @@ export function App() {
           <div className="dashboard-container" data-mobile-tab={mobileTab}>
             <main className="focus-stream">
               <header className="stream-header" data-mobile-section="stream">
-                <p className="kicker">{eyebrow}</p>
+                <div className="welcome-badge-row">
+                  <span className="pill-accent welcome-badge">
+                    Welcome back · {greetingText}
+                  </span>
+                </div>
                 <h1 className="page-title">{todayFormatted}</h1>
                 {preferences.morningBrief && (
                   <p className="stream-summary">

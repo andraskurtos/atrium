@@ -8,12 +8,13 @@ import {
 } from './Icons';
 
 interface TopBarProps {
-  activeView: Exclude<AppView, 'welcome'>;
+  activeView: AppView;
   profile: UserProfile;
   theme: ThemePreference;
   onCycleTheme: () => void;
   onOpenCommandPalette: () => void;
   onNavigate: (view: AppView) => void;
+  onSignOut: () => void;
 }
 
 export function TopBar({
@@ -23,6 +24,7 @@ export function TopBar({
   onCycleTheme,
   onOpenCommandPalette,
   onNavigate,
+  onSignOut,
 }: TopBarProps) {
   const ThemeIcon =
     theme === 'light' ? SunIcon : theme === 'dark' ? MoonIcon : SystemThemeIcon;
@@ -60,15 +62,6 @@ export function TopBar({
         </div>
 
         <nav className="topbar-actions" aria-label="Global actions">
-          <button
-            id="topbar-welcome-btn"
-            type="button"
-            className="btn btn-ghost btn-compact topbar-welcome-link"
-            onClick={() => onNavigate('welcome')}
-          >
-            Welcome
-          </button>
-
           <button
             id="topbar-command-btn"
             type="button"
@@ -117,6 +110,15 @@ export function TopBar({
               )}
             </span>
             <span className="account-pill-label">Account</span>
+          </button>
+
+          <button
+            id="topbar-signout-btn"
+            type="button"
+            className="btn btn-ghost btn-compact topbar-welcome-link"
+            onClick={onSignOut}
+          >
+            Sign out
           </button>
         </nav>
       </div>
