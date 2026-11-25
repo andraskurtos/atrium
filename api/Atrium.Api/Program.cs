@@ -18,29 +18,6 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddScoped<IDatabaseHealthCheck, EfDatabaseHealthCheck>();
 
-var corsOrigins = ParseCorsOrigins(builder.Configuration);
-const string corsPolicyName = "AtriumCors";
-if (corsOrigins.Length > 0)
-{
-    builder.Services.AddCors(options =>
-    {
-        options.AddPolicy(corsPolicyName, policy =>
-        {
-            if (corsOrigins.Contains("*"))
-            {
-                policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
-            }
-            else
-            {
-                policy.WithOrigins(corsOrigins)
-                    .AllowAnyHeader()
-                    .AllowAnyMethod()
-                    .AllowCredentials();
-            }
-        });
-    });
-}
-
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
@@ -51,11 +28,6 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 var app = builder.Build();
 
 app.UseForwardedHeaders();
-
-if (corsOrigins.Length > 0)
-{
-    app.UseCors(corsPolicyName);
-}
 
 app.MapGet("/api/health", async (IDatabaseHealthCheck dbHealth, ILogger<Program> logger, CancellationToken ct) =>
 {
@@ -112,31 +84,5 @@ if (!string.IsNullOrWhiteSpace(resolvedDistPath) && Directory.Exists(resolvedDis
 }
 
 app.Run();
-
-static string[] ParseCorsOrigins(IConfiguration configuration)
-{
-    var section = configuration.GetSection("Atrium:CorsOrigins");
-    var rawValues = new List<string>();
-
-    if (!string.IsNullOrWhiteSpace(section.Value))
-    {
-        rawValues.Add(section.Value);
-    }
-
-    foreach (var child in section.GetChildren())
-    {
-        if (!string.IsNullOrWhiteSpace(child.Value))
-        {
-            rawValues.Add(child.Value);
-        }
-    }
-
-    return rawValues
-        .SelectMany(value => value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        .Select(origin => origin.TrimEnd('/'))
-        .Where(origin => !string.IsNullOrWhiteSpace(origin))
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .ToArray();
-}
 
 public partial class Program;

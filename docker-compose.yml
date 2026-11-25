@@ -17,12 +17,12 @@ services:
       timeout: 5s
       retries: 10
 
-  api:
+  atrium:
     build:
-      context: ./api
+      context: .
       dockerfile: Dockerfile
-    image: atrium-api:latest
-    container_name: atrium-api
+    image: atrium:latest
+    container_name: atrium-app
     restart: unless-stopped
     depends_on:
       postgres:
@@ -30,8 +30,8 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:8080
+      Atrium__WebDistPath: /app/wwwroot
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=${POSTGRES_DB:-atrium};Username=${POSTGRES_USER:-atrium};Password=${POSTGRES_PASSWORD:-atrium_dev_password}
-      Atrium__CorsOrigins: ${CORS_ORIGINS:-}
     ports:
       - "${API_BIND_ADDRESS:-0.0.0.0}:${API_PORT:-5000}:8080"
     healthcheck:
@@ -47,7 +47,7 @@ services:
     restart: unless-stopped
     profiles: ["https"]
     depends_on:
-      api:
+      atrium:
         condition: service_healthy
     ports:
       - "80:80"

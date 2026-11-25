@@ -1,21 +1,31 @@
 # syntax=docker/dockerfile:1
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
-WORKDIR /src
+# Stage 1: Build the React + Vite PWA frontend
+FROM node:22-alpine AS web-build
+WORKDIR /src/web
 
-# Restore dependencies as a separate cached layer
-COPY Directory.Build.props ./
-COPY Atrium.Api/Atrium.Api.csproj Atrium.Api/
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web/ ./
+RUN npm run build
+
+# Stage 2: Build and publish the .NET 10 API
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS api-build
+WORKDIR /src/api
+
+COPY api/Directory.Build.props ./
+COPY api/Atrium.Api/Atrium.Api.csproj Atrium.Api/
 RUN dotnet restore Atrium.Api/Atrium.Api.csproj
 
-# Copy source and publish Release build
-COPY Atrium.Api/ Atrium.Api/
+COPY api/Atrium.Api/ Atrium.Api/
 RUN dotnet publish Atrium.Api/Atrium.Api.csproj \
     -c Release \
     -o /app/publish \
     --no-restore \
     /p:UseAppHost=false
 
+# Stage 3: Single-origin production runtime (serves both API and built PWA)
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
@@ -25,9 +35,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 ENV ASPNETCORE_ENVIRONMENT=Production \
-    ASPNETCORE_URLS=http://+:8080
+    ASPNETCORE_URLS=http://+:8080 \
+    Atrium__WebDistPath=/app/wwwroot
 
-COPY --from=build /app/publish ./
+COPY --from=api-build /app/publish ./
+COPY --from=web-build /src/web/dist ./wwwroot
 
 EXPOSE 8080
 

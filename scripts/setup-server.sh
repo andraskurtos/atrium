@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Atrium Backend Server — One-Click Setup Script
+# Atrium Self-Hosted Server — One-Click Setup Script
 # Sets up Docker (if needed), clones/uses the Atrium repo, generates secure
-# configuration (.env), builds and starts PostgreSQL + .NET API (+ optional
-# Caddy automatic HTTPS), and verifies /api/health.
+# configuration (.env), builds and starts the full-stack Atrium container
+# (Frontend PWA + .NET 10 API) alongside PostgreSQL 17 (+ optional Caddy
+# automatic HTTPS), and verifies both the frontend and /api/health.
 #
 # Usage:
 #   ./scripts/setup-server.sh [options]
-#   curl -fsSL https://raw.githubusercontent.com/andraskurtos/atrium/main/scripts/setup-server.sh | bash
-#   curl -fsSL ... | bash -s -- --domain api.example.com --cors-origins https://andraskurtos.github.io -y
+#   ./scripts/setup-server.sh -y --port 5000
+#   ./scripts/setup-server.sh -y --domain atrium.example.com
 
 DEFAULT_REPO_URL="https://github.com/andraskurtos/atrium.git"
 DEFAULT_BRANCH="main"
@@ -21,7 +22,6 @@ BRANCH="${ATRIUM_BRANCH:-$DEFAULT_BRANCH}"
 INSTALL_DIR="${ATRIUM_INSTALL_DIR:-}"
 API_PORT="${ATRIUM_API_PORT:-}"
 API_BIND_ADDRESS="${ATRIUM_API_BIND_ADDRESS:-}"
-CORS_ORIGINS="${ATRIUM_CORS_ORIGINS:-}"
 DOMAIN="${ATRIUM_DOMAIN:-}"
 NON_INTERACTIVE=0
 SKIP_DOCKER_INSTALL=0
@@ -29,7 +29,6 @@ SKIP_GIT_PULL=0
 
 CLI_API_PORT_SET=0
 CLI_API_BIND_SET=0
-CLI_CORS_SET=0
 CLI_DOMAIN_SET=0
 
 # Terminal colors (disabled when stdout is not a TTY)
@@ -55,7 +54,12 @@ trap 'error "Setup failed at line ${LINENO}. See output above for details."' ERR
 
 usage() {
   cat <<'EOF'
-Atrium Backend Server — One-Click Setup
+Atrium Self-Hosted Server — One-Click Setup
+
+Builds and starts the full Atrium stack in containers:
+  - Frontend PWA + .NET 10 API (single-origin container)
+  - PostgreSQL 17 database (persistent Docker volume, loopback-only)
+  - Optional Caddy reverse proxy with automatic Let's Encrypt HTTPS
 
 Usage:
   setup-server.sh [options]
@@ -64,28 +68,23 @@ Options:
   --dir <path>             Install/project directory (default: current repo or ~/atrium)
   --repo <url>             Git repository URL (default: https://github.com/andraskurtos/atrium.git)
   --branch <name>          Git branch to clone (default: main)
-  --domain <hostname>      Enable automatic HTTPS via Caddy for this domain (e.g. api.example.com)
-  --cors-origins <list>    Comma-separated allowed frontend origins (e.g. https://user.github.io)
-  --port <port>            Host port for the API container (default: 5000)
-  --bind <ip>              Host bind address for API port (default: 127.0.0.1 with --domain, else 0.0.0.0)
+  --domain <hostname>      Enable automatic HTTPS via Caddy for this domain (e.g. atrium.example.com)
+  --port <port>            Host port for Atrium (default: 5000)
+  --bind <ip>              Host bind address (default: 127.0.0.1 with --domain, else 0.0.0.0)
   -y, --non-interactive    Run without prompts using CLI flags / defaults
   --skip-docker-install    Do not attempt to install Docker automatically
   --skip-git-pull          Do not pull updates when running in an existing repo
   -h, --help               Show this help message
 
 Examples:
-  # Interactive setup
+  # Interactive setup (local machine, LAN server, or VPS)
   ./scripts/setup-server.sh
 
-  # Automated setup with automatic HTTPS (Let's Encrypt via Caddy)
-  ./scripts/setup-server.sh -y \
-    --domain api.example.com \
-    --cors-origins https://andraskurtos.github.io
+  # Automated local / LAN / Tailscale / Cloudflare Tunnel setup on port 5000
+  ./scripts/setup-server.sh -y --port 5000
 
-  # Automated setup for LAN / Tailscale / external reverse proxy (HTTP on port 5000)
-  ./scripts/setup-server.sh -y \
-    --port 5000 \
-    --cors-origins https://andraskurtos.github.io
+  # Automated public VPS setup with automatic HTTPS (Let's Encrypt via Caddy)
+  ./scripts/setup-server.sh -y --domain atrium.example.com
 EOF
 }
 
@@ -107,11 +106,6 @@ parse_args() {
       --domain)
         DOMAIN="$2"
         CLI_DOMAIN_SET=1
-        shift 2
-        ;;
-      --cors-origins)
-        CORS_ORIGINS="$2"
-        CLI_CORS_SET=1
         shift 2
         ;;
       --port)
@@ -277,7 +271,7 @@ ensure_docker() {
         warn "Added '$USER' to the 'docker' group. Log out and back in for rootless docker commands."
       fi
     else
-      error "Docker is required to host the Atrium backend server."
+      error "Docker is required to host Atrium."
       exit 1
     fi
   fi
@@ -317,7 +311,7 @@ ensure_docker() {
 
 is_atrium_repo() {
   local dir="$1"
-  [[ -f "${dir}/docker-compose.yml" && -f "${dir}/api/Dockerfile" ]]
+  [[ -f "${dir}/docker-compose.yml" && -f "${dir}/Dockerfile" ]]
 }
 
 resolve_project_dir() {
@@ -383,25 +377,11 @@ read_env_key() {
   fi
 }
 
-guess_github_pages_origin() {
-  local remote_url="$REPO_URL"
-  if [[ -d "${INSTALL_DIR}/.git" ]] && command -v git >/dev/null 2>&1; then
-    local origin
-    origin="$(git -C "$INSTALL_DIR" remote get-url origin 2>/dev/null || true)"
-    [[ -n "$origin" ]] && remote_url="$origin"
-  fi
-
-  if [[ "$remote_url" =~ github\.com[:/]([^/]+)/ ]]; then
-    local owner="${BASH_REMATCH[1],,}"
-    printf 'https://%s.github.io' "$owner"
-  fi
-}
-
 configure_env() {
   step "Configuring server environment (.env)"
 
   local env_file="${INSTALL_DIR}/.env"
-  local existing_db existing_user existing_pass existing_pg_port existing_api_port existing_bind existing_cors existing_domain
+  local existing_db existing_user existing_pass existing_pg_port existing_api_port existing_bind existing_domain
 
   existing_db="$(read_env_key "$env_file" "POSTGRES_DB")"
   existing_user="$(read_env_key "$env_file" "POSTGRES_USER")"
@@ -409,7 +389,6 @@ configure_env() {
   existing_pg_port="$(read_env_key "$env_file" "POSTGRES_PORT")"
   existing_api_port="$(read_env_key "$env_file" "API_PORT")"
   existing_bind="$(read_env_key "$env_file" "API_BIND_ADDRESS")"
-  existing_cors="$(read_env_key "$env_file" "CORS_ORIGINS")"
   existing_domain="$(read_env_key "$env_file" "ATRIUM_DOMAIN")"
 
   POSTGRES_DB="${existing_db:-atrium}"
@@ -420,7 +399,7 @@ configure_env() {
     POSTGRES_PASSWORD="$existing_pass"
     info "Preserving existing PostgreSQL password from .env."
   elif [[ -n "$existing_pass" ]]; then
-    # Existing .env has the default dev password; preserve if pgdata volume already exists
+    # Preserve existing dev password if a pgdata volume already exists
     if "${DOCKER_CMD[@]}" volume ls --format '{{.Name}}' | grep -q 'atrium_pgdata$'; then
       POSTGRES_PASSWORD="$existing_pass"
       warn "Existing PostgreSQL data volume detected; keeping current POSTGRES_PASSWORD to avoid auth failure."
@@ -433,36 +412,20 @@ configure_env() {
     success "Generated strong 32-character PostgreSQL password."
   fi
 
-  local suggested_cors="${existing_cors:-$(guess_github_pages_origin)}"
-
-  if [[ "$CLI_CORS_SET" -eq 0 ]]; then
-    if [[ -n "$CORS_ORIGINS" ]]; then
-      : # Provided via ATRIUM_CORS_ORIGINS env var
-    elif can_prompt; then
-      printf '\n'
-      info "CORS allows your GitHub Pages frontend to talk to this API server."
-      info "Use scheme + host only (no path, no trailing slash), e.g. https://username.github.io"
-      CORS_ORIGINS="$(prompt_value "Allowed frontend origin(s) (comma-separated, leave blank for same-origin)" "$suggested_cors")"
-    else
-      CORS_ORIGINS="$suggested_cors"
-    fi
-  fi
-
   if [[ "$CLI_DOMAIN_SET" -eq 0 ]]; then
     if [[ -n "$DOMAIN" ]]; then
       : # Provided via ATRIUM_DOMAIN env var
     elif can_prompt; then
       printf '\n'
-      info "Browsers require HTTPS for APIs called from GitHub Pages."
-      info "If you have a domain pointing to this server's IP (ports 80 & 443 open), enter it for automatic Let's Encrypt HTTPS."
-      info "Leave blank if you will use Tailscale, Cloudflare Tunnel, an existing reverse proxy, or local HTTP."
-      DOMAIN="$(prompt_value "Public API domain for automatic HTTPS (optional)" "$existing_domain")"
+      info "If you have a public domain pointing to this server (ports 80 & 443 open), enter it for automatic Let's Encrypt HTTPS."
+      info "Leave blank for local / LAN hosting, Tailscale Serve, Cloudflare Tunnel, or an existing reverse proxy."
+      DOMAIN="$(prompt_value "Public domain for automatic HTTPS (optional)" "$existing_domain")"
     else
       DOMAIN="$existing_domain"
     fi
   fi
 
-  # Strip protocol or trailing slashes if user accidentally typed https://api.example.com/
+  # Strip protocol or path if user typed https://atrium.example.com/
   DOMAIN="${DOMAIN#https://}"
   DOMAIN="${DOMAIN#http://}"
   DOMAIN="${DOMAIN%%/*}"
@@ -474,7 +437,7 @@ configure_env() {
     elif [[ -n "$DOMAIN" ]]; then
       API_PORT="$default_port"
     elif can_prompt; then
-      API_PORT="$(prompt_value "API host port" "$default_port")"
+      API_PORT="$(prompt_value "Host port for Atrium (frontend + API)" "$default_port")"
     else
       API_PORT="$default_port"
     fi
@@ -505,12 +468,9 @@ POSTGRES_USER=${POSTGRES_USER}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 POSTGRES_PORT=${POSTGRES_PORT}
 
-# Atrium API
+# Atrium server (serves both frontend PWA and API)
 API_PORT=${API_PORT}
 API_BIND_ADDRESS=${API_BIND_ADDRESS}
-
-# Allowed frontend origins for CORS (comma-separated)
-CORS_ORIGINS=${CORS_ORIGINS}
 
 # Optional domain for automatic HTTPS via Caddy (--profile https)
 ATRIUM_DOMAIN=${DOMAIN}
@@ -521,7 +481,7 @@ EOF
 }
 
 start_containers() {
-  step "Building and starting Atrium containers"
+  step "Building and starting Atrium containers (Frontend + API + PostgreSQL)"
 
   local compose_args=(compose -f "${INSTALL_DIR}/docker-compose.yml")
   if [[ -n "$DOMAIN" ]]; then
@@ -534,11 +494,12 @@ start_containers() {
 }
 
 verify_health() {
-  step "Verifying API & PostgreSQL health"
+  step "Verifying Frontend, API, and PostgreSQL health"
 
   install_package_if_missing curl curl
 
-  local health_url="http://127.0.0.1:${API_PORT}/api/health"
+  local base_url="http://127.0.0.1:${API_PORT}"
+  local health_url="${base_url}/api/health"
   local max_attempts=30
   local attempt=1
   local response=""
@@ -546,20 +507,31 @@ verify_health() {
   while [[ "$attempt" -le "$max_attempts" ]]; do
     if response="$(curl -fsS --max-time 3 "$health_url" 2>/dev/null)"; then
       if [[ "$response" == *'"status":"ok"'* ]]; then
-        success "Health check passed: ${response}"
-        return 0
+        success "API & PostgreSQL healthy: ${response}"
+        break
       fi
     fi
     sleep 2
     attempt=$((attempt + 1))
   done
 
-  error "API did not report healthy at ${health_url} within $((max_attempts * 2))s."
-  warn "Container status:"
-  "${DOCKER_CMD[@]}" compose -f "${INSTALL_DIR}/docker-compose.yml" ps || true
-  warn "Recent API & Postgres logs:"
-  "${DOCKER_CMD[@]}" compose -f "${INSTALL_DIR}/docker-compose.yml" logs --tail=40 api postgres || true
-  exit 1
+  if [[ "$response" != *'"status":"ok"'* ]]; then
+    error "Atrium did not report healthy at ${health_url} within $((max_attempts * 2))s."
+    warn "Container status:"
+    "${DOCKER_CMD[@]}" compose -f "${INSTALL_DIR}/docker-compose.yml" ps || true
+    warn "Recent Atrium & Postgres logs:"
+    "${DOCKER_CMD[@]}" compose -f "${INSTALL_DIR}/docker-compose.yml" logs --tail=40 atrium postgres || true
+    exit 1
+  fi
+
+  local html=""
+  if html="$(curl -fsS --max-time 3 "${base_url}/" 2>/dev/null)" && [[ "$html" == *'<div id="root">'* ]]; then
+    success "Frontend PWA is being served at ${base_url}/"
+  else
+    error "Frontend index.html check failed at ${base_url}/"
+    "${DOCKER_CMD[@]}" compose -f "${INSTALL_DIR}/docker-compose.yml" logs --tail=40 atrium || true
+    exit 1
+  fi
 }
 
 detect_host_ip() {
@@ -567,42 +539,29 @@ detect_host_ip() {
   if command -v hostname >/dev/null 2>&1; then
     ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
   fi
-  printf '%s' "${ip:-<server-ip>}"
+  printf '%s' "${ip:-}"
 }
 
 print_summary() {
-  local api_url compose_prefix
-  if [[ -n "$DOMAIN" ]]; then
-    api_url="https://${DOMAIN}"
-    compose_prefix="docker compose --profile https"
-  else
-    api_url="http://$(detect_host_ip):${API_PORT}"
-    compose_prefix="docker compose"
-  fi
+  local compose_prefix host_ip
+  host_ip="$(detect_host_ip)"
 
   printf '\n%s============================================================%s\n' "$C_GREEN" "$C_RESET"
-  printf '%s  Atrium backend server is running!%s\n' "$C_BOLD" "$C_RESET"
+  printf '%s  Atrium is running (Frontend PWA + API + PostgreSQL)!%s\n' "$C_BOLD" "$C_RESET"
   printf '%s============================================================%s\n\n' "$C_GREEN" "$C_RESET"
 
   printf '  %sInstall directory:%s %s\n' "$C_BOLD" "$C_RESET" "$INSTALL_DIR"
-  printf '  %sAPI URL:%s           %s\n' "$C_BOLD" "$C_RESET" "$api_url"
-  printf '  %sHealth check:%s      %s/api/health\n' "$C_BOLD" "$C_RESET" "$api_url"
-  if [[ -n "$CORS_ORIGINS" ]]; then
-    printf '  %sAllowed CORS:%s      %s\n' "$C_BOLD" "$C_RESET" "$CORS_ORIGINS"
+  if [[ -n "$DOMAIN" ]]; then
+    compose_prefix="docker compose --profile https"
+    printf '  %sApp URL:%s           https://%s\n' "$C_BOLD" "$C_RESET" "$DOMAIN"
+    printf '  %sHealth check:%s      https://%s/api/health\n' "$C_BOLD" "$C_RESET" "$DOMAIN"
   else
-    printf '  %sAllowed CORS:%s      (none — same-origin only)\n' "$C_BOLD" "$C_RESET"
-  fi
-
-  printf '\n%sConnect your GitHub Pages frontend:%s\n' "$C_BOLD" "$C_RESET"
-  printf '  Option 1 (Build-time): Set GitHub Actions repository variable:\n'
-  printf '           %sVITE_API_BASE_URL=%s%s\n' "$C_CYAN" "$api_url" "$C_RESET"
-  printf '  Option 2 (Runtime):    Open your GitHub Pages site, click "Configure",\n'
-  printf '           and enter %s%s%s\n' "$C_CYAN" "$api_url" "$C_RESET"
-
-  if [[ -z "$DOMAIN" ]]; then
-    printf '\n  %sNote:%s GitHub Pages is served over HTTPS. To avoid browser Mixed Content\n' "$C_YELLOW" "$C_RESET"
-    printf '  blocking, front this API with HTTPS (re-run with --domain <host>, or use\n'
-    printf '  Cloudflare Tunnel / Tailscale Serve / Nginx). See docs/deployment.md.\n'
+    compose_prefix="docker compose"
+    printf '  %sLocal URL:%s         http://localhost:%s\n' "$C_BOLD" "$C_RESET" "$API_PORT"
+    if [[ -n "$host_ip" && "$API_BIND_ADDRESS" != "127.0.0.1" ]]; then
+      printf '  %sNetwork URL:%s       http://%s:%s\n' "$C_BOLD" "$C_RESET" "$host_ip" "$API_PORT"
+    fi
+    printf '  %sHealth check:%s      http://localhost:%s/api/health\n' "$C_BOLD" "$C_RESET" "$API_PORT"
   fi
 
   printf '\n%sUseful commands (run inside %s):%s\n' "$C_BOLD" "$INSTALL_DIR" "$C_RESET"
@@ -610,12 +569,12 @@ print_summary() {
   printf '  Restart:      %s restart\n' "$compose_prefix"
   printf '  Update:       git pull && %s up -d --build\n' "$compose_prefix"
   printf '  Stop:         %s down\n' "$compose_prefix"
-  printf '  DB backup:    docker compose exec postgres pg_dump -U %s %s > backup.sql\n\n' "$POSTGRES_USER" "$POSTGRES_DB"
+  printf '  DB backup:    docker compose exec -T postgres pg_dump -U %s %s > backup.sql\n\n' "$POSTGRES_USER" "$POSTGRES_DB"
 }
 
 main() {
   parse_args "$@"
-  printf '%sAtrium Backend Server — One-Click Setup%s\n' "$C_BOLD" "$C_RESET"
+  printf '%sAtrium Self-Hosted Server — One-Click Setup%s\n' "$C_BOLD" "$C_RESET"
   ensure_docker
   resolve_project_dir
   configure_env

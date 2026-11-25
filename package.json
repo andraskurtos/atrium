@@ -11,7 +11,7 @@
     "db:down": "docker compose down",
     "server:up": "docker compose up -d --build",
     "server:down": "docker compose down",
-    "server:logs": "docker compose logs -f api postgres",
+    "server:logs": "docker compose logs -f atrium postgres",
     "build": "npm --prefix web run build && dotnet build -c Release api/Atrium.sln",
     "test": "dotnet test api/Atrium.sln && npm --prefix web run typecheck"
   }

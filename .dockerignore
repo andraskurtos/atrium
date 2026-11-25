@@ -1,0 +1,31 @@
+.git/
+.gitignore
+.env
+.env.*
+.vscode/
+.idea/
+.superpowers/
+
+docs/
+deploy/
+scripts/
+README.md
+docker-compose.yml
+
+# Node / Frontend build artifacts
+node_modules/
+web/node_modules/
+web/dist/
+web/dev-dist/
+web/.vite/
+coverage/
+*.log
+
+# .NET build & test artifacts
+**/bin/
+**/obj/
+**/TestResults/
+api/Atrium.Api.Tests/
+.vs/
+*.user
+*.suo

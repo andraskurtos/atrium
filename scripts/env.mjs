@@ -50,10 +50,6 @@ export function loadAtriumEnv() {
       `Password=${merged.POSTGRES_PASSWORD}`;
   }
 
-  if (!merged.Atrium__CorsOrigins && merged.CORS_ORIGINS) {
-    merged.Atrium__CorsOrigins = merged.CORS_ORIGINS;
-  }
-
   return merged;
 }
 

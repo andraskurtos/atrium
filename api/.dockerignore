@@ -1,8 +1,0 @@
-**/bin/
-**/obj/
-**/TestResults/
-Atrium.Api.Tests/
-.vs/
-*.user
-*.suo
-*.log
