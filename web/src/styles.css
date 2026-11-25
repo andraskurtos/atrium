@@ -1274,6 +1274,403 @@ select {
   color: var(--text);
 }
 
+/* ========================
+   Top Bar Account Pill & Avatars
+   ======================== */
+.account-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px 3px 4px;
+  min-height: 34px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  color: var(--text);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-tactile),
+    border-color var(--duration-fast) var(--ease-tactile);
+}
+
+.account-pill-btn:hover {
+  border-color: var(--border-strong);
+  background-color: var(--surface-subtle);
+}
+
+.account-pill-btn.is-active {
+  border-color: var(--accent);
+  background-color: var(--accent-soft);
+  color: var(--accent-soft-text);
+}
+
+.avatar-sm,
+.avatar-md,
+.avatar-lg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  background-color: var(--accent-soft);
+  color: var(--accent-soft-text);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.avatar-sm {
+  width: 24px;
+  height: 24px;
+  font-size: 0.6875rem;
+}
+
+.avatar-md {
+  width: 44px;
+  height: 44px;
+  font-size: 0.875rem;
+}
+
+.avatar-lg {
+  width: 68px;
+  height: 68px;
+  font-size: 1.25rem;
+}
+
+.avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-initials {
+  line-height: 1;
+  letter-spacing: 0.02em;
+}
+
+/* Destructive button variants per Style Guide Section 6 */
+.btn-danger-outline {
+  background-color: var(--surface);
+  color: var(--danger);
+  border-color: var(--border);
+}
+
+.btn-danger-outline:hover:not(:disabled) {
+  border-color: var(--danger);
+  background-color: var(--surface-subtle);
+}
+
+.btn-danger-solid {
+  background-color: var(--danger);
+  color: var(--accent-fg);
+  border-color: transparent;
+}
+
+.btn-danger-solid:hover:not(:disabled) {
+  opacity: 0.92;
+}
+
+/* ========================
+   Account & Settings Page
+   ======================== */
+.account-back-row {
+  margin-bottom: var(--space-2);
+  margin-left: -10px;
+}
+
+.avatar-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding-bottom: var(--space-4);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.avatar-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.avatar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.input-prefix-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-prefix {
+  position: absolute;
+  left: 11px;
+  color: var(--text-faint);
+  font-size: 0.875rem;
+  pointer-events: none;
+}
+
+.input-with-prefix {
+  padding-left: 26px;
+}
+
+.field-error {
+  margin: 4px 0 0;
+  font-size: 0.8125rem;
+  color: var(--danger);
+}
+
+.form-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.password-rules {
+  list-style: none;
+  margin: 0;
+  padding: 10px var(--space-3);
+  border-radius: var(--radius-md);
+  background-color: var(--surface-subtle);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.password-rules li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.password-rules li.is-met {
+  color: var(--text);
+}
+
+.subsection-divider {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.meta-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.inline-create-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.setting-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.setting-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.preferences-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.segmented-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  background-color: var(--surface-muted);
+  border: 1px solid var(--border);
+}
+
+.segmented-btn {
+  border: 1px solid transparent;
+  background-color: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-tactile),
+    border-color var(--duration-fast) var(--ease-tactile),
+    color var(--duration-fast) var(--ease-tactile);
+}
+
+.segmented-btn:hover {
+  color: var(--text);
+}
+
+.segmented-btn.is-active {
+  background-color: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.token-reveal-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+  border-color: var(--border-strong);
+}
+
+.token-reveal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.token-reveal-value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-muted);
+  border: 1px solid var(--border);
+  font-size: 0.75rem;
+  overflow-x: auto;
+}
+
+.token-create-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.scope-chip-group,
+.token-scope-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.account-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.account-summary-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.account-summary-meta {
+  min-width: 0;
+}
+
+.account-meta-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.account-meta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.account-meta-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.account-meta-val {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-top,
+.session-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.dialog-actions-end {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
 /* Mobile bottom tab bar (hidden on tablet/desktop) */
 .mobile-tabbar {
   display: none;
@@ -1330,8 +1727,16 @@ select {
   }
 
   .topbar-welcome-link,
-  .command-trigger-label {
+  .command-trigger-label,
+  .account-pill-label {
     display: none;
+  }
+
+  .account-pill-btn {
+    padding: 4px;
+    min-width: 40px;
+    min-height: 40px;
+    justify-content: center;
   }
 
   .dashboard-container {
@@ -1339,8 +1744,24 @@ select {
     gap: var(--space-4);
   }
 
+  .account-container {
+    padding-bottom: calc(var(--space-8) + env(safe-area-inset-bottom));
+  }
+
   .context-rail {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .form-grid-2,
+  .segmented-group {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .avatar-row,
+  .setting-item-row,
+  .inline-create-row {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .composer-input-row {

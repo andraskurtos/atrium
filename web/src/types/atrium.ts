@@ -2,9 +2,52 @@ export type ApiState = 'checking' | 'ok' | 'degraded' | 'offline';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
+export type AppView = 'welcome' | 'dashboard' | 'account';
+
 export type CaptureKind = 'task' | 'event' | 'note';
 
 export type MobileTab = 'stream' | 'calendar' | 'vault' | 'agents';
+
+export interface UserProfile {
+  displayName: string;
+  username: string;
+  email: string;
+  bio: string;
+  timezone: string;
+  avatarDataUrl: string | null;
+  passwordUpdatedAt: string;
+}
+
+export interface AccountPreferences {
+  weekStartsOn: 'monday' | 'sunday';
+  timeFormat: '24h' | '12h';
+  requireAgentApproval: boolean;
+  morningBrief: boolean;
+  eventReminders: boolean;
+}
+
+export interface PasskeyItem {
+  id: string;
+  deviceName: string;
+  addedAt: string;
+  lastUsed: string;
+}
+
+export interface AgentToken {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  lastUsed: string;
+}
+
+export interface SessionItem {
+  id: string;
+  device: string;
+  location: string;
+  lastActive: string;
+  isCurrent: boolean;
+}
 
 export interface TaskItem {
   id: string;

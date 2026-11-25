@@ -1,4 +1,5 @@
-import type { ThemePreference } from '../types/atrium';
+import { getInitials } from '../data/mockData';
+import type { AppView, ThemePreference, UserProfile } from '../types/atrium';
 import {
   MoonIcon,
   SearchIcon,
@@ -7,22 +8,28 @@ import {
 } from './Icons';
 
 interface TopBarProps {
+  activeView: Exclude<AppView, 'welcome'>;
+  profile: UserProfile;
   theme: ThemePreference;
   onCycleTheme: () => void;
   onOpenCommandPalette: () => void;
-  onShowWelcome: () => void;
+  onNavigate: (view: AppView) => void;
 }
 
 export function TopBar({
+  activeView,
+  profile,
   theme,
   onCycleTheme,
   onOpenCommandPalette,
-  onShowWelcome,
+  onNavigate,
 }: TopBarProps) {
   const ThemeIcon =
     theme === 'light' ? SunIcon : theme === 'dark' ? MoonIcon : SystemThemeIcon;
   const themeLabel =
     theme === 'light' ? 'Light' : theme === 'dark' ? 'Dark' : 'System';
+
+  const initials = getInitials(profile.displayName, profile.username);
 
   return (
     <header className="topbar">
@@ -32,8 +39,8 @@ export function TopBar({
             id="topbar-brand-btn"
             type="button"
             className="brand-button"
-            onClick={onShowWelcome}
-            title="Return to Welcome screen"
+            onClick={() => onNavigate('dashboard')}
+            title="Go to Today's Dashboard"
           >
             <img
               src="/icon.svg"
@@ -47,7 +54,9 @@ export function TopBar({
           <span className="breadcrumb-sep" aria-hidden="true">
             /
           </span>
-          <span className="breadcrumb-current">Today</span>
+          <span className="breadcrumb-current">
+            {activeView === 'account' ? 'Account' : 'Today'}
+          </span>
         </div>
 
         <nav className="topbar-actions" aria-label="Global actions">
@@ -55,7 +64,7 @@ export function TopBar({
             id="topbar-welcome-btn"
             type="button"
             className="btn btn-ghost btn-compact topbar-welcome-link"
-            onClick={onShowWelcome}
+            onClick={() => onNavigate('welcome')}
           >
             Welcome
           </button>
@@ -81,6 +90,33 @@ export function TopBar({
             title={`Theme: ${themeLabel}`}
           >
             <ThemeIcon />
+          </button>
+
+          <button
+            id="topbar-account-btn"
+            type="button"
+            className={`account-pill-btn ${
+              activeView === 'account' ? 'is-active' : ''
+            }`}
+            onClick={() =>
+              onNavigate(activeView === 'account' ? 'dashboard' : 'account')
+            }
+            aria-current={activeView === 'account' ? 'page' : undefined}
+            aria-label={
+              activeView === 'account'
+                ? 'Back to Today dashboard'
+                : 'Open Account & Settings'
+            }
+            title="Account & Settings"
+          >
+            <span className="avatar-sm" aria-hidden="true">
+              {profile.avatarDataUrl ? (
+                <img src={profile.avatarDataUrl} alt="" className="avatar-img" />
+              ) : (
+                <span className="avatar-initials">{initials}</span>
+              )}
+            </span>
+            <span className="account-pill-label">Account</span>
           </button>
         </nav>
       </div>

@@ -19,13 +19,15 @@ interface CalendarMockupCardProps {
   selectedDateKey: string;
   events: CalendarEvent[];
   isExpandedOpen: boolean;
+  weekStartsOn?: 'monday' | 'sunday';
   onSelectDate: (dateKey: string) => void;
   onAddEvent: (event: Omit<CalendarEvent, 'id'>) => void;
   onDeleteEvent: (id: string) => void;
   onToggleExpanded: (open: boolean) => void;
 }
 
-const WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+const WEEKDAYS_MON = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+const WEEKDAYS_SUN = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
 interface DayCell {
   dateKey: string;
@@ -33,10 +35,14 @@ interface DayCell {
   inCurrentMonth: boolean;
 }
 
-function buildMonthGrid(viewYear: number, viewMonth: number): DayCell[] {
+function buildMonthGrid(
+  viewYear: number,
+  viewMonth: number,
+  weekStartsOn: 'monday' | 'sunday',
+): DayCell[] {
   const firstOfMonth = new Date(viewYear, viewMonth, 1);
-  // Convert JS Sun=0..Sat=6 to Mon=0..Sun=6
-  const startWeekday = (firstOfMonth.getDay() + 6) % 7;
+  const rawDay = firstOfMonth.getDay();
+  const startWeekday = weekStartsOn === 'monday' ? (rawDay + 6) % 7 : rawDay;
   const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
   const daysInPrevMonth = new Date(viewYear, viewMonth, 0).getDate();
 
@@ -82,6 +88,7 @@ export function CalendarMockupCard({
   selectedDateKey,
   events,
   isExpandedOpen,
+  weekStartsOn = 'monday',
   onSelectDate,
   onAddEvent,
   onDeleteEvent,
@@ -129,9 +136,10 @@ export function CalendarMockupCard({
   }, [events]);
 
   const monthCells = useMemo(
-    () => buildMonthGrid(viewYear, viewMonth),
-    [viewYear, viewMonth],
+    () => buildMonthGrid(viewYear, viewMonth, weekStartsOn),
+    [viewYear, viewMonth, weekStartsOn],
   );
+  const weekdays = weekStartsOn === 'monday' ? WEEKDAYS_MON : WEEKDAYS_SUN;
 
   const selectedDayEvents = eventsByDate.get(selectedDateKey) ?? [];
   const viewMonthDate = new Date(viewYear, viewMonth, 1);
@@ -223,7 +231,7 @@ export function CalendarMockupCard({
         </div>
 
         <div className="calendar-weekdays" aria-hidden="true">
-          {WEEKDAYS.map((day) => (
+          {weekdays.map((day) => (
             <span key={day} className="calendar-weekday">
               {day}
             </span>
@@ -436,7 +444,7 @@ export function CalendarMockupCard({
         <div className="calendar-modal-layout">
           <div className="calendar-modal-month">
             <div className="calendar-weekdays" aria-hidden="true">
-              {WEEKDAYS.map((day) => (
+              {weekdays.map((day) => (
                 <span key={day} className="calendar-weekday">
                   {day}
                 </span>

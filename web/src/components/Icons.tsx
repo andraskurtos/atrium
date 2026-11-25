@@ -129,3 +129,80 @@ export function ExpandIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function ArrowLeftIcon(props: IconProps) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path d="M12.75 8H3.25M7 4.25L3.25 8L7 11.75" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function UserIcon(props: IconProps) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <circle cx="8" cy="5.25" r="2.75" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M2.75 13.5C3.4 10.95 5.45 9.75 8 9.75C10.55 9.75 12.6 10.95 13.25 13.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function ShieldIcon(props: IconProps) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path d="M8 1.75L13 3.75V7.75C13 11 10.8 13.2 8 14.25C5.2 13.2 3 11 3 7.75V3.75L8 1.75Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function KeyIcon(props: IconProps) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <circle cx="5.5" cy="8" r="2.75" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M8.25 8H14M11.75 8V10.25M13.5 8V9.75" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function UploadIcon(props: IconProps) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path d="M8 10.5V2.75M5 5.5L8 2.75L11 5.5M2.75 11.25V13.25H13.25V11.25" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function DownloadIcon(props: IconProps) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path d="M8 2.75V10.5M5 7.75L8 10.5L11 7.75M2.75 11.25V13.25H13.25V11.25" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function EyeIcon(props: IconProps) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path d="M1.75 8C3 5.25 5.25 4 8 4C10.75 4 13 5.25 14.25 8C13 10.75 10.75 12 8 12C5.25 12 3 10.75 1.75 8Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <circle cx="8" cy="8" r="1.75" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+export function EyeOffIcon(props: IconProps) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path d="M2.25 2.25L13.75 13.75M6.3 6.35A2 2 0 0 0 9.65 9.7M4.1 5.15C2.95 5.95 2.15 7 1.75 8C3 10.75 5.25 12 8 12C9.2 12 10.25 11.75 11.15 11.25M6.7 4.15C7.1 4.05 7.55 4 8 4C10.75 4 13 5.25 14.25 8C13.9 8.8 13.35 9.5 12.7 10.1" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function CopyIcon(props: IconProps) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M10.5 5.5V3.5C10.5 2.95 10.05 2.5 9.5 2.5H3.5C2.95 2.5 2.5 2.95 2.5 3.5V9.5C2.5 10.05 2.95 10.5 3.5 10.5H5.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
