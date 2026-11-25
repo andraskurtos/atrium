@@ -36,7 +36,7 @@ export function loadAtriumEnv() {
     POSTGRES_DB: 'atrium',
     POSTGRES_USER: 'atrium',
     POSTGRES_PASSWORD: 'atrium_dev_password',
-    POSTGRES_PORT: '5432',
+    POSTGRES_PORT: '5433',
     API_PORT: '5000',
     ...defaults,
     ...local,
