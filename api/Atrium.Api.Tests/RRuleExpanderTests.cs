@@ -144,6 +144,12 @@ public sealed class RRuleExpanderTests
         Assert.False(RRuleExpander.TryParse("FREQ=DAILY;INTERVAL=0", out _, out _));
         Assert.False(RRuleExpander.TryParse("FREQ=DAILY;COUNT=-1", out _, out _));
         Assert.False(RRuleExpander.TryParse("FREQ=WEEKLY;BYDAY=XX", out _, out _));
+        Assert.False(RRuleExpander.TryParse("FREQ=WEEKLY;BYDAY=FOOBARMO", out _, out _));
+        Assert.False(RRuleExpander.TryParse("FREQ=MONTHLY;BYDAY=2TU", out _, out _));
+        Assert.False(RRuleExpander.TryParse("FREQ=MONTHLY;BYDAY=TU", out _, out _));
+        Assert.False(RRuleExpander.TryParse("FREQ=YEARLY;BYMONTH=6", out _, out _));
+        Assert.False(RRuleExpander.TryParse("FREQ=MONTHLY;BYSETPOS=1", out _, out _));
+        Assert.False(RRuleExpander.TryParse("FREQ=WEEKLY;BYMONTHDAY=15", out _, out _));
         Assert.True(RRuleExpander.TryParse("FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,TH;COUNT=8", out var parsed, out var error));
         Assert.Null(error);
         Assert.NotNull(parsed);

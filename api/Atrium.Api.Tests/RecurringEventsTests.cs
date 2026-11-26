@@ -375,4 +375,192 @@ public sealed class RecurringEventsTests
         Assert.Equal("Sync (Extended)", importedEvents[1].Title);
         Assert.Equal(11, importedEvents[1].StartAt.Hour);
     }
+
+    [Fact]
+    public async Task RecurringEvent_ShiftWholeSeriesWithAdjacentOverrides_DoesNotCollideOnUniqueIndex()
+    {
+        using var factory = new TestAppFactory();
+        using var client = factory.CreateClient();
+        await SetupOwnerAsync(client);
+
+        var master = await (await client.PostAsJsonAsync(
+            "/api/events",
+            new CreateEventRequest(
+                null,
+                "Daily Check-in",
+                new DateTimeOffset(2026, 11, 1, 9, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 11, 1, 9, 30, 0, TimeSpan.Zero),
+                RecurrenceRule: "FREQ=DAILY;COUNT=4")))
+            .Content.ReadFromJsonAsync<CalendarEventDto>();
+        Assert.NotNull(master);
+
+        // Create adjacent single-occurrence overrides on Nov 2 and Nov 3
+        var ov2 = await client.PutAsJsonAsync(
+            $"/api/events/{master.Id}",
+            new UpdateEventRequest(
+                master.CalendarId,
+                "Check-in Day 2",
+                new DateTimeOffset(2026, 11, 2, 10, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 11, 2, 10, 30, 0, TimeSpan.Zero),
+                Scope: "single",
+                OccurrenceStartAt: new DateTimeOffset(2026, 11, 2, 9, 0, 0, TimeSpan.Zero)));
+        Assert.Equal(HttpStatusCode.OK, ov2.StatusCode);
+
+        var ov3 = await client.PutAsJsonAsync(
+            $"/api/events/{master.Id}",
+            new UpdateEventRequest(
+                master.CalendarId,
+                "Check-in Day 3",
+                new DateTimeOffset(2026, 11, 3, 11, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 11, 3, 11, 30, 0, TimeSpan.Zero),
+                Scope: "single",
+                OccurrenceStartAt: new DateTimeOffset(2026, 11, 3, 9, 0, 0, TimeSpan.Zero)));
+        Assert.Equal(HttpStatusCode.OK, ov3.StatusCode);
+
+        // Shift the entire series forward by +1 day (would collide Nov 2 -> Nov 3 without two-phase update)
+        var shiftRes = await client.PutAsJsonAsync(
+            $"/api/events/{master.Id}",
+            new UpdateEventRequest(
+                master.CalendarId,
+                "Daily Check-in (Shifted)",
+                new DateTimeOffset(2026, 11, 2, 9, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 11, 2, 9, 30, 0, TimeSpan.Zero),
+                RecurrenceRule: "FREQ=DAILY;COUNT=4",
+                Scope: "series",
+                OccurrenceStartAt: new DateTimeOffset(2026, 11, 1, 9, 0, 0, TimeSpan.Zero)));
+        Assert.Equal(HttpStatusCode.OK, shiftRes.StatusCode);
+
+        var events = await client.GetFromJsonAsync<List<CalendarEventDto>>(
+            "/api/events?from=2026-11-01T00:00:00Z&to=2026-11-10T00:00:00Z");
+        Assert.NotNull(events);
+        Assert.Equal(4, events.Count);
+        Assert.Contains(events, e => e.Title == "Daily Check-in (Shifted)" && e.StartAt.Day == 2);
+        Assert.Contains(events, e => e.Title == "Daily Check-in (Shifted)" && e.StartAt.Day == 5);
+        Assert.Contains(events, e => e.Title == "Check-in Day 2" && e.IsRecurrenceException);
+        Assert.Contains(events, e => e.Title == "Check-in Day 3" && e.IsRecurrenceException);
+    }
+
+    [Fact]
+    public async Task RecurringEvent_EditSeriesTitleFromRescheduledOverride_DoesNotShiftSeries()
+    {
+        using var factory = new TestAppFactory();
+        using var client = factory.CreateClient();
+        await SetupOwnerAsync(client);
+
+        var master = await (await client.PostAsJsonAsync(
+            "/api/events",
+            new CreateEventRequest(
+                null,
+                "Weekly Sync",
+                new DateTimeOffset(2026, 11, 2, 10, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 11, 2, 11, 0, 0, TimeSpan.Zero),
+                RecurrenceRule: "FREQ=WEEKLY;COUNT=3")))
+            .Content.ReadFromJsonAsync<CalendarEventDto>();
+        Assert.NotNull(master);
+
+        var origSecond = new DateTimeOffset(2026, 11, 9, 10, 0, 0, TimeSpan.Zero);
+        var movedSecondStart = new DateTimeOffset(2026, 11, 10, 15, 0, 0, TimeSpan.Zero);
+        var movedSecondEnd = new DateTimeOffset(2026, 11, 10, 16, 0, 0, TimeSpan.Zero);
+
+        var overrideRes = await client.PutAsJsonAsync(
+            $"/api/events/{master.Id}",
+            new UpdateEventRequest(
+                master.CalendarId,
+                "Weekly Sync (Moved)",
+                movedSecondStart,
+                movedSecondEnd,
+                Scope: "single",
+                OccurrenceStartAt: origSecond));
+        Assert.Equal(HttpStatusCode.OK, overrideRes.StatusCode);
+        var overrideEvt = await overrideRes.Content.ReadFromJsonAsync<CalendarEventDto>();
+        Assert.NotNull(overrideEvt);
+
+        // User opens the moved override, switches scope to "series", and edits ONLY the title
+        var editSeriesRes = await client.PutAsJsonAsync(
+            $"/api/events/{overrideEvt.Id}",
+            new UpdateEventRequest(
+                master.CalendarId,
+                "Weekly Sync (Renamed)",
+                movedSecondStart,
+                movedSecondEnd,
+                RecurrenceRule: "FREQ=WEEKLY;COUNT=3",
+                Scope: "series",
+                OccurrenceStartAt: origSecond));
+        Assert.Equal(HttpStatusCode.OK, editSeriesRes.StatusCode);
+
+        var events = await client.GetFromJsonAsync<List<CalendarEventDto>>(
+            "/api/events?from=2026-11-01T00:00:00Z&to=2026-11-30T00:00:00Z");
+        Assert.NotNull(events);
+        Assert.Equal(3, events.Count);
+
+        // Occurrences 1 & 3 must stay on Nov 2 10:00 and Nov 16 10:00 (not shifted by +1d 5h!)
+        Assert.Equal(new DateTimeOffset(2026, 11, 2, 10, 0, 0, TimeSpan.Zero), events[0].StartAt);
+        Assert.Equal("Weekly Sync (Renamed)", events[0].Title);
+        Assert.Equal(movedSecondStart, events[1].StartAt);
+        Assert.Equal(new DateTimeOffset(2026, 11, 16, 10, 0, 0, TimeSpan.Zero), events[2].StartAt);
+        Assert.Equal("Weekly Sync (Renamed)", events[2].Title);
+    }
+
+    [Fact]
+    public async Task RecurringEvent_ImportIcsWithUnsupportedRRule_WarnsAndRemainsVisibleAsSingleEvent()
+    {
+        using var factory = new TestAppFactory();
+        using var client = factory.CreateClient();
+        await SetupOwnerAsync(client);
+
+        var personal = (await client.GetFromJsonAsync<List<CalendarDto>>("/api/calendars"))![0];
+        const string ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            PRODID:-//Test//EN
+            BEGIN:VEVENT
+            UID:hourly-event@test.local
+            DTSTART:20261105T090000Z
+            DTEND:20261105T100000Z
+            SUMMARY:Hourly Monitor
+            RRULE:FREQ=HOURLY;INTERVAL=2
+            END:VEVENT
+            BEGIN:VEVENT
+            UID:monthly-byday@test.local
+            DTSTART:20261110T140000Z
+            DTEND:20261110T150000Z
+            SUMMARY:Second Tuesday Sync
+            RRULE:FREQ=MONTHLY;BYDAY=2TU
+            END:VEVENT
+            END:VCALENDAR
+            """;
+
+        using var content = new StringContent(ics, Encoding.UTF8, "text/calendar");
+        var importRes = await client.PostAsync($"/api/calendars/{personal.Id}/import/ics", content);
+        Assert.Equal(HttpStatusCode.OK, importRes.StatusCode);
+        var summary = await importRes.Content.ReadFromJsonAsync<IcsImportResponse>();
+        Assert.NotNull(summary);
+        Assert.Equal(2, summary.ImportedCount);
+        Assert.Equal(2, summary.Warnings.Count);
+
+        var events = await client.GetFromJsonAsync<List<CalendarEventDto>>(
+            "/api/events?from=2026-11-01T00:00:00Z&to=2026-11-30T00:00:00Z");
+        Assert.NotNull(events);
+        Assert.Equal(2, events.Count);
+        Assert.Contains(events, e => e.Title == "Hourly Monitor" && !e.IsRecurring);
+        Assert.Contains(events, e => e.Title == "Second Tuesday Sync" && !e.IsRecurring);
+    }
+
+    [Fact]
+    public async Task CreateEvent_SourceExceeding80Chars_ReturnsBadRequest()
+    {
+        using var factory = new TestAppFactory();
+        using var client = factory.CreateClient();
+        await SetupOwnerAsync(client);
+
+        var res = await client.PostAsJsonAsync(
+            "/api/events",
+            new CreateEventRequest(
+                null,
+                "Long Source Event",
+                new DateTimeOffset(2026, 11, 1, 9, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 11, 1, 10, 0, 0, TimeSpan.Zero),
+                Source: new string('s', 81)));
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+    }
 }

@@ -97,15 +97,26 @@ function readInitialView(): AppView {
   return window.location.hash === '#account' ? 'account' : 'dashboard';
 }
 
-function buildCalendarFetchRange(todayYear: number, viewYear: number): {
+function buildCalendarFetchRange(viewYear: number): {
   from: string;
   to: string;
 } {
-  const minYear = Math.min(todayYear, viewYear);
-  const maxYear = Math.max(todayYear, viewYear);
   return {
-    from: new Date(Date.UTC(minYear - 1, 11, 1, 0, 0, 0)).toISOString(),
-    to: new Date(Date.UTC(maxYear + 1, 1, 1, 0, 0, 0)).toISOString(),
+    from: new Date(Date.UTC(viewYear - 1, 11, 1, 0, 0, 0)).toISOString(),
+    to: new Date(Date.UTC(viewYear + 1, 1, 1, 0, 0, 0)).toISOString(),
+  };
+}
+
+function buildTodayFetchRange(today: Date): {
+  from: string;
+  to: string;
+} {
+  const y = today.getFullYear();
+  const m = today.getMonth();
+  const d = today.getDate();
+  return {
+    from: new Date(Date.UTC(y, m, d - 1, 0, 0, 0)).toISOString(),
+    to: new Date(Date.UTC(y, m, d + 2, 0, 0, 0)).toISOString(),
   };
 }
 
@@ -144,6 +155,7 @@ export function App() {
   const [tasks, setTasks] = useState<TaskItem[]>(createInitialTasks);
   const [calendars, setCalendars] = useState<UserCalendar[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [todayEvents, setTodayEvents] = useState<CalendarEvent[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [proposals, setProposals] = useState<AgentProposal[]>(() =>
     createInitialProposals(today),
@@ -158,6 +170,7 @@ export function App() {
 
   const quickCaptureRef = useRef<HTMLInputElement | null>(null);
   const calendarViewYearRef = useRef<number>(todayYear);
+  const eventsRequestSeqRef = useRef<number>(0);
 
   const announce = useCallback((message: string) => {
     setAnnouncement(message);
@@ -172,34 +185,64 @@ export function App() {
     setMembers([]);
     setCalendars([]);
     setEvents([]);
+    setTodayEvents([]);
     setIsCommandOpen(false);
   }, []);
 
   const reloadEvents = useCallback(
-    async (targetYear = calendarViewYearRef.current) => {
-      const range = buildCalendarFetchRange(todayYear, targetYear);
-      const nextEvents = await listEvents(range);
+    async (
+      targetYear = calendarViewYearRef.current,
+      refreshToday = true,
+    ) => {
+      const seq = ++eventsRequestSeqRef.current;
+      const range = buildCalendarFetchRange(targetYear);
+      const shouldFetchTodaySeparately = refreshToday && targetYear !== todayYear;
+      const [nextEvents, nextTodayEvents] = await Promise.all([
+        listEvents(range),
+        shouldFetchTodaySeparately
+          ? listEvents(buildTodayFetchRange(today))
+          : Promise.resolve<CalendarEvent[] | null>(null),
+      ]);
+      if (seq !== eventsRequestSeqRef.current) return;
       setEvents(nextEvents);
+      if (targetYear === todayYear) {
+        setTodayEvents(nextEvents);
+      } else if (nextTodayEvents !== null) {
+        setTodayEvents(nextTodayEvents);
+      }
     },
-    [todayYear],
+    [today, todayYear],
   );
 
   const loadCalendarData = useCallback(
     async (targetYear = calendarViewYearRef.current) => {
+      const seq = ++eventsRequestSeqRef.current;
       setCalendarLoading(true);
       try {
-        const range = buildCalendarFetchRange(todayYear, targetYear);
-        const [nextCalendars, nextEvents] = await Promise.all([
+        const range = buildCalendarFetchRange(targetYear);
+        const shouldFetchTodaySeparately = targetYear !== todayYear;
+        const [nextCalendars, nextEvents, nextTodayEvents] = await Promise.all([
           listCalendars(),
           listEvents(range),
+          shouldFetchTodaySeparately
+            ? listEvents(buildTodayFetchRange(today))
+            : Promise.resolve<CalendarEvent[] | null>(null),
         ]);
+        if (seq !== eventsRequestSeqRef.current) return;
         setCalendars(nextCalendars);
         setEvents(nextEvents);
+        if (targetYear === todayYear) {
+          setTodayEvents(nextEvents);
+        } else if (nextTodayEvents !== null) {
+          setTodayEvents(nextTodayEvents);
+        }
       } finally {
-        setCalendarLoading(false);
+        if (seq === eventsRequestSeqRef.current) {
+          setCalendarLoading(false);
+        }
       }
     },
-    [todayYear],
+    [today, todayYear],
   );
 
   const loadAccountSecurityData = useCallback(async (role: UserProfile['role']) => {
@@ -452,7 +495,7 @@ export function App() {
       if (nextYear === calendarViewYearRef.current) return;
       calendarViewYearRef.current = nextYear;
       if (profile) {
-        void reloadEvents(nextYear);
+        void reloadEvents(nextYear, false);
       }
     },
     [profile, reloadEvents],
@@ -552,6 +595,9 @@ export function App() {
       })
         .then((created) => {
           setEvents((prev) => [...prev, created]);
+          if (eventOccursOnDateKey(created, todayKey)) {
+            setTodayEvents((prev) => [...prev, created]);
+          }
           announce(
             `Scheduled "${text}" for ${formatShortDate(parseDateKey(selectedDateKey))}`,
           );
@@ -611,6 +657,9 @@ export function App() {
       })
         .then((created) => {
           setEvents((prev) => [...prev, created]);
+          if (eventOccursOnDateKey(created, todayKey)) {
+            setTodayEvents((prev) => [...prev, created]);
+          }
           setSelectedDateKey(dateKey);
           setProposals((prev) => prev.filter((item) => item.id !== proposal.id));
           announce(`Approved & scheduled: ${title}`);
@@ -695,7 +744,7 @@ export function App() {
 
   const visibleCalIds = new Set(calendars.filter((c) => c.isVisible).map((c) => c.id));
   const openTaskCount = tasks.filter((t) => !t.completed).length;
-  const todayEventCount = events.filter(
+  const todayEventCount = todayEvents.filter(
     (e) => visibleCalIds.has(e.calendarId) && eventOccursOnDateKey(e, todayKey),
   ).length;
   const pendingProposalCount = proposals.length;

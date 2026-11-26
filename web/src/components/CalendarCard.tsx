@@ -181,6 +181,7 @@ export function CalendarCard({
 
   // Calendar creation form state
   const [showNewCalendarForm, setShowNewCalendarForm] = useState(false);
+  const [pendingDeleteCalendarId, setPendingDeleteCalendarId] = useState<string | null>(null);
   const [calName, setCalName] = useState('');
   const [calDescription, setCalDescription] = useState('');
   const [calColor, setCalColor] = useState<string>(CALENDAR_COLOR_PALETTE[1]);
@@ -1223,46 +1224,82 @@ export function CalendarCard({
           </div>
 
           <div className="calendar-manager-list">
-            {calendars.map((cal) => (
-              <div key={cal.id} className="calendar-manager-item">
-                <label className="calendar-manager-toggle">
-                  <input
-                    type="checkbox"
-                    checked={cal.isVisible}
-                    onChange={() => void onToggleCalendarVisibility(cal)}
-                  />
-                  <span
-                    className="calendar-swatch-dot"
-                    style={{ backgroundColor: cal.color }}
-                    aria-hidden="true"
-                  />
-                  <span className="calendar-manager-name">{cal.name}</span>
-                  {cal.isDefault && <span className="pill-muted">Default</span>}
-                </label>
-                <div className="calendar-manager-item-actions">
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-icon-sm"
-                    onClick={() => void onExportIcs(cal)}
-                    title={`Export "${cal.name}" as .ics`}
-                    aria-label={`Export ${cal.name} as .ics`}
-                  >
-                    <DownloadIcon />
-                  </button>
-                  {calendars.length > 1 && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-icon-sm"
-                      onClick={() => void onDeleteCalendar(cal.id)}
-                      title={`Delete "${cal.name}" calendar`}
-                      aria-label={`Delete ${cal.name} calendar`}
+            {calendars.map((cal) => {
+              const isConfirmingCalDelete = pendingDeleteCalendarId === cal.id;
+              return (
+                <div key={cal.id}>
+                  <div className="calendar-manager-item">
+                    <label className="calendar-manager-toggle">
+                      <input
+                        type="checkbox"
+                        checked={cal.isVisible}
+                        onChange={() => void onToggleCalendarVisibility(cal)}
+                      />
+                      <span
+                        className="calendar-swatch-dot"
+                        style={{ backgroundColor: cal.color }}
+                        aria-hidden="true"
+                      />
+                      <span className="calendar-manager-name">{cal.name}</span>
+                      {cal.isDefault && <span className="pill-muted">Default</span>}
+                    </label>
+                    <div className="calendar-manager-item-actions">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-icon-sm"
+                        onClick={() => void onExportIcs(cal)}
+                        title={`Export "${cal.name}" as .ics`}
+                        aria-label={`Export ${cal.name} as .ics`}
+                      >
+                        <DownloadIcon />
+                      </button>
+                      {calendars.length > 1 && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-icon-sm"
+                          onClick={() =>
+                            setPendingDeleteCalendarId((prev) =>
+                              prev === cal.id ? null : cal.id,
+                            )
+                          }
+                          title={`Delete "${cal.name}" calendar`}
+                          aria-label={`Delete ${cal.name} calendar`}
+                          aria-expanded={isConfirmingCalDelete}
+                        >
+                          <CloseIcon />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {isConfirmingCalDelete && (
+                    <div
+                      className="recurrence-delete-bar"
+                      role="group"
+                      aria-label={`Confirm delete ${cal.name}`}
                     >
-                      <CloseIcon />
-                    </button>
+                      <span className="meta-text">Delete calendar &amp; its events?</span>
+                      <button
+                        type="button"
+                        className="btn btn-danger btn-xs"
+                        onClick={() => {
+                          setPendingDeleteCalendarId(null);
+                          void onDeleteCalendar(cal.id);
+                        }}
+                      >
+                        Delete
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => setPendingDeleteCalendarId(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
                   )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {showNewCalendarForm && (
@@ -1295,10 +1332,11 @@ export function CalendarCard({
                     <button
                       key={hex}
                       type="button"
+                      role="radio"
                       className={`calendar-color-swatch ${calColor === hex ? 'is-selected' : ''}`}
                       style={{ backgroundColor: hex }}
                       aria-label={`Color ${hex}`}
-                      aria-pressed={calColor === hex}
+                      aria-checked={calColor === hex}
                       onClick={() => setCalColor(hex)}
                     />
                   ))}

@@ -51,6 +51,7 @@ public static class RRuleExpander
         int? count = null;
         DateTimeOffset? until = null;
         var byDays = new List<DayOfWeek>();
+        var hasPositionalByDay = false;
         int? byMonthDay = null;
 
         foreach (var rawPart in trimmed.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
@@ -113,10 +114,15 @@ public static class RRuleExpander
                 case "BYDAY":
                     foreach (var token in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     {
-                        if (!TryParseWeekday(token, out var dayOfWeek))
+                        if (!TryParseWeekday(token, out var dayOfWeek, out var isPositional))
                         {
                             error = $"Invalid BYDAY value '{token}'.";
                             return false;
+                        }
+
+                        if (isPositional)
+                        {
+                            hasPositionalByDay = true;
                         }
 
                         if (!byDays.Contains(dayOfWeek))
@@ -142,12 +148,34 @@ public static class RRuleExpander
                 case "WKST":
                     // Accepted standard RFC 5545 parameter (e.g. WKST=MO)
                     break;
+
+                default:
+                    error = $"Unsupported recurrence rule clause '{key}'.";
+                    return false;
             }
         }
 
         if (freq is null)
         {
             error = "Recurrence rule must specify FREQ (DAILY, WEEKLY, MONTHLY, or YEARLY).";
+            return false;
+        }
+
+        if (hasPositionalByDay)
+        {
+            error = "Positional BYDAY values (e.g. 2TU) are not supported.";
+            return false;
+        }
+
+        if (byDays.Count > 0 && freq != "WEEKLY")
+        {
+            error = "BYDAY is only supported for WEEKLY recurrence rules.";
+            return false;
+        }
+
+        if (byMonthDay.HasValue && freq != "MONTHLY")
+        {
+            error = "BYMONTHDAY is only supported for MONTHLY recurrence rules.";
             return false;
         }
 
@@ -410,16 +438,33 @@ public static class RRuleExpander
         return false;
     }
 
-    private static bool TryParseWeekday(string raw, out DayOfWeek day)
+    private static bool TryParseWeekday(string raw, out DayOfWeek day, out bool isPositional)
     {
+        day = default;
+        isPositional = false;
+
         var token = raw.Trim().ToUpperInvariant();
-        // Strip optional numeric prefix like 1MO or -1FR for RFC 5545 tolerance
-        if (token.Length > 2)
+        if (token.Length < 2)
         {
-            token = token[^2..];
+            return false;
         }
 
-        switch (token)
+        var dayCode = token[^2..];
+        if (token.Length > 2)
+        {
+            var prefix = token[..^2];
+            if (!int.TryParse(prefix, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var ordinal)
+                || ordinal == 0
+                || ordinal < -53
+                || ordinal > 53)
+            {
+                return false;
+            }
+
+            isPositional = true;
+        }
+
+        switch (dayCode)
         {
             case "MO":
                 day = DayOfWeek.Monday;

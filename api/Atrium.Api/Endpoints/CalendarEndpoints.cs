@@ -529,6 +529,20 @@ public static partial class CalendarEndpoints
 
                 suppressedByMaster.TryGetValue(master.Id, out var suppressedStarts);
 
+                if (!RRuleExpander.TryParse(master.RecurrenceRule, out _, out _))
+                {
+                    var masterEndUtc = master.EndAt.ToUniversalTime();
+                    var overlapsWindow = masterEndUtc > expandFrom
+                        || (masterStartUtc == masterEndUtc && masterStartUtc >= expandFrom);
+                    if (overlapsWindow && masterStartUtc < expandTo
+                        && (suppressedStarts is null || !suppressedStarts.Contains(masterStartUtc)))
+                    {
+                        results.Add(ToEventDto(master, master.Calendar));
+                    }
+
+                    continue;
+                }
+
                 var expanded = RRuleExpander.ExpandOccurrences(
                     masterStartUtc,
                     master.EndAt.ToUniversalTime(),
@@ -591,7 +605,8 @@ public static partial class CalendarEndpoints
                 request.RecurrenceRule,
                 out var normalizedTitle,
                 out var normalizedStatus,
-                out var normalizedRRule);
+                out var normalizedRRule,
+                request.Source);
             if (validationError is not null)
             {
                 return Results.BadRequest(new { error = validationError });
@@ -780,9 +795,15 @@ public static partial class CalendarEndpoints
             if (master is null) return Results.NotFound();
 
             var isSeries = !string.IsNullOrWhiteSpace(master.RecurrenceRule);
-            if (isSeries && effectiveOccurrenceStart.HasValue)
+            var shiftedOverrides = new List<(CalendarEvent Child, DateTimeOffset NewOriginalStart)>();
+            if (isSeries && (effectiveOccurrenceStart.HasValue || evt.RecurrenceMasterId.HasValue))
             {
-                var startDelta = newStartUtc - effectiveOccurrenceStart.Value;
+                // When editing the whole series from an already-rescheduled override row,
+                // the editor starts from evt.StartAt rather than RecurrenceOriginalStartAt.
+                var anchorStartUtc = evt.RecurrenceMasterId.HasValue
+                    ? evt.StartAt.ToUniversalTime()
+                    : effectiveOccurrenceStart!.Value;
+                var startDelta = newStartUtc - anchorStartUtc;
                 var newDuration = newEndUtc - newStartUtc;
                 master.StartAt = master.StartAt.ToUniversalTime() + startDelta;
                 master.EndAt = master.StartAt + newDuration;
@@ -794,8 +815,7 @@ public static partial class CalendarEndpoints
                         .ToListAsync(ct);
                     foreach (var child in childOverrides)
                     {
-                        child.RecurrenceOriginalStartAt = child.RecurrenceOriginalStartAt!.Value.ToUniversalTime() + startDelta;
-                        child.UpdatedAt = now;
+                        shiftedOverrides.Add((child, child.RecurrenceOriginalStartAt!.Value.ToUniversalTime() + startDelta));
                     }
                 }
             }
@@ -824,9 +844,36 @@ public static partial class CalendarEndpoints
                 {
                     db.CalendarEvents.RemoveRange(orphanedOverrides);
                 }
+
+                await db.SaveChangesAsync(ct);
+            }
+            else if (shiftedOverrides.Count > 0)
+            {
+                // Two-phase update avoids row-by-row unique-index collisions on
+                // (recurrence_master_id, recurrence_original_start_at) when shifting adjacent overrides.
+                await using var tx = await db.Database.BeginTransactionAsync(ct);
+                foreach (var (child, _) in shiftedOverrides)
+                {
+                    child.RecurrenceOriginalStartAt = null;
+                    child.UpdatedAt = now;
+                }
+
+                await db.SaveChangesAsync(ct);
+
+                foreach (var (child, newOriginalStart) in shiftedOverrides)
+                {
+                    child.RecurrenceOriginalStartAt = newOriginalStart;
+                    child.UpdatedAt = now;
+                }
+
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+            }
+            else
+            {
+                await db.SaveChangesAsync(ct);
             }
 
-            await db.SaveChangesAsync(ct);
             return Results.Ok(ToEventDto(master, targetCalendar));
         }).RequireAuthorization(AuthConstants.HumanJwtOnlyPolicy);
 
@@ -1050,7 +1097,28 @@ public static partial class CalendarEndpoints
             return (null, null, null, null, Results.BadRequest(new { error = "Calendar file must be 5 MB or smaller." }));
         }
 
-        using var bodyReader = new StreamReader(request.Body, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        using var bufferStream = new MemoryStream();
+        var chunk = new byte[16 * 1024];
+        var totalRead = 0;
+        while (true)
+        {
+            var read = await request.Body.ReadAsync(chunk, ct);
+            if (read == 0)
+            {
+                break;
+            }
+
+            totalRead += read;
+            if (totalRead > MaxIcsUploadBytes)
+            {
+                return (null, null, null, null, Results.BadRequest(new { error = "Calendar file must be 5 MB or smaller." }));
+            }
+
+            bufferStream.Write(chunk, 0, read);
+        }
+
+        bufferStream.Position = 0;
+        using var bodyReader = new StreamReader(bufferStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         var rawText = await bodyReader.ReadToEndAsync(ct);
         if (string.IsNullOrWhiteSpace(rawText))
         {
@@ -1086,9 +1154,19 @@ public static partial class CalendarEndpoints
         var now = DateTimeOffset.UtcNow;
         var touched = new List<CalendarEvent>(parsed.Events.Count);
         var pendingExDates = new List<(CalendarEvent Master, IReadOnlyList<DateTimeOffset> ExDates)>();
+        var warnings = new List<string>(parsed.Warnings);
 
         foreach (var item in masterItems)
         {
+            var effectiveRRule = item.RecurrenceRule;
+            if (!string.IsNullOrWhiteSpace(effectiveRRule)
+                && !RRuleExpander.TryParse(effectiveRRule, out _, out var rruleError))
+            {
+                warnings.Add(
+                    $"Event '{item.Title}' has an unsupported recurrence rule ({rruleError ?? effectiveRRule}) and was imported as a single event.");
+                effectiveRRule = null;
+            }
+
             CalendarEvent masterEntity;
             if (item.Uid is not null && existingByUid.TryGetValue(item.Uid, out var existing))
             {
@@ -1100,7 +1178,7 @@ public static partial class CalendarEndpoints
                 existing.IsAllDay = item.IsAllDay;
                 existing.Timezone = item.Timezone ?? calendar.Timezone;
                 existing.Status = item.Status;
-                existing.RecurrenceRule = item.RecurrenceRule;
+                existing.RecurrenceRule = effectiveRRule;
                 existing.Source = "ICS Import";
                 existing.UpdatedAt = now;
                 updatedCount++;
@@ -1122,7 +1200,7 @@ public static partial class CalendarEndpoints
                     Timezone = item.Timezone ?? calendar.Timezone,
                     Status = item.Status,
                     ExternalUid = item.Uid,
-                    RecurrenceRule = item.RecurrenceRule,
+                    RecurrenceRule = effectiveRRule,
                     Source = "ICS Import",
                     CreatedAt = now,
                     UpdatedAt = now,
@@ -1291,7 +1369,7 @@ public static partial class CalendarEndpoints
             importedCount,
             updatedCount,
             parsed.Warnings.Count,
-            parsed.Warnings,
+            warnings,
             eventDtos);
     }
 
@@ -1305,7 +1383,8 @@ public static partial class CalendarEndpoints
         string? recurrenceRule,
         out string normalizedTitle,
         out string normalizedStatus,
-        out string? normalizedRRule)
+        out string? normalizedRRule,
+        string? source = null)
     {
         normalizedTitle = (title ?? string.Empty).Trim();
         normalizedStatus = string.IsNullOrWhiteSpace(status) ? "confirmed" : status.Trim().ToLowerInvariant();
@@ -1329,6 +1408,11 @@ public static partial class CalendarEndpoints
         if (timezone is not null && timezone.Trim().Length > 64)
         {
             return "Timezone must be 64 characters or fewer.";
+        }
+
+        if (source is not null && source.Trim().Length > 80)
+        {
+            return "Source must be 80 characters or fewer.";
         }
 
         if (!ValidEventStatuses.Contains(normalizedStatus))
