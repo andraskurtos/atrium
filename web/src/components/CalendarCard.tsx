@@ -14,17 +14,32 @@ import {
 } from '../data/mockData';
 import {
   allDayDatesToIsoRange,
+  buildRRuleString,
   CALENDAR_COLOR_PALETTE,
+  createDefaultRecurrenceState,
+  dateKeyToWeekdayCode,
+  eventInstanceKey,
   eventOccursOnDateKey,
   eventsOverlap,
   eventToFormFields,
   formatEventTimeLabels,
+  formatRecurrenceSummary,
   localDateTimeToIso,
+  parseRRuleString,
+  WEEKDAY_CODES,
   type CreateCalendarInput,
   type CreateEventInput,
+  type RecurrenceEndMode,
+  type RecurrenceFormState,
+  type RecurrenceFrequency,
   type UpdateEventInput,
+  type WeekdayCode,
 } from '../lib/calendarClient';
-import type { CalendarEvent, UserCalendar } from '../types/atrium';
+import type {
+  CalendarEvent,
+  RecurrenceScope,
+  UserCalendar,
+} from '../types/atrium';
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -45,12 +60,16 @@ interface CalendarCardProps {
   weekStartsOn?: 'monday' | 'sunday';
   timeFormat?: '24h' | '12h';
   onSelectDate: (dateKey: string) => void;
+  onViewYearChange?: (year: number) => void;
   onCreateCalendar: (input: CreateCalendarInput) => Promise<void>;
   onToggleCalendarVisibility: (calendar: UserCalendar) => Promise<void>;
   onDeleteCalendar: (id: string) => Promise<void>;
   onCreateEvent: (input: CreateEventInput) => Promise<void>;
   onUpdateEvent: (id: string, input: UpdateEventInput) => Promise<void>;
-  onDeleteEvent: (id: string) => Promise<void>;
+  onDeleteEvent: (
+    evt: CalendarEvent,
+    scope: RecurrenceScope,
+  ) => Promise<void>;
   onImportIcs: (file: File, targetCalendarId: string | 'new') => Promise<void>;
   onExportIcs: (calendar: UserCalendar) => Promise<void>;
   onToggleExpanded: (open: boolean) => void;
@@ -123,6 +142,7 @@ export function CalendarCard({
   weekStartsOn = 'monday',
   timeFormat = '24h',
   onSelectDate,
+  onViewYearChange,
   onCreateCalendar,
   onToggleCalendarVisibility,
   onDeleteCalendar,
@@ -140,6 +160,10 @@ export function CalendarCard({
   // Event form state (shared between create and edit)
   const [showEventForm, setShowEventForm] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const [editingIsRecurring, setEditingIsRecurring] = useState(false);
+  const [editingOccurrenceStartAt, setEditingOccurrenceStartAt] = useState<string | null>(null);
+  const [editScope, setEditScope] = useState<RecurrenceScope>('single');
+  const [pendingDeleteKey, setPendingDeleteKey] = useState<string | null>(null);
   const [eventTitle, setEventTitle] = useState('');
   const [eventCalendarId, setEventCalendarId] = useState('');
   const [eventIsAllDay, setEventIsAllDay] = useState(false);
@@ -149,6 +173,9 @@ export function CalendarCard({
   const [eventEndTime, setEventEndTime] = useState('10:15');
   const [eventLocation, setEventLocation] = useState('');
   const [eventDescription, setEventDescription] = useState('');
+  const [recurrence, setRecurrence] = useState<RecurrenceFormState>(() =>
+    createDefaultRecurrenceState(selectedDateKey),
+  );
   const [eventError, setEventError] = useState<string | null>(null);
   const [eventSaving, setEventSaving] = useState(false);
 
@@ -181,6 +208,10 @@ export function CalendarCard({
   }, [defaultCalendarId, eventCalendarId]);
 
   useEffect(() => {
+    onViewYearChange?.(viewYear);
+  }, [onViewYearChange, viewYear]);
+
+  useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
     if (isExpandedOpen && !dialog.open) {
@@ -197,6 +228,11 @@ export function CalendarCard({
     if (!editingEventId) {
       setEventStartDate(selectedDateKey);
       setEventEndDate(selectedDateKey);
+      setRecurrence((prev) =>
+        prev.freq === 'NONE'
+          ? createDefaultRecurrenceState(selectedDateKey)
+          : prev,
+      );
     }
   }, [selectedDateKey, editingEventId]);
 
@@ -240,17 +276,17 @@ export function CalendarCard({
     [visibleEvents, selectedDateKey],
   );
 
-  const overlappingEventIds = useMemo(() => {
-    const ids = new Set<string>();
+  const overlappingEventKeys = useMemo(() => {
+    const keys = new Set<string>();
     for (let i = 0; i < selectedDayEvents.length; i += 1) {
       for (let j = i + 1; j < selectedDayEvents.length; j += 1) {
         if (eventsOverlap(selectedDayEvents[i], selectedDayEvents[j])) {
-          ids.add(selectedDayEvents[i].id);
-          ids.add(selectedDayEvents[j].id);
+          keys.add(eventInstanceKey(selectedDayEvents[i]));
+          keys.add(eventInstanceKey(selectedDayEvents[j]));
         }
       }
     }
-    return ids;
+    return keys;
   }, [selectedDayEvents]);
 
   const viewMonthDate = new Date(viewYear, viewMonth, 1);
@@ -272,6 +308,10 @@ export function CalendarCard({
 
   const openNewEventForm = () => {
     setEditingEventId(null);
+    setEditingIsRecurring(false);
+    setEditingOccurrenceStartAt(null);
+    setEditScope('series');
+    setPendingDeleteKey(null);
     setEventTitle('');
     setEventCalendarId(defaultCalendarId);
     setEventIsAllDay(false);
@@ -281,6 +321,7 @@ export function CalendarCard({
     setEventEndTime('10:15');
     setEventLocation('');
     setEventDescription('');
+    setRecurrence(createDefaultRecurrenceState(selectedDateKey));
     setEventError(null);
     setShowEventForm(true);
   };
@@ -288,6 +329,10 @@ export function CalendarCard({
   const openEditEventForm = (evt: CalendarEvent) => {
     const fields = eventToFormFields(evt);
     setEditingEventId(evt.id);
+    setEditingIsRecurring(evt.isRecurring);
+    setEditingOccurrenceStartAt(evt.occurrenceStartAt ?? evt.startAt);
+    setEditScope(evt.isRecurring ? 'single' : 'series');
+    setPendingDeleteKey(null);
     setEventTitle(evt.title);
     setEventCalendarId(evt.calendarId);
     setEventIsAllDay(evt.isAllDay);
@@ -297,6 +342,7 @@ export function CalendarCard({
     setEventEndTime(fields.endTime);
     setEventLocation(evt.location ?? '');
     setEventDescription(evt.description ?? '');
+    setRecurrence(parseRRuleString(evt.recurrenceRule, fields.startDate));
     setEventError(null);
     setShowEventForm(true);
   };
@@ -304,7 +350,24 @@ export function CalendarCard({
   const closeEventForm = () => {
     setShowEventForm(false);
     setEditingEventId(null);
+    setEditingIsRecurring(false);
+    setEditingOccurrenceStartAt(null);
     setEventError(null);
+  };
+
+  const toggleWeekday = (code: WeekdayCode) => {
+    setRecurrence((prev) => {
+      const exists = prev.byDays.includes(code);
+      if (exists && prev.byDays.length === 1) {
+        return prev; // Keep at least one weekday selected
+      }
+      return {
+        ...prev,
+        byDays: exists
+          ? prev.byDays.filter((d) => d !== code)
+          : [...prev.byDays, code],
+      };
+    });
   };
 
   const handleEventSubmit = async (e: FormEvent) => {
@@ -336,6 +399,14 @@ export function CalendarCard({
       return;
     }
 
+    const showRepeatRule = !editingIsRecurring || editScope === 'series';
+    if (showRepeatRule && recurrence.freq !== 'NONE' && recurrence.endMode === 'UNTIL' && !recurrence.untilDate) {
+      setEventError('Choose an end date for the repeating series.');
+      return;
+    }
+
+    const rrule = showRepeatRule ? buildRRuleString(recurrence) : null;
+
     setEventSaving(true);
     setEventError(null);
     try {
@@ -348,6 +419,9 @@ export function CalendarCard({
           isAllDay: eventIsAllDay,
           location: eventLocation.trim() || null,
           description: eventDescription.trim() || null,
+          recurrenceRule: rrule,
+          scope: editingIsRecurring ? editScope : 'series',
+          occurrenceStartAt: editingIsRecurring ? editingOccurrenceStartAt : null,
         });
       } else {
         await onCreateEvent({
@@ -358,6 +432,7 @@ export function CalendarCard({
           isAllDay: eventIsAllDay,
           location: eventLocation.trim() || null,
           description: eventDescription.trim() || null,
+          recurrenceRule: rrule,
         });
       }
       closeEventForm();
@@ -416,208 +491,439 @@ export function CalendarCard({
       ? 'Up Next · Today'
       : `Schedule · ${formatShortDate(selectedDate)}`;
 
-  const renderEventForm = (prefix: string) => (
-    <form className="inline-event-form card-soft" onSubmit={(e) => void handleEventSubmit(e)}>
-      <div className="calendar-form-heading">
-        <span className="meta-text">
-          {editingEventId ? 'Edit event' : 'New event'}
-        </span>
-        <button
-          type="button"
-          className="btn btn-ghost btn-xs"
-          onClick={closeEventForm}
-        >
-          Cancel
-        </button>
-      </div>
+  const renderEventForm = (prefix: string) => {
+    const showRepeatControls = !editingIsRecurring || editScope === 'series';
+    const intervalUnit =
+      recurrence.freq === 'DAILY'
+        ? recurrence.interval === 1 ? 'day' : 'days'
+        : recurrence.freq === 'WEEKLY'
+          ? recurrence.interval === 1 ? 'week' : 'weeks'
+          : recurrence.freq === 'MONTHLY'
+            ? recurrence.interval === 1 ? 'month' : 'months'
+            : recurrence.interval === 1 ? 'year' : 'years';
 
-      <input
-        id={`${prefix}-event-title`}
-        type="text"
-        className="input"
-        placeholder="Event title"
-        value={eventTitle}
-        onChange={(e) => setEventTitle(e.target.value)}
-        required
-      />
+    return (
+      <form className="inline-event-form card-soft" onSubmit={(e) => void handleEventSubmit(e)}>
+        <div className="calendar-form-heading">
+          <span className="meta-text">
+            {editingEventId ? 'Edit event' : 'New event'}
+          </span>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={closeEventForm}
+          >
+            Cancel
+          </button>
+        </div>
 
-      <div className="inline-event-meta-row">
-        <select
-          id={`${prefix}-event-calendar`}
+        {editingEventId && editingIsRecurring && (
+          <div className="recurrence-scope-group" role="radiogroup" aria-label="Edit scope">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={editScope === 'single'}
+              className={`mode-chip ${editScope === 'single' ? 'is-active' : ''}`}
+              onClick={() => setEditScope('single')}
+            >
+              This event only
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={editScope === 'series'}
+              className={`mode-chip ${editScope === 'series' ? 'is-active' : ''}`}
+              onClick={() => setEditScope('series')}
+            >
+              All events in series
+            </button>
+          </div>
+        )}
+
+        <input
+          id={`${prefix}-event-title`}
+          type="text"
           className="input"
-          value={eventCalendarId || defaultCalendarId}
-          onChange={(e) => setEventCalendarId(e.target.value)}
-          aria-label="Calendar"
+          placeholder="Event title"
+          value={eventTitle}
+          onChange={(e) => setEventTitle(e.target.value)}
+          required
+        />
+
+        <div className="inline-event-meta-row">
+          <select
+            id={`${prefix}-event-calendar`}
+            className="input"
+            value={eventCalendarId || defaultCalendarId}
+            onChange={(e) => setEventCalendarId(e.target.value)}
+            aria-label="Calendar"
+          >
+            {calendars.map((cal) => (
+              <option key={cal.id} value={cal.id}>
+                {cal.name}
+              </option>
+            ))}
+          </select>
+          <label className="calendar-allday-toggle">
+            <input
+              id={`${prefix}-event-allday`}
+              type="checkbox"
+              checked={eventIsAllDay}
+              onChange={(e) => setEventIsAllDay(e.target.checked)}
+            />
+            <span>All day</span>
+          </label>
+        </div>
+
+        <div className="inline-event-datetime-grid">
+          <label className="calendar-field-label">
+            <span className="meta-text">Start</span>
+            <div className="inline-event-dt-pair">
+              <input
+                id={`${prefix}-event-start-date`}
+                type="date"
+                className="input mono-num"
+                value={eventStartDate}
+                onChange={(e) => {
+                  const nextDate = e.target.value;
+                  setEventStartDate(nextDate);
+                  if (nextDate > eventEndDate) {
+                    setEventEndDate(nextDate);
+                  }
+                  if (recurrence.freq === 'NONE' && nextDate) {
+                    setRecurrence((prev) => ({
+                      ...prev,
+                      byDays: [dateKeyToWeekdayCode(nextDate)],
+                    }));
+                  }
+                }}
+                required
+              />
+              {!eventIsAllDay && (
+                <input
+                  id={`${prefix}-event-start-time`}
+                  type="time"
+                  className="input mono-num"
+                  value={eventStartTime}
+                  onChange={(e) => setEventStartTime(e.target.value)}
+                  required
+                />
+              )}
+            </div>
+          </label>
+
+          <label className="calendar-field-label">
+            <span className="meta-text">End</span>
+            <div className="inline-event-dt-pair">
+              <input
+                id={`${prefix}-event-end-date`}
+                type="date"
+                className="input mono-num"
+                value={eventEndDate}
+                min={eventStartDate}
+                onChange={(e) => setEventEndDate(e.target.value)}
+                required
+              />
+              {!eventIsAllDay && (
+                <input
+                  id={`${prefix}-event-end-time`}
+                  type="time"
+                  className="input mono-num"
+                  value={eventEndTime}
+                  onChange={(e) => setEventEndTime(e.target.value)}
+                  required
+                />
+              )}
+            </div>
+          </label>
+        </div>
+
+        {showRepeatControls && (
+          <div className="recurrence-controls">
+            <label className="calendar-field-label">
+              <span className="meta-text">Repeat</span>
+              <select
+                id={`${prefix}-event-repeat-freq`}
+                className="input"
+                value={recurrence.freq}
+                onChange={(e) => {
+                  const nextFreq = e.target.value as RecurrenceFrequency;
+                  setRecurrence((prev) => ({
+                    ...prev,
+                    freq: nextFreq,
+                    byDays:
+                      nextFreq === 'WEEKLY' && prev.byDays.length === 0
+                        ? [dateKeyToWeekdayCode(eventStartDate)]
+                        : prev.byDays,
+                  }));
+                }}
+              >
+                <option value="NONE">Does not repeat</option>
+                <option value="DAILY">Daily</option>
+                <option value="WEEKLY">Weekly</option>
+                <option value="MONTHLY">Monthly</option>
+                <option value="YEARLY">Yearly</option>
+              </select>
+            </label>
+
+            {recurrence.freq !== 'NONE' && (
+              <>
+                <div className="recurrence-interval-row">
+                  <span className="meta-text">Every</span>
+                  <input
+                    id={`${prefix}-event-repeat-interval`}
+                    type="number"
+                    min={1}
+                    max={999}
+                    className="input mono-num recurrence-num-input"
+                    value={recurrence.interval}
+                    onChange={(e) =>
+                      setRecurrence((prev) => ({
+                        ...prev,
+                        interval: Math.max(1, Number.parseInt(e.target.value, 10) || 1),
+                      }))
+                    }
+                    aria-label="Repeat interval"
+                  />
+                  <span className="meta-text">{intervalUnit}</span>
+                </div>
+
+                {recurrence.freq === 'WEEKLY' && (
+                  <div className="recurrence-weekdays" role="group" aria-label="Repeat on weekdays">
+                    {WEEKDAY_CODES.map((code) => {
+                      const active = recurrence.byDays.includes(code);
+                      return (
+                        <button
+                          key={code}
+                          type="button"
+                          className={`recurrence-day-btn ${active ? 'is-active' : ''}`}
+                          aria-pressed={active}
+                          onClick={() => toggleWeekday(code)}
+                        >
+                          {code[0] + code[1].toLowerCase()}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <label className="calendar-field-label">
+                  <span className="meta-text">Ends</span>
+                  <select
+                    id={`${prefix}-event-repeat-end-mode`}
+                    className="input"
+                    value={recurrence.endMode}
+                    onChange={(e) =>
+                      setRecurrence((prev) => ({
+                        ...prev,
+                        endMode: e.target.value as RecurrenceEndMode,
+                      }))
+                    }
+                  >
+                    <option value="NEVER">Never</option>
+                    <option value="UNTIL">On date</option>
+                    <option value="COUNT">After occurrences</option>
+                  </select>
+                </label>
+
+                {recurrence.endMode === 'UNTIL' && (
+                  <input
+                    id={`${prefix}-event-repeat-until`}
+                    type="date"
+                    className="input mono-num"
+                    min={eventStartDate}
+                    value={recurrence.untilDate}
+                    onChange={(e) =>
+                      setRecurrence((prev) => ({
+                        ...prev,
+                        untilDate: e.target.value,
+                      }))
+                    }
+                    aria-label="Repeat until date"
+                    required
+                  />
+                )}
+
+                {recurrence.endMode === 'COUNT' && (
+                  <div className="recurrence-interval-row">
+                    <span className="meta-text">After</span>
+                    <input
+                      id={`${prefix}-event-repeat-count`}
+                      type="number"
+                      min={1}
+                      max={5000}
+                      className="input mono-num recurrence-num-input"
+                      value={recurrence.count}
+                      onChange={(e) =>
+                        setRecurrence((prev) => ({
+                          ...prev,
+                          count: Math.max(1, Number.parseInt(e.target.value, 10) || 1),
+                        }))
+                      }
+                      aria-label="Number of occurrences"
+                    />
+                    <span className="meta-text">occurrences</span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        <input
+          id={`${prefix}-event-location`}
+          type="text"
+          className="input"
+          placeholder="Location (room, address, or link)"
+          value={eventLocation}
+          onChange={(e) => setEventLocation(e.target.value)}
+        />
+
+        <textarea
+          id={`${prefix}-event-description`}
+          className="input calendar-textarea"
+          placeholder="Notes / description (optional)"
+          rows={2}
+          value={eventDescription}
+          onChange={(e) => setEventDescription(e.target.value)}
+        />
+
+        {eventError && <p className="calendar-inline-error">{eventError}</p>}
+
+        <button
+          id={`${prefix}-event-submit`}
+          type="submit"
+          className="btn btn-primary btn-compact"
+          disabled={eventSaving}
         >
-          {calendars.map((cal) => (
-            <option key={cal.id} value={cal.id}>
-              {cal.name}
-            </option>
-          ))}
-        </select>
-        <label className="calendar-allday-toggle">
-          <input
-            id={`${prefix}-event-allday`}
-            type="checkbox"
-            checked={eventIsAllDay}
-            onChange={(e) => setEventIsAllDay(e.target.checked)}
-          />
-          <span>All day</span>
-        </label>
-      </div>
-
-      <div className="inline-event-datetime-grid">
-        <label className="calendar-field-label">
-          <span className="meta-text">Start</span>
-          <div className="inline-event-dt-pair">
-            <input
-              id={`${prefix}-event-start-date`}
-              type="date"
-              className="input mono-num"
-              value={eventStartDate}
-              onChange={(e) => {
-                setEventStartDate(e.target.value);
-                if (e.target.value > eventEndDate) {
-                  setEventEndDate(e.target.value);
-                }
-              }}
-              required
-            />
-            {!eventIsAllDay && (
-              <input
-                id={`${prefix}-event-start-time`}
-                type="time"
-                className="input mono-num"
-                value={eventStartTime}
-                onChange={(e) => setEventStartTime(e.target.value)}
-                required
-              />
-            )}
-          </div>
-        </label>
-
-        <label className="calendar-field-label">
-          <span className="meta-text">End</span>
-          <div className="inline-event-dt-pair">
-            <input
-              id={`${prefix}-event-end-date`}
-              type="date"
-              className="input mono-num"
-              value={eventEndDate}
-              min={eventStartDate}
-              onChange={(e) => setEventEndDate(e.target.value)}
-              required
-            />
-            {!eventIsAllDay && (
-              <input
-                id={`${prefix}-event-end-time`}
-                type="time"
-                className="input mono-num"
-                value={eventEndTime}
-                onChange={(e) => setEventEndTime(e.target.value)}
-                required
-              />
-            )}
-          </div>
-        </label>
-      </div>
-
-      <input
-        id={`${prefix}-event-location`}
-        type="text"
-        className="input"
-        placeholder="Location (room, address, or link)"
-        value={eventLocation}
-        onChange={(e) => setEventLocation(e.target.value)}
-      />
-
-      <textarea
-        id={`${prefix}-event-description`}
-        className="input calendar-textarea"
-        placeholder="Notes / description (optional)"
-        rows={2}
-        value={eventDescription}
-        onChange={(e) => setEventDescription(e.target.value)}
-      />
-
-      {eventError && <p className="calendar-inline-error">{eventError}</p>}
-
-      <button
-        id={`${prefix}-event-submit`}
-        type="submit"
-        className="btn btn-primary btn-compact"
-        disabled={eventSaving}
-      >
-        {eventSaving
-          ? 'Saving…'
-          : editingEventId
-            ? 'Save changes'
-            : `Add to ${formatShortDate(parseDateKey(eventStartDate || selectedDateKey))}`}
-      </button>
-    </form>
-  );
+          {eventSaving
+            ? 'Saving…'
+            : editingEventId
+              ? editingIsRecurring
+                ? editScope === 'single'
+                  ? 'Save this event'
+                  : 'Save entire series'
+                : 'Save changes'
+              : `Add to ${formatShortDate(parseDateKey(eventStartDate || selectedDateKey))}`}
+        </button>
+      </form>
+    );
+  };
 
   const renderEventRow = (evt: CalendarEvent, headingLevel: 'h3' | 'h4') => {
+    const instanceKey = eventInstanceKey(evt);
     const timeLabels = formatEventTimeLabels(evt, timeFormat);
-    const hasOverlap = overlappingEventIds.has(evt.id);
+    const hasOverlap = overlappingEventKeys.has(instanceKey);
+    const isConfirmingDelete = pendingDeleteKey === instanceKey;
     const Heading = headingLevel;
 
     return (
       <article
-        key={evt.id}
-        className="card-soft event-row"
+        key={instanceKey}
+        className="card-soft event-row-card"
         style={{ borderLeft: `3px solid ${evt.calendarColor}` }}
       >
-        <div className="event-time-col">
-          <span className="mono-num event-start">{timeLabels.primary}</span>
-          {timeLabels.secondary && (
-            <span className="mono-num event-duration">{timeLabels.secondary}</span>
-          )}
-        </div>
-        <div className="event-body">
-          <Heading className="row-title">{evt.title}</Heading>
-          <div className="event-meta">
-            <span className="calendar-name-tag">
-              <span
-                className="calendar-swatch-dot"
-                style={{ backgroundColor: evt.calendarColor }}
-                aria-hidden="true"
-              />
-              {evt.calendarName}
-            </span>
-            {evt.location && <span className="meta-text">{evt.location}</span>}
-            {hasOverlap && (
-              <span className="pill-overlap" title="Overlaps another scheduled event">
-                Overlap
-              </span>
-            )}
-            {evt.source && evt.source !== 'Manual' && (
-              <span className="pill-accent">{evt.source}</span>
+        <div className="event-row">
+          <div className="event-time-col">
+            <span className="mono-num event-start">{timeLabels.primary}</span>
+            {timeLabels.secondary && (
+              <span className="mono-num event-duration">{timeLabels.secondary}</span>
             )}
           </div>
-          {evt.description && (
-            <p className="meta-text event-description">{evt.description}</p>
-          )}
+          <div className="event-body">
+            <Heading className="row-title">{evt.title}</Heading>
+            <div className="event-meta">
+              <span className="calendar-name-tag">
+                <span
+                  className="calendar-swatch-dot"
+                  style={{ backgroundColor: evt.calendarColor }}
+                  aria-hidden="true"
+                />
+                {evt.calendarName}
+              </span>
+              {evt.isRecurring && (
+                <span
+                  className="pill-muted"
+                  title={formatRecurrenceSummary(evt.recurrenceRule)}
+                >
+                  {evt.isRecurrenceException ? 'Series · Edited' : 'Repeats'}
+                </span>
+              )}
+              {evt.location && <span className="meta-text">{evt.location}</span>}
+              {hasOverlap && (
+                <span className="pill-overlap" title="Overlaps another scheduled event">
+                  Overlap
+                </span>
+              )}
+              {evt.source && evt.source !== 'Manual' && (
+                <span className="pill-accent">{evt.source}</span>
+              )}
+            </div>
+            {evt.description && (
+              <p className="meta-text event-description">{evt.description}</p>
+            )}
+          </div>
+          <div className="event-row-actions">
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              onClick={() => openEditEventForm(evt)}
+              aria-label={`Edit event: ${evt.title}`}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-icon-sm row-remove-btn"
+              onClick={() => {
+                if (evt.isRecurring) {
+                  setPendingDeleteKey((prev) =>
+                    prev === instanceKey ? null : instanceKey,
+                  );
+                } else {
+                  void onDeleteEvent(evt, 'series');
+                }
+              }}
+              aria-label={`Remove event: ${evt.title}`}
+              title="Remove event"
+            >
+              <CloseIcon />
+            </button>
+          </div>
         </div>
-        <div className="event-row-actions">
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs"
-            onClick={() => openEditEventForm(evt)}
-            aria-label={`Edit event: ${evt.title}`}
-          >
-            Edit
-          </button>
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon-sm row-remove-btn"
-            onClick={() => void onDeleteEvent(evt.id)}
-            aria-label={`Remove event: ${evt.title}`}
-            title="Remove event"
-          >
-            <CloseIcon />
-          </button>
-        </div>
+
+        {isConfirmingDelete && evt.isRecurring && (
+          <div className="recurrence-delete-bar" role="group" aria-label="Delete recurring event options">
+            <span className="meta-text">Delete:</span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-xs"
+              onClick={() => {
+                setPendingDeleteKey(null);
+                void onDeleteEvent(evt, 'single');
+              }}
+            >
+              This event
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger btn-xs"
+              onClick={() => {
+                setPendingDeleteKey(null);
+                void onDeleteEvent(evt, 'series');
+              }}
+            >
+              Entire series
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              onClick={() => setPendingDeleteKey(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
       </article>
     );
   };
@@ -1100,7 +1406,7 @@ export function CalendarCard({
                         const labels = formatEventTimeLabels(evt, timeFormat);
                         return (
                           <span
-                            key={evt.id}
+                            key={eventInstanceKey(evt)}
                             className="calendar-cell-chip"
                             style={{ borderLeft: `3px solid ${evt.calendarColor}` }}
                             title={`${labels.primary} · ${evt.title} (${evt.calendarName})`}
@@ -1126,8 +1432,8 @@ export function CalendarCard({
                     : `${selectedDayEvents.length} ${
                         selectedDayEvents.length === 1 ? 'event' : 'events'
                       }${
-                        overlappingEventIds.size > 0
-                          ? ` · ${overlappingEventIds.size} overlapping`
+                        overlappingEventKeys.size > 0
+                          ? ` · ${overlappingEventKeys.size} overlapping`
                           : ''
                       }`}
                 </p>

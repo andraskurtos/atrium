@@ -109,7 +109,10 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.Property<DateTimeOffset>("EndAt").HasColumnType("timestamp with time zone").HasColumnName("end_at");
             b.Property<string>("ExternalUid").HasMaxLength(255).HasColumnType("character varying(255)").HasColumnName("external_uid");
             b.Property<bool>("IsAllDay").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(false).HasColumnName("is_all_day");
+            b.Property<bool>("IsRecurrenceExceptionDeleted").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(false).HasColumnName("is_recurrence_exception_deleted");
             b.Property<string>("Location").HasMaxLength(280).HasColumnType("character varying(280)").HasColumnName("location");
+            b.Property<Guid?>("RecurrenceMasterId").HasColumnType("uuid").HasColumnName("recurrence_master_id");
+            b.Property<DateTimeOffset?>("RecurrenceOriginalStartAt").HasColumnType("timestamp with time zone").HasColumnName("recurrence_original_start_at");
             b.Property<string>("RecurrenceRule").HasMaxLength(255).HasColumnType("character varying(255)").HasColumnName("recurrence_rule");
             b.Property<string>("Source").HasMaxLength(80).HasColumnType("character varying(80)").HasColumnName("source");
             b.Property<DateTimeOffset>("StartAt").HasColumnType("timestamp with time zone").HasColumnName("start_at");
@@ -122,6 +125,7 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.HasKey("Id");
             b.HasIndex("CalendarId", "ExternalUid").IsUnique().HasDatabaseName("ix_calendar_events_calendar_external_uid").HasFilter("\"external_uid\" IS NOT NULL");
             b.HasIndex("CalendarId", "StartAt");
+            b.HasIndex("RecurrenceMasterId", "RecurrenceOriginalStartAt").IsUnique().HasDatabaseName("ix_calendar_events_master_original_start").HasFilter("\"recurrence_master_id\" IS NOT NULL");
             b.HasIndex("UserId", "StartAt", "EndAt");
             b.ToTable("calendar_events", (string?)null);
         });
@@ -175,12 +179,17 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .HasForeignKey("CalendarId")
                 .OnDelete(DeleteBehavior.Cascade)
                 .IsRequired();
+            b.HasOne("Atrium.Api.Data.Entities.CalendarEvent", "RecurrenceMaster")
+                .WithMany("RecurrenceOverrides")
+                .HasForeignKey("RecurrenceMasterId")
+                .OnDelete(DeleteBehavior.Cascade);
             b.HasOne("Atrium.Api.Data.Entities.User", "User")
                 .WithMany()
                 .HasForeignKey("UserId")
                 .OnDelete(DeleteBehavior.Cascade)
                 .IsRequired();
             b.Navigation("Calendar");
+            b.Navigation("RecurrenceMaster");
             b.Navigation("User");
         });
 
@@ -227,6 +236,11 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .OnDelete(DeleteBehavior.Cascade)
                 .IsRequired();
             b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.CalendarEvent", b =>
+        {
+            b.Navigation("RecurrenceOverrides");
         });
 
         modelBuilder.Entity("Atrium.Api.Data.Entities.User", b =>

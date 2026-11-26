@@ -179,6 +179,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(16).IsRequired();
             entity.Property(e => e.ExternalUid).HasColumnName("external_uid").HasMaxLength(255);
             entity.Property(e => e.RecurrenceRule).HasColumnName("recurrence_rule").HasMaxLength(255);
+            entity.Property(e => e.RecurrenceMasterId).HasColumnName("recurrence_master_id");
+            entity.Property(e => e.RecurrenceOriginalStartAt).HasColumnName("recurrence_original_start_at");
+            entity.Property(e => e.IsRecurrenceExceptionDeleted).HasColumnName("is_recurrence_exception_deleted").HasDefaultValue(false);
             entity.Property(e => e.Source).HasColumnName("source").HasMaxLength(80);
             entity.Property(e => e.CreatedAt).HasColumnName("created_at");
             entity.Property(e => e.UpdatedAt).HasColumnName("updated_at");
@@ -189,6 +192,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .IsUnique()
                 .HasDatabaseName("ix_calendar_events_calendar_external_uid")
                 .HasFilter("\"external_uid\" IS NOT NULL");
+            entity.HasIndex(e => new { e.RecurrenceMasterId, e.RecurrenceOriginalStartAt })
+                .IsUnique()
+                .HasDatabaseName("ix_calendar_events_master_original_start")
+                .HasFilter("\"recurrence_master_id\" IS NOT NULL");
 
             entity.HasOne(e => e.Calendar)
                 .WithMany(c => c.Events)
@@ -198,6 +205,11 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasOne(e => e.User)
                 .WithMany()
                 .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.RecurrenceMaster)
+                .WithMany(m => m.RecurrenceOverrides)
+                .HasForeignKey(e => e.RecurrenceMasterId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -213,6 +225,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                     .HasConversion(
                         v => v.UtcTicks,
                         ticks => new DateTimeOffset(ticks, TimeSpan.Zero));
+                entity.Property(e => e.RecurrenceOriginalStartAt)
+                    .HasConversion(
+                        v => v.HasValue ? v.Value.UtcTicks : (long?)null,
+                        ticks => ticks.HasValue ? new DateTimeOffset(ticks.Value, TimeSpan.Zero) : (DateTimeOffset?)null);
             });
         }
     }

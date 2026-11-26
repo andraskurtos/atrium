@@ -15,10 +15,15 @@ public sealed class CalendarEvent
     public string Status { get; set; } = "confirmed";
     public string? ExternalUid { get; set; }
     public string? RecurrenceRule { get; set; }
+    public Guid? RecurrenceMasterId { get; set; }
+    public DateTimeOffset? RecurrenceOriginalStartAt { get; set; }
+    public bool IsRecurrenceExceptionDeleted { get; set; }
     public string? Source { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 
     public UserCalendar Calendar { get; set; } = null!;
     public User User { get; set; } = null!;
+    public CalendarEvent? RecurrenceMaster { get; set; }
+    public ICollection<CalendarEvent> RecurrenceOverrides { get; } = [];
 }

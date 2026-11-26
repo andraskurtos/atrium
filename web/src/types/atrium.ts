@@ -85,6 +85,8 @@ export interface TaskItem {
 
 export type CalendarEventStatus = 'confirmed' | 'tentative' | 'cancelled';
 
+export type RecurrenceScope = 'single' | 'series';
+
 export interface UserCalendar {
   id: string;
   name: string;
@@ -117,6 +119,10 @@ export interface CalendarEvent {
   source: string | null;
   createdAt: string;
   updatedAt: string;
+  seriesMasterId: string | null;
+  occurrenceStartAt: string | null;
+  isRecurring: boolean;
+  isRecurrenceException: boolean;
 }
 
 export interface IcsImportSummary {

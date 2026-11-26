@@ -44,7 +44,11 @@ public sealed record CalendarEventDto(
     string? RecurrenceRule,
     string? Source,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    Guid? SeriesMasterId = null,
+    DateTimeOffset? OccurrenceStartAt = null,
+    bool IsRecurring = false,
+    bool IsRecurrenceException = false);
 
 public sealed record CreateEventRequest(
     Guid? CalendarId,
@@ -69,7 +73,9 @@ public sealed record UpdateEventRequest(
     string? Description = null,
     string? Timezone = null,
     string? Status = null,
-    string? RecurrenceRule = null);
+    string? RecurrenceRule = null,
+    string? Scope = null,
+    DateTimeOffset? OccurrenceStartAt = null);
 
 public sealed record IcsImportResponse(
     CalendarDto Calendar,
@@ -89,7 +95,9 @@ public sealed record ParsedIcsEvent(
     bool IsAllDay,
     string? Timezone,
     string Status,
-    string? RecurrenceRule);
+    string? RecurrenceRule,
+    DateTimeOffset? RecurrenceId = null,
+    IReadOnlyList<DateTimeOffset>? ExceptionDates = null);
 
 public sealed record ParsedIcsCalendar(
     string? CalendarName,

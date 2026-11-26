@@ -40,8 +40,10 @@ public sealed class MigrationModelTests
 
         Assert.Contains("20261125222000_InitialAuthAndAccounts", sql, StringComparison.Ordinal);
         Assert.Contains("20261126120000_AddCalendarsAndEvents", sql, StringComparison.Ordinal);
+        Assert.Contains("20261126150000_AddRecurrenceOverrides", sql, StringComparison.Ordinal);
         Assert.Contains("CREATE TABLE calendars", sql, StringComparison.Ordinal);
         Assert.Contains("CREATE TABLE calendar_events", sql, StringComparison.Ordinal);
         Assert.Contains("ix_calendar_events_calendar_external_uid", sql, StringComparison.Ordinal);
+        Assert.Contains("ix_calendar_events_master_original_start", sql, StringComparison.Ordinal);
     }
 }

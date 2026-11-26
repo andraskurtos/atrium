@@ -2083,11 +2083,98 @@ select {
   overflow: hidden;
 }
 
+.event-row-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.event-row-card .event-row {
+  padding: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+}
+
 .event-row-actions {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
+}
+
+.recurrence-scope-group {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.recurrence-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  min-width: 0;
+}
+
+.recurrence-interval-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.recurrence-num-input {
+  width: 68px;
+  text-align: center;
+}
+
+.recurrence-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.recurrence-day-btn {
+  padding: 4px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background-color: var(--surface-subtle);
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-tactile),
+    border-color var(--duration-fast) var(--ease-tactile),
+    color var(--duration-fast) var(--ease-tactile);
+}
+
+.recurrence-day-btn.is-active {
+  background-color: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.recurrence-delete-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.btn-danger {
+  background-color: var(--danger);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+.btn-danger:hover {
+  filter: brightness(0.92);
 }
 
 .calendar-dialog {

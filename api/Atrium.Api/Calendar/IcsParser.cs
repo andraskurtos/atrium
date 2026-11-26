@@ -192,6 +192,13 @@ public static partial class IcsParser
                         currentEvent.DtEndRaw = value.Trim();
                         currentEvent.DtEndParams = parameters;
                         break;
+                    case "RECURRENCE-ID":
+                        currentEvent.RecurrenceIdRaw = value.Trim();
+                        currentEvent.RecurrenceIdParams = parameters;
+                        break;
+                    case "EXDATE":
+                        currentEvent.ExDates.Add((value.Trim(), parameters));
+                        break;
                 }
             }
         }
@@ -213,7 +220,8 @@ public static partial class IcsParser
         string calendarName,
         string? calendarDescription,
         string timezone,
-        IEnumerable<CalendarEventDto> events)
+        IEnumerable<CalendarEventDto> events,
+        IReadOnlyDictionary<Guid, IReadOnlyList<DateTimeOffset>>? exceptionDatesByMasterId = null)
     {
         ArgumentNullException.ThrowIfNull(calendarName);
         ArgumentNullException.ThrowIfNull(events);
@@ -241,9 +249,22 @@ public static partial class IcsParser
             AppendLine(sb, "BEGIN:VEVENT");
             var uid = !string.IsNullOrWhiteSpace(evt.ExternalUid)
                 ? evt.ExternalUid
-                : $"{evt.Id:D}@atrium.local";
+                : $"{(evt.SeriesMasterId ?? evt.Id):D}@atrium.local";
             AppendFoldedProperty(sb, "UID", uid);
             AppendLine(sb, $"DTSTAMP:{dtStamp}");
+
+            if (evt.IsRecurrenceException && evt.OccurrenceStartAt.HasValue)
+            {
+                var origUtc = evt.OccurrenceStartAt.Value.ToUniversalTime();
+                if (evt.IsAllDay)
+                {
+                    AppendLine(sb, $"RECURRENCE-ID;VALUE=DATE:{origUtc.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}");
+                }
+                else
+                {
+                    AppendLine(sb, $"RECURRENCE-ID:{origUtc.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture)}");
+                }
+            }
 
             if (evt.IsAllDay)
             {
@@ -279,9 +300,28 @@ public static partial class IcsParser
                 AppendLine(sb, $"STATUS:{evt.Status.ToUpperInvariant()}");
             }
 
-            if (!string.IsNullOrWhiteSpace(evt.RecurrenceRule))
+            if (!evt.IsRecurrenceException && !string.IsNullOrWhiteSpace(evt.RecurrenceRule))
             {
                 AppendFoldedProperty(sb, "RRULE", evt.RecurrenceRule);
+            }
+
+            if (!evt.IsRecurrenceException
+                && exceptionDatesByMasterId is not null
+                && exceptionDatesByMasterId.TryGetValue(evt.Id, out var exDates)
+                && exDates.Count > 0)
+            {
+                foreach (var exDate in exDates.Order())
+                {
+                    var exUtc = exDate.ToUniversalTime();
+                    if (evt.IsAllDay)
+                    {
+                        AppendLine(sb, $"EXDATE;VALUE=DATE:{exUtc.ToString("yyyyMMdd", CultureInfo.InvariantCulture)}");
+                    }
+                    else
+                    {
+                        AppendLine(sb, $"EXDATE:{exUtc.ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture)}");
+                    }
+                }
             }
 
             AppendLine(sb, "END:VEVENT");
@@ -487,6 +527,39 @@ public static partial class IcsParser
             rrule = rrule[..255];
         }
 
+        DateTimeOffset? recurrenceId = null;
+        if (!string.IsNullOrWhiteSpace(builder.RecurrenceIdRaw)
+            && TryParseIcsDateTime(
+                builder.RecurrenceIdRaw,
+                builder.RecurrenceIdParams,
+                resolvedTimezone ?? defaultTimezone,
+                out var parsedRecId,
+                out _,
+                out _))
+        {
+            recurrenceId = parsedRecId.ToUniversalTime();
+        }
+
+        List<DateTimeOffset>? exceptionDates = null;
+        if (builder.ExDates.Count > 0)
+        {
+            exceptionDates = [];
+            foreach (var (rawList, exParams) in builder.ExDates)
+            {
+                foreach (var token in rawList.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    if (TryParseIcsDateTime(token, exParams, resolvedTimezone ?? defaultTimezone, out var exDt, out _, out _))
+                    {
+                        var exUtc = exDt.ToUniversalTime();
+                        if (!exceptionDates.Contains(exUtc))
+                        {
+                            exceptionDates.Add(exUtc);
+                        }
+                    }
+                }
+            }
+        }
+
         return new ParsedIcsEvent(
             uid,
             title,
@@ -497,7 +570,9 @@ public static partial class IcsParser
             isAllDay,
             resolvedTimezone,
             status,
-            rrule);
+            rrule,
+            recurrenceId,
+            exceptionDates);
     }
 
     private static bool TryParseIcsDateTime(
@@ -712,5 +787,8 @@ public static partial class IcsParser
         public Dictionary<string, string>? DtStartParams { get; set; }
         public string? DtEndRaw { get; set; }
         public Dictionary<string, string>? DtEndParams { get; set; }
+        public string? RecurrenceIdRaw { get; set; }
+        public Dictionary<string, string>? RecurrenceIdParams { get; set; }
+        public List<(string Raw, Dictionary<string, string>? Params)> ExDates { get; } = [];
     }
 }

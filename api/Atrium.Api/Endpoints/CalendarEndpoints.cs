@@ -356,15 +356,64 @@ public static partial class CalendarEndpoints
                 .FirstOrDefaultAsync(c => c.Id == id && c.UserId == userId, ct);
             if (calendar is null) return Results.NotFound();
 
-            var events = await db.CalendarEvents
+            var rows = await db.CalendarEvents
                 .AsNoTracking()
                 .Where(e => e.CalendarId == calendar.Id && e.UserId == userId)
                 .OrderBy(e => e.StartAt)
                 .ThenBy(e => e.EndAt)
                 .ToListAsync(ct);
 
-            var dtos = events.Select(e => ToEventDto(e, calendar)).ToList();
-            var icsContent = IcsParser.Serialize(calendar.Name, calendar.Description, calendar.Timezone, dtos);
+            var masterIds = rows
+                .Where(e => e.RecurrenceMasterId is null && !string.IsNullOrWhiteSpace(e.RecurrenceRule))
+                .Select(e => e.Id)
+                .ToList();
+
+            var exDatesByMaster = new Dictionary<Guid, IReadOnlyList<DateTimeOffset>>();
+            if (masterIds.Count > 0)
+            {
+                var deletedOverrides = await db.CalendarEvents
+                    .AsNoTracking()
+                    .Where(e =>
+                        e.UserId == userId
+                        && e.RecurrenceMasterId != null
+                        && masterIds.Contains(e.RecurrenceMasterId.Value)
+                        && e.IsRecurrenceExceptionDeleted
+                        && e.RecurrenceOriginalStartAt != null)
+                    .Select(e => new { MasterId = e.RecurrenceMasterId!.Value, OriginalStart = e.RecurrenceOriginalStartAt!.Value })
+                    .ToListAsync(ct);
+
+                foreach (var group in deletedOverrides.GroupBy(x => x.MasterId))
+                {
+                    exDatesByMaster[group.Key] = group.Select(x => x.OriginalStart.ToUniversalTime()).Order().ToList();
+                }
+            }
+
+            var masterUidById = rows
+                .Where(e => e.RecurrenceMasterId is null)
+                .ToDictionary(
+                    e => e.Id,
+                    e => !string.IsNullOrWhiteSpace(e.ExternalUid) ? e.ExternalUid! : $"{e.Id:D}@atrium.local");
+
+            var exportableDtos = rows
+                .Where(e => !e.IsRecurrenceExceptionDeleted)
+                .Select(e =>
+                {
+                    var dto = ToEventDto(e, calendar);
+                    if (e.RecurrenceMasterId.HasValue && masterUidById.TryGetValue(e.RecurrenceMasterId.Value, out var masterUid))
+                    {
+                        dto = dto with { ExternalUid = masterUid };
+                    }
+
+                    return dto;
+                })
+                .ToList();
+
+            var icsContent = IcsParser.Serialize(
+                calendar.Name,
+                calendar.Description,
+                calendar.Timezone,
+                exportableDtos,
+                exDatesByMaster);
             var bytes = Encoding.UTF8.GetBytes(icsContent);
             var safeFileName = SanitizeFileName(calendar.Name) + ".ics";
             return Results.File(bytes, "text/calendar; charset=utf-8", safeFileName);
@@ -387,40 +436,126 @@ public static partial class CalendarEndpoints
                 return Results.BadRequest(new { error = "'to' must be greater than or equal to 'from'." });
             }
 
-            IQueryable<CalendarEvent> query = db.CalendarEvents
+            IQueryable<CalendarEvent> baseQuery = db.CalendarEvents
                 .AsNoTracking()
                 .Include(e => e.Calendar)
                 .Where(e => e.UserId == userId);
 
             if (calendarId is { Length: > 0 })
             {
-                query = query.Where(e => calendarId.Contains(e.CalendarId));
+                baseQuery = baseQuery.Where(e => calendarId.Contains(e.CalendarId));
             }
 
             if (visibleOnly == true)
             {
-                query = query.Where(e => e.Calendar.IsVisible);
+                baseQuery = baseQuery.Where(e => e.Calendar.IsVisible);
             }
+
+            // 1. Standalone events and active (non-deleted) single-occurrence overrides
+            var nonMasterQuery = baseQuery
+                .Include(e => e.RecurrenceMaster)
+                .Where(e =>
+                    !e.IsRecurrenceExceptionDeleted
+                    && (e.RecurrenceMasterId != null || e.RecurrenceRule == null));
 
             if (from.HasValue)
             {
                 var fromUtc = from.Value.ToUniversalTime();
-                query = query.Where(e => e.EndAt > fromUtc || (e.StartAt == e.EndAt && e.StartAt >= fromUtc));
+                nonMasterQuery = nonMasterQuery.Where(e => e.EndAt > fromUtc || (e.StartAt == e.EndAt && e.StartAt >= fromUtc));
             }
 
             if (to.HasValue)
             {
                 var toUtc = to.Value.ToUniversalTime();
-                query = query.Where(e => e.StartAt < toUtc);
+                nonMasterQuery = nonMasterQuery.Where(e => e.StartAt < toUtc);
             }
 
-            var items = await query
+            var nonMasters = await nonMasterQuery.ToListAsync(ct);
+
+            // 2. Recurring master events eligible for expansion
+            var mastersQuery = baseQuery.Where(e => e.RecurrenceMasterId == null && e.RecurrenceRule != null);
+            if (to.HasValue)
+            {
+                var toUtc = to.Value.ToUniversalTime();
+                mastersQuery = mastersQuery.Where(e => e.StartAt < toUtc);
+            }
+
+            var masters = await mastersQuery.ToListAsync(ct);
+
+            var suppressedByMaster = new Dictionary<Guid, HashSet<DateTimeOffset>>();
+            if (masters.Count > 0)
+            {
+                var masterIds = masters.Select(m => m.Id).ToList();
+                var overrides = await db.CalendarEvents
+                    .AsNoTracking()
+                    .Where(e =>
+                        e.UserId == userId
+                        && e.RecurrenceMasterId != null
+                        && masterIds.Contains(e.RecurrenceMasterId.Value)
+                        && e.RecurrenceOriginalStartAt != null)
+                    .Select(e => new { MasterId = e.RecurrenceMasterId!.Value, OriginalStart = e.RecurrenceOriginalStartAt!.Value })
+                    .ToListAsync(ct);
+
+                foreach (var ov in overrides)
+                {
+                    if (!suppressedByMaster.TryGetValue(ov.MasterId, out var set))
+                    {
+                        set = [];
+                        suppressedByMaster[ov.MasterId] = set;
+                    }
+
+                    set.Add(ov.OriginalStart.ToUniversalTime());
+                }
+            }
+
+            var results = new List<CalendarEventDto>(nonMasters.Count + masters.Count);
+            foreach (var item in nonMasters)
+            {
+                results.Add(ToEventDto(item, item.Calendar));
+            }
+
+            var nowUtc = DateTimeOffset.UtcNow;
+            foreach (var master in masters)
+            {
+                var masterStartUtc = master.StartAt.ToUniversalTime();
+                var expandFrom = from?.ToUniversalTime() ?? masterStartUtc;
+                var defaultTo = (nowUtc > masterStartUtc ? nowUtc : masterStartUtc).AddYears(1);
+                var expandTo = to?.ToUniversalTime() ?? defaultTo;
+
+                if (expandTo <= expandFrom)
+                {
+                    continue;
+                }
+
+                suppressedByMaster.TryGetValue(master.Id, out var suppressedStarts);
+
+                var expanded = RRuleExpander.ExpandOccurrences(
+                    masterStartUtc,
+                    master.EndAt.ToUniversalTime(),
+                    master.IsAllDay,
+                    master.Timezone ?? master.Calendar.Timezone,
+                    master.RecurrenceRule!,
+                    expandFrom,
+                    expandTo);
+
+                foreach (var (occStart, occEnd) in expanded)
+                {
+                    if (suppressedStarts is not null && suppressedStarts.Contains(occStart))
+                    {
+                        continue;
+                    }
+
+                    results.Add(ToExpandedOccurrenceDto(master, master.Calendar, occStart, occEnd));
+                }
+            }
+
+            var ordered = results
                 .OrderBy(e => e.StartAt)
                 .ThenBy(e => e.EndAt)
-                .ThenBy(e => e.Title)
-                .ToListAsync(ct);
+                .ThenBy(e => e.Title, StringComparer.Ordinal)
+                .ToList();
 
-            return Results.Ok(items.Select(e => ToEventDto(e, e.Calendar)).ToList());
+            return Results.Ok(ordered);
         }).RequireAuthorization(AuthConstants.HumanOrAgentPolicy);
 
         eventsGroup.MapGet("/{id:guid}", async (Guid id, ClaimsPrincipal principal, AppDbContext db, CancellationToken ct) =>
@@ -431,7 +566,8 @@ public static partial class CalendarEndpoints
             var evt = await db.CalendarEvents
                 .AsNoTracking()
                 .Include(e => e.Calendar)
-                .FirstOrDefaultAsync(e => e.Id == id && e.UserId == userId, ct);
+                .Include(e => e.RecurrenceMaster)
+                .FirstOrDefaultAsync(e => e.Id == id && e.UserId == userId && !e.IsRecurrenceExceptionDeleted, ct);
 
             return evt is null ? Results.NotFound() : Results.Ok(ToEventDto(evt, evt.Calendar));
         }).RequireAuthorization(AuthConstants.HumanOrAgentPolicy);
@@ -454,7 +590,8 @@ public static partial class CalendarEndpoints
                 request.Status,
                 request.RecurrenceRule,
                 out var normalizedTitle,
-                out var normalizedStatus);
+                out var normalizedStatus,
+                out var normalizedRRule);
             if (validationError is not null)
             {
                 return Results.BadRequest(new { error = validationError });
@@ -490,7 +627,7 @@ public static partial class CalendarEndpoints
                 IsAllDay = request.IsAllDay,
                 Timezone = string.IsNullOrWhiteSpace(request.Timezone) ? targetCalendar.Timezone : request.Timezone.Trim(),
                 Status = normalizedStatus,
-                RecurrenceRule = string.IsNullOrWhiteSpace(request.RecurrenceRule) ? null : request.RecurrenceRule.Trim(),
+                RecurrenceRule = normalizedRRule,
                 Source = string.IsNullOrWhiteSpace(request.Source) ? "Manual" : request.Source.Trim(),
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -505,6 +642,8 @@ public static partial class CalendarEndpoints
         eventsGroup.MapPut("/{id:guid}", async (
             Guid id,
             UpdateEventRequest request,
+            string? scope,
+            DateTimeOffset? occurrenceStartAt,
             ClaimsPrincipal principal,
             AppDbContext db,
             CancellationToken ct) =>
@@ -513,8 +652,18 @@ public static partial class CalendarEndpoints
             if (userId is null) return Results.Unauthorized();
 
             var evt = await db.CalendarEvents
+                .Include(e => e.RecurrenceMaster)
                 .FirstOrDefaultAsync(e => e.Id == id && e.UserId == userId.Value, ct);
             if (evt is null) return Results.NotFound();
+
+            var effectiveScope = NormalizeRecurrenceScope(request.Scope ?? scope);
+            if (effectiveScope is null)
+            {
+                return Results.BadRequest(new { error = "Scope must be 'single' or 'series'." });
+            }
+
+            var effectiveOccurrenceStart = (request.OccurrenceStartAt ?? occurrenceStartAt)?.ToUniversalTime();
+            var rruleToValidate = effectiveScope == "single" ? null : request.RecurrenceRule;
 
             var validationError = ValidateEventPayload(
                 request.Title,
@@ -523,9 +672,10 @@ public static partial class CalendarEndpoints
                 request.Location,
                 request.Timezone,
                 request.Status,
-                request.RecurrenceRule,
+                rruleToValidate,
                 out var normalizedTitle,
-                out var normalizedStatus);
+                out var normalizedStatus,
+                out var normalizedRRule);
             if (validationError is not null)
             {
                 return Results.BadRequest(new { error = validationError });
@@ -538,24 +688,152 @@ public static partial class CalendarEndpoints
                 return Results.NotFound(new { error = "Target calendar not found." });
             }
 
-            evt.CalendarId = targetCalendar.Id;
-            evt.Title = normalizedTitle;
-            evt.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
-            evt.Location = string.IsNullOrWhiteSpace(request.Location) ? null : request.Location.Trim();
-            evt.StartAt = request.StartAt.ToUniversalTime();
-            evt.EndAt = request.EndAt.ToUniversalTime();
-            evt.IsAllDay = request.IsAllDay;
-            evt.Timezone = string.IsNullOrWhiteSpace(request.Timezone) ? targetCalendar.Timezone : request.Timezone.Trim();
-            evt.Status = normalizedStatus;
-            evt.RecurrenceRule = string.IsNullOrWhiteSpace(request.RecurrenceRule) ? null : request.RecurrenceRule.Trim();
-            evt.UpdatedAt = DateTimeOffset.UtcNow;
+            var now = DateTimeOffset.UtcNow;
+            var newStartUtc = request.StartAt.ToUniversalTime();
+            var newEndUtc = request.EndAt.ToUniversalTime();
+
+            // Case 1: Editing a single occurrence of a recurring series
+            if (effectiveScope == "single" && (evt.RecurrenceMasterId is not null || !string.IsNullOrWhiteSpace(evt.RecurrenceRule)))
+            {
+                if (evt.RecurrenceMasterId is not null)
+                {
+                    evt.CalendarId = targetCalendar.Id;
+                    evt.Title = normalizedTitle;
+                    evt.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+                    evt.Location = string.IsNullOrWhiteSpace(request.Location) ? null : request.Location.Trim();
+                    evt.StartAt = newStartUtc;
+                    evt.EndAt = newEndUtc;
+                    evt.IsAllDay = request.IsAllDay;
+                    evt.Timezone = string.IsNullOrWhiteSpace(request.Timezone) ? targetCalendar.Timezone : request.Timezone.Trim();
+                    evt.Status = normalizedStatus;
+                    evt.IsRecurrenceExceptionDeleted = false;
+                    evt.UpdatedAt = now;
+
+                    await db.SaveChangesAsync(ct);
+                    return Results.Ok(ToEventDto(evt, targetCalendar));
+                }
+
+                if (!effectiveOccurrenceStart.HasValue)
+                {
+                    return Results.BadRequest(new { error = "occurrenceStartAt is required when editing a single occurrence of a repeating series." });
+                }
+
+                var existingOverride = await db.CalendarEvents
+                    .Include(e => e.RecurrenceMaster)
+                    .FirstOrDefaultAsync(
+                        e => e.UserId == userId.Value
+                             && e.RecurrenceMasterId == evt.Id
+                             && e.RecurrenceOriginalStartAt == effectiveOccurrenceStart.Value,
+                        ct);
+
+                if (existingOverride is not null)
+                {
+                    existingOverride.CalendarId = targetCalendar.Id;
+                    existingOverride.Title = normalizedTitle;
+                    existingOverride.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+                    existingOverride.Location = string.IsNullOrWhiteSpace(request.Location) ? null : request.Location.Trim();
+                    existingOverride.StartAt = newStartUtc;
+                    existingOverride.EndAt = newEndUtc;
+                    existingOverride.IsAllDay = request.IsAllDay;
+                    existingOverride.Timezone = string.IsNullOrWhiteSpace(request.Timezone) ? targetCalendar.Timezone : request.Timezone.Trim();
+                    existingOverride.Status = normalizedStatus;
+                    existingOverride.IsRecurrenceExceptionDeleted = false;
+                    existingOverride.UpdatedAt = now;
+
+                    await db.SaveChangesAsync(ct);
+                    return Results.Ok(ToEventDto(existingOverride, targetCalendar));
+                }
+
+                var createdOverride = new CalendarEvent
+                {
+                    Id = Guid.NewGuid(),
+                    CalendarId = targetCalendar.Id,
+                    UserId = userId.Value,
+                    Title = normalizedTitle,
+                    Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
+                    Location = string.IsNullOrWhiteSpace(request.Location) ? null : request.Location.Trim(),
+                    StartAt = newStartUtc,
+                    EndAt = newEndUtc,
+                    IsAllDay = request.IsAllDay,
+                    Timezone = string.IsNullOrWhiteSpace(request.Timezone) ? targetCalendar.Timezone : request.Timezone.Trim(),
+                    Status = normalizedStatus,
+                    RecurrenceMasterId = evt.Id,
+                    RecurrenceMaster = evt,
+                    RecurrenceOriginalStartAt = effectiveOccurrenceStart.Value,
+                    IsRecurrenceExceptionDeleted = false,
+                    Source = evt.Source ?? "Manual",
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                };
+
+                db.CalendarEvents.Add(createdOverride);
+                await db.SaveChangesAsync(ct);
+                return Results.Ok(ToEventDto(createdOverride, targetCalendar));
+            }
+
+            // Case 2: Editing a standalone event OR editing an entire recurring series
+            var master = evt.RecurrenceMasterId.HasValue
+                ? await db.CalendarEvents.FirstOrDefaultAsync(
+                    e => e.Id == evt.RecurrenceMasterId.Value && e.UserId == userId.Value,
+                    ct)
+                : evt;
+            if (master is null) return Results.NotFound();
+
+            var isSeries = !string.IsNullOrWhiteSpace(master.RecurrenceRule);
+            if (isSeries && effectiveOccurrenceStart.HasValue)
+            {
+                var startDelta = newStartUtc - effectiveOccurrenceStart.Value;
+                var newDuration = newEndUtc - newStartUtc;
+                master.StartAt = master.StartAt.ToUniversalTime() + startDelta;
+                master.EndAt = master.StartAt + newDuration;
+
+                if (startDelta != TimeSpan.Zero)
+                {
+                    var childOverrides = await db.CalendarEvents
+                        .Where(e => e.UserId == userId.Value && e.RecurrenceMasterId == master.Id && e.RecurrenceOriginalStartAt != null)
+                        .ToListAsync(ct);
+                    foreach (var child in childOverrides)
+                    {
+                        child.RecurrenceOriginalStartAt = child.RecurrenceOriginalStartAt!.Value.ToUniversalTime() + startDelta;
+                        child.UpdatedAt = now;
+                    }
+                }
+            }
+            else
+            {
+                master.StartAt = newStartUtc;
+                master.EndAt = newEndUtc;
+            }
+
+            master.CalendarId = targetCalendar.Id;
+            master.Title = normalizedTitle;
+            master.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+            master.Location = string.IsNullOrWhiteSpace(request.Location) ? null : request.Location.Trim();
+            master.IsAllDay = request.IsAllDay;
+            master.Timezone = string.IsNullOrWhiteSpace(request.Timezone) ? targetCalendar.Timezone : request.Timezone.Trim();
+            master.Status = normalizedStatus;
+            master.RecurrenceRule = normalizedRRule;
+            master.UpdatedAt = now;
+
+            if (normalizedRRule is null)
+            {
+                var orphanedOverrides = await db.CalendarEvents
+                    .Where(e => e.UserId == userId.Value && e.RecurrenceMasterId == master.Id)
+                    .ToListAsync(ct);
+                if (orphanedOverrides.Count > 0)
+                {
+                    db.CalendarEvents.RemoveRange(orphanedOverrides);
+                }
+            }
 
             await db.SaveChangesAsync(ct);
-            return Results.Ok(ToEventDto(evt, targetCalendar));
+            return Results.Ok(ToEventDto(master, targetCalendar));
         }).RequireAuthorization(AuthConstants.HumanJwtOnlyPolicy);
 
         eventsGroup.MapDelete("/{id:guid}", async (
             Guid id,
+            string? scope,
+            DateTimeOffset? occurrenceStartAt,
             ClaimsPrincipal principal,
             AppDbContext db,
             CancellationToken ct) =>
@@ -567,10 +845,100 @@ public static partial class CalendarEndpoints
                 .FirstOrDefaultAsync(e => e.Id == id && e.UserId == userId.Value, ct);
             if (evt is null) return Results.NotFound();
 
+            var effectiveScope = NormalizeRecurrenceScope(scope);
+            if (effectiveScope is null)
+            {
+                return Results.BadRequest(new { error = "Scope must be 'single' or 'series'." });
+            }
+
+            var now = DateTimeOffset.UtcNow;
+
+            if (effectiveScope == "single" && (evt.RecurrenceMasterId is not null || !string.IsNullOrWhiteSpace(evt.RecurrenceRule)))
+            {
+                if (evt.RecurrenceMasterId is not null)
+                {
+                    evt.IsRecurrenceExceptionDeleted = true;
+                    evt.UpdatedAt = now;
+                    await db.SaveChangesAsync(ct);
+                    return Results.NoContent();
+                }
+
+                if (!occurrenceStartAt.HasValue)
+                {
+                    return Results.BadRequest(new { error = "occurrenceStartAt is required when deleting a single occurrence of a repeating series." });
+                }
+
+                var occStartUtc = occurrenceStartAt.Value.ToUniversalTime();
+                var existingOverride = await db.CalendarEvents.FirstOrDefaultAsync(
+                    e => e.UserId == userId.Value
+                         && e.RecurrenceMasterId == evt.Id
+                         && e.RecurrenceOriginalStartAt == occStartUtc,
+                    ct);
+
+                if (existingOverride is not null)
+                {
+                    existingOverride.IsRecurrenceExceptionDeleted = true;
+                    existingOverride.UpdatedAt = now;
+                }
+                else
+                {
+                    var duration = evt.EndAt >= evt.StartAt ? evt.EndAt - evt.StartAt : TimeSpan.Zero;
+                    db.CalendarEvents.Add(new CalendarEvent
+                    {
+                        Id = Guid.NewGuid(),
+                        CalendarId = evt.CalendarId,
+                        UserId = userId.Value,
+                        Title = evt.Title,
+                        StartAt = occStartUtc,
+                        EndAt = occStartUtc + duration,
+                        IsAllDay = evt.IsAllDay,
+                        Timezone = evt.Timezone,
+                        Status = "cancelled",
+                        RecurrenceMasterId = evt.Id,
+                        RecurrenceOriginalStartAt = occStartUtc,
+                        IsRecurrenceExceptionDeleted = true,
+                        Source = evt.Source ?? "Manual",
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                    });
+                }
+
+                await db.SaveChangesAsync(ct);
+                return Results.NoContent();
+            }
+
+            // Whole series delete (or standalone event delete)
+            if (evt.RecurrenceMasterId.HasValue)
+            {
+                var master = await db.CalendarEvents
+                    .FirstOrDefaultAsync(e => e.Id == evt.RecurrenceMasterId.Value && e.UserId == userId.Value, ct);
+                if (master is not null)
+                {
+                    db.CalendarEvents.Remove(master);
+                    await db.SaveChangesAsync(ct);
+                    return Results.NoContent();
+                }
+            }
+
             db.CalendarEvents.Remove(evt);
             await db.SaveChangesAsync(ct);
             return Results.NoContent();
         }).RequireAuthorization(AuthConstants.HumanJwtOnlyPolicy);
+    }
+
+    private static string? NormalizeRecurrenceScope(string? scope)
+    {
+        if (string.IsNullOrWhiteSpace(scope) || scope.Equals("series", StringComparison.OrdinalIgnoreCase))
+        {
+            return "series";
+        }
+
+        if (scope.Equals("single", StringComparison.OrdinalIgnoreCase))
+        {
+            return "single";
+        }
+
+        return null;
     }
 
     private static IResult? CheckCalendarReadAccess(ClaimsPrincipal principal, out Guid userId)
@@ -698,6 +1066,9 @@ public static partial class CalendarEndpoints
         ParsedIcsCalendar parsed,
         CancellationToken ct)
     {
+        var masterItems = parsed.Events.Where(e => !e.RecurrenceId.HasValue).ToList();
+        var overrideItems = parsed.Events.Where(e => e.RecurrenceId.HasValue).ToList();
+
         var uids = parsed.Events
             .Where(e => !string.IsNullOrWhiteSpace(e.Uid))
             .Select(e => e.Uid!)
@@ -707,16 +1078,18 @@ public static partial class CalendarEndpoints
         var existingByUid = uids.Count == 0
             ? new Dictionary<string, CalendarEvent>(StringComparer.Ordinal)
             : await db.CalendarEvents
-                .Where(e => e.CalendarId == calendar.Id && e.ExternalUid != null && uids.Contains(e.ExternalUid))
+                .Where(e => e.CalendarId == calendar.Id && e.RecurrenceMasterId == null && e.ExternalUid != null && uids.Contains(e.ExternalUid))
                 .ToDictionaryAsync(e => e.ExternalUid!, StringComparer.Ordinal, ct);
 
         var importedCount = 0;
         var updatedCount = 0;
         var now = DateTimeOffset.UtcNow;
         var touched = new List<CalendarEvent>(parsed.Events.Count);
+        var pendingExDates = new List<(CalendarEvent Master, IReadOnlyList<DateTimeOffset> ExDates)>();
 
-        foreach (var item in parsed.Events)
+        foreach (var item in masterItems)
         {
+            CalendarEvent masterEntity;
             if (item.Uid is not null && existingByUid.TryGetValue(item.Uid, out var existing))
             {
                 existing.Title = item.Title;
@@ -731,11 +1104,11 @@ public static partial class CalendarEndpoints
                 existing.Source = "ICS Import";
                 existing.UpdatedAt = now;
                 updatedCount++;
-                touched.Add(existing);
+                masterEntity = existing;
             }
             else
             {
-                var created = new CalendarEvent
+                masterEntity = new CalendarEvent
                 {
                     Id = Guid.NewGuid(),
                     CalendarId = calendar.Id,
@@ -754,14 +1127,154 @@ public static partial class CalendarEndpoints
                     CreatedAt = now,
                     UpdatedAt = now,
                 };
-                db.CalendarEvents.Add(created);
+                db.CalendarEvents.Add(masterEntity);
                 if (item.Uid is not null)
                 {
-                    existingByUid[item.Uid] = created;
+                    existingByUid[item.Uid] = masterEntity;
                 }
 
                 importedCount++;
-                touched.Add(created);
+            }
+
+            touched.Add(masterEntity);
+            if (item.ExceptionDates is { Count: > 0 })
+            {
+                pendingExDates.Add((masterEntity, item.ExceptionDates));
+            }
+        }
+
+        // Persist masters first so FK targets exist for EXDATE tombstones & RECURRENCE-ID overrides
+        await db.SaveChangesAsync(ct);
+
+        var masterIdsWithExceptions = pendingExDates.Select(x => x.Master.Id)
+            .Concat(overrideItems
+                .Where(o => o.Uid is not null && existingByUid.ContainsKey(o.Uid))
+                .Select(o => existingByUid[o.Uid!].Id))
+            .Distinct()
+            .ToList();
+
+        var existingOverridesByKey = masterIdsWithExceptions.Count == 0
+            ? new Dictionary<(Guid MasterId, DateTimeOffset OrigStart), CalendarEvent>()
+            : (await db.CalendarEvents
+                .Where(e =>
+                    e.UserId == calendar.UserId
+                    && e.RecurrenceMasterId != null
+                    && masterIdsWithExceptions.Contains(e.RecurrenceMasterId.Value)
+                    && e.RecurrenceOriginalStartAt != null)
+                .ToListAsync(ct))
+                .ToDictionary(e => (e.RecurrenceMasterId!.Value, e.RecurrenceOriginalStartAt!.Value.ToUniversalTime()));
+
+        foreach (var (master, exDates) in pendingExDates)
+        {
+            var duration = master.EndAt >= master.StartAt ? master.EndAt - master.StartAt : TimeSpan.Zero;
+            foreach (var exDate in exDates)
+            {
+                var exUtc = exDate.ToUniversalTime();
+                var key = (master.Id, exUtc);
+                if (existingOverridesByKey.TryGetValue(key, out var existingOv))
+                {
+                    existingOv.IsRecurrenceExceptionDeleted = true;
+                    existingOv.UpdatedAt = now;
+                }
+                else
+                {
+                    var tombstone = new CalendarEvent
+                    {
+                        Id = Guid.NewGuid(),
+                        CalendarId = calendar.Id,
+                        UserId = calendar.UserId,
+                        Title = master.Title,
+                        StartAt = exUtc,
+                        EndAt = exUtc + duration,
+                        IsAllDay = master.IsAllDay,
+                        Timezone = master.Timezone,
+                        Status = "cancelled",
+                        RecurrenceMasterId = master.Id,
+                        RecurrenceOriginalStartAt = exUtc,
+                        IsRecurrenceExceptionDeleted = true,
+                        Source = "ICS Import",
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                    };
+                    db.CalendarEvents.Add(tombstone);
+                    existingOverridesByKey[key] = tombstone;
+                }
+            }
+        }
+
+        foreach (var item in overrideItems)
+        {
+            var recIdUtc = item.RecurrenceId!.Value.ToUniversalTime();
+            if (item.Uid is not null && existingByUid.TryGetValue(item.Uid, out var master))
+            {
+                var key = (master.Id, recIdUtc);
+                if (existingOverridesByKey.TryGetValue(key, out var existingOv))
+                {
+                    existingOv.Title = item.Title;
+                    existingOv.Description = item.Description;
+                    existingOv.Location = item.Location;
+                    existingOv.StartAt = item.StartAt;
+                    existingOv.EndAt = item.EndAt;
+                    existingOv.IsAllDay = item.IsAllDay;
+                    existingOv.Timezone = item.Timezone ?? calendar.Timezone;
+                    existingOv.Status = item.Status;
+                    existingOv.IsRecurrenceExceptionDeleted = false;
+                    existingOv.Source = "ICS Import";
+                    existingOv.UpdatedAt = now;
+                    updatedCount++;
+                    touched.Add(existingOv);
+                }
+                else
+                {
+                    var createdOv = new CalendarEvent
+                    {
+                        Id = Guid.NewGuid(),
+                        CalendarId = calendar.Id,
+                        UserId = calendar.UserId,
+                        Title = item.Title,
+                        Description = item.Description,
+                        Location = item.Location,
+                        StartAt = item.StartAt,
+                        EndAt = item.EndAt,
+                        IsAllDay = item.IsAllDay,
+                        Timezone = item.Timezone ?? calendar.Timezone,
+                        Status = item.Status,
+                        RecurrenceMasterId = master.Id,
+                        RecurrenceMaster = master,
+                        RecurrenceOriginalStartAt = recIdUtc,
+                        IsRecurrenceExceptionDeleted = false,
+                        Source = "ICS Import",
+                        CreatedAt = now,
+                        UpdatedAt = now,
+                    };
+                    db.CalendarEvents.Add(createdOv);
+                    existingOverridesByKey[key] = createdOv;
+                    importedCount++;
+                    touched.Add(createdOv);
+                }
+            }
+            else
+            {
+                var standalone = new CalendarEvent
+                {
+                    Id = Guid.NewGuid(),
+                    CalendarId = calendar.Id,
+                    UserId = calendar.UserId,
+                    Title = item.Title,
+                    Description = item.Description,
+                    Location = item.Location,
+                    StartAt = item.StartAt,
+                    EndAt = item.EndAt,
+                    IsAllDay = item.IsAllDay,
+                    Timezone = item.Timezone ?? calendar.Timezone,
+                    Status = item.Status,
+                    Source = "ICS Import",
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                };
+                db.CalendarEvents.Add(standalone);
+                importedCount++;
+                touched.Add(standalone);
             }
         }
 
@@ -791,10 +1304,12 @@ public static partial class CalendarEndpoints
         string? status,
         string? recurrenceRule,
         out string normalizedTitle,
-        out string normalizedStatus)
+        out string normalizedStatus,
+        out string? normalizedRRule)
     {
         normalizedTitle = (title ?? string.Empty).Trim();
         normalizedStatus = string.IsNullOrWhiteSpace(status) ? "confirmed" : status.Trim().ToLowerInvariant();
+        normalizedRRule = string.IsNullOrWhiteSpace(recurrenceRule) ? null : recurrenceRule.Trim();
 
         if (string.IsNullOrEmpty(normalizedTitle) || normalizedTitle.Length > 200)
         {
@@ -821,9 +1336,17 @@ public static partial class CalendarEndpoints
             return "Status must be confirmed, tentative, or cancelled.";
         }
 
-        if (recurrenceRule is not null && recurrenceRule.Trim().Length > 255)
+        if (normalizedRRule is not null)
         {
-            return "Recurrence rule must be 255 characters or fewer.";
+            if (normalizedRRule.Length > 255)
+            {
+                return "Recurrence rule must be 255 characters or fewer.";
+            }
+
+            if (!RRuleExpander.TryParse(normalizedRRule, out _, out var rruleError))
+            {
+                return rruleError ?? "Invalid recurrence rule.";
+            }
         }
 
         return null;
@@ -869,22 +1392,64 @@ public static partial class CalendarEndpoints
         c.CreatedAt,
         c.UpdatedAt);
 
-    private static CalendarEventDto ToEventDto(CalendarEvent e, UserCalendar c) => new(
-        e.Id,
-        e.CalendarId,
-        c.Name,
-        c.Color,
-        e.Title,
-        e.Description,
-        e.Location,
-        e.StartAt.ToUniversalTime(),
-        e.EndAt.ToUniversalTime(),
-        e.IsAllDay,
-        e.Timezone,
-        e.Status,
-        e.ExternalUid,
-        e.RecurrenceRule,
-        e.Source,
-        e.CreatedAt,
-        e.UpdatedAt);
+    private static CalendarEventDto ToEventDto(CalendarEvent e, UserCalendar c)
+    {
+        var isException = e.RecurrenceMasterId.HasValue;
+        var isRecurring = isException || !string.IsNullOrWhiteSpace(e.RecurrenceRule);
+        var seriesMasterId = isException ? e.RecurrenceMasterId : (isRecurring ? e.Id : (Guid?)null);
+        var occurrenceStartAt = isException
+            ? e.RecurrenceOriginalStartAt?.ToUniversalTime()
+            : (isRecurring ? e.StartAt.ToUniversalTime() : (DateTimeOffset?)null);
+        var effectiveRRule = isException ? e.RecurrenceMaster?.RecurrenceRule : e.RecurrenceRule;
+
+        return new CalendarEventDto(
+            e.Id,
+            e.CalendarId,
+            c.Name,
+            c.Color,
+            e.Title,
+            e.Description,
+            e.Location,
+            e.StartAt.ToUniversalTime(),
+            e.EndAt.ToUniversalTime(),
+            e.IsAllDay,
+            e.Timezone,
+            e.Status,
+            e.ExternalUid,
+            effectiveRRule,
+            e.Source,
+            e.CreatedAt,
+            e.UpdatedAt,
+            seriesMasterId,
+            occurrenceStartAt,
+            isRecurring,
+            isException);
+    }
+
+    private static CalendarEventDto ToExpandedOccurrenceDto(
+        CalendarEvent master,
+        UserCalendar calendar,
+        DateTimeOffset occStartUtc,
+        DateTimeOffset occEndUtc) => new(
+            master.Id,
+            master.CalendarId,
+            calendar.Name,
+            calendar.Color,
+            master.Title,
+            master.Description,
+            master.Location,
+            occStartUtc,
+            occEndUtc,
+            master.IsAllDay,
+            master.Timezone,
+            master.Status,
+            master.ExternalUid,
+            master.RecurrenceRule,
+            master.Source,
+            master.CreatedAt,
+            master.UpdatedAt,
+            master.Id,
+            occStartUtc,
+            IsRecurring: true,
+            IsRecurrenceException: false);
 }

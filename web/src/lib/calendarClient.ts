@@ -2,6 +2,7 @@ import type {
   CalendarEvent,
   CalendarEventStatus,
   IcsImportSummary,
+  RecurrenceScope,
   UserCalendar,
 } from '../types/atrium';
 import { apiFetch, authenticatedRawFetch } from './authClient';
@@ -16,6 +17,21 @@ export const CALENDAR_COLOR_PALETTE = [
   '#a63f5b', // Berry
   '#5c6670', // Graphite
 ] as const;
+
+export const WEEKDAY_CODES = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU'] as const;
+export type WeekdayCode = (typeof WEEKDAY_CODES)[number];
+
+export type RecurrenceFrequency = 'NONE' | 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+export type RecurrenceEndMode = 'NEVER' | 'UNTIL' | 'COUNT';
+
+export interface RecurrenceFormState {
+  freq: RecurrenceFrequency;
+  interval: number;
+  byDays: WeekdayCode[];
+  endMode: RecurrenceEndMode;
+  untilDate: string;
+  count: number;
+}
 
 export interface CreateCalendarInput {
   name: string;
@@ -60,6 +76,8 @@ export interface UpdateEventInput {
   timezone?: string | null;
   status?: CalendarEventStatus;
   recurrenceRule?: string | null;
+  scope?: RecurrenceScope;
+  occurrenceStartAt?: string | null;
 }
 
 export async function listCalendars(): Promise<UserCalendar[]> {
@@ -125,8 +143,19 @@ export async function updateEvent(
   });
 }
 
-export async function deleteEvent(id: string): Promise<void> {
-  return apiFetch<void>(`/api/events/${id}`, { method: 'DELETE' });
+export async function deleteEvent(
+  id: string,
+  options?: { scope?: RecurrenceScope; occurrenceStartAt?: string | null },
+): Promise<void> {
+  const search = new URLSearchParams();
+  if (options?.scope) search.set('scope', options.scope);
+  if (options?.occurrenceStartAt) {
+    search.set('occurrenceStartAt', options.occurrenceStartAt);
+  }
+  const query = search.toString();
+  return apiFetch<void>(`/api/events/${id}${query ? `?${query}` : ''}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function importIcsToCalendar(
@@ -269,9 +298,14 @@ export function eventOccursOnDateKey(evt: CalendarEvent, dateKey: string): boole
   return evtStartMs < dayEndMs && evtEndMs > dayStartMs;
 }
 
+/** Stable unique key for an event or expanded recurring occurrence */
+export function eventInstanceKey(evt: CalendarEvent): string {
+  return `${evt.id}:${evt.occurrenceStartAt ?? evt.startAt}`;
+}
+
 /** True if two timed events have overlapping time intervals */
 export function eventsOverlap(a: CalendarEvent, b: CalendarEvent): boolean {
-  if (a.id === b.id || a.isAllDay || b.isAllDay) return false;
+  if (eventInstanceKey(a) === eventInstanceKey(b) || a.isAllDay || b.isAllDay) return false;
   const aStart = new Date(a.startAt).getTime();
   const aEnd = new Date(a.endAt).getTime();
   const bStart = new Date(b.startAt).getTime();
@@ -321,3 +355,142 @@ export function parseDurationMinutes(duration: string): number {
   if (hrMatch) return Number(hrMatch[1]) * 60;
   return 30;
 }
+
+const JS_DAY_TO_CODE: readonly WeekdayCode[] = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+
+const WEEKDAY_LABELS: Record<WeekdayCode, string> = {
+  MO: 'Mo',
+  TU: 'Tu',
+  WE: 'We',
+  TH: 'Th',
+  FR: 'Fr',
+  SA: 'Sa',
+  SU: 'Su',
+};
+
+export function dateKeyToWeekdayCode(dateKey: string): WeekdayCode {
+  const [y, m, d] = dateKey.split('-').map(Number);
+  const dt = new Date(y, (m || 1) - 1, d || 1);
+  return JS_DAY_TO_CODE[dt.getDay()] ?? 'MO';
+}
+
+export function createDefaultRecurrenceState(startDateKey: string): RecurrenceFormState {
+  return {
+    freq: 'NONE',
+    interval: 1,
+    byDays: [dateKeyToWeekdayCode(startDateKey)],
+    endMode: 'NEVER',
+    untilDate: '',
+    count: 10,
+  };
+}
+
+export function parseRRuleString(
+  rrule: string | null | undefined,
+  fallbackDateKey: string,
+): RecurrenceFormState {
+  const base = createDefaultRecurrenceState(fallbackDateKey);
+  if (!rrule || !rrule.trim()) return base;
+
+  const cleaned = rrule.trim().replace(/^RRULE:/i, '');
+  let freq: RecurrenceFrequency = 'NONE';
+  let interval = 1;
+  const byDays: WeekdayCode[] = [];
+  let endMode: RecurrenceEndMode = 'NEVER';
+  let untilDate = '';
+  let count = 10;
+
+  for (const part of cleaned.split(';')) {
+    const [rawKey, rawVal] = part.split('=');
+    if (!rawKey || !rawVal) continue;
+    const key = rawKey.trim().toUpperCase();
+    const val = rawVal.trim().toUpperCase();
+    if (key === 'FREQ' && (val === 'DAILY' || val === 'WEEKLY' || val === 'MONTHLY' || val === 'YEARLY')) {
+      freq = val;
+    } else if (key === 'INTERVAL') {
+      const parsed = Number.parseInt(val, 10);
+      if (Number.isFinite(parsed) && parsed >= 1) interval = parsed;
+    } else if (key === 'COUNT') {
+      const parsed = Number.parseInt(val, 10);
+      if (Number.isFinite(parsed) && parsed >= 1) {
+        count = parsed;
+        endMode = 'COUNT';
+      }
+    } else if (key === 'UNTIL') {
+      const m = val.match(/^(\d{4})(\d{2})(\d{2})/);
+      if (m) {
+        untilDate = `${m[1]}-${m[2]}-${m[3]}`;
+        endMode = 'UNTIL';
+      }
+    } else if (key === 'BYDAY') {
+      for (const token of val.split(',')) {
+        const code = token.trim().slice(-2) as WeekdayCode;
+        if (WEEKDAY_CODES.includes(code) && !byDays.includes(code)) {
+          byDays.push(code);
+        }
+      }
+    }
+  }
+
+  return {
+    freq,
+    interval,
+    byDays: byDays.length > 0 ? byDays : [dateKeyToWeekdayCode(fallbackDateKey)],
+    endMode,
+    untilDate,
+    count,
+  };
+}
+
+export function buildRRuleString(state: RecurrenceFormState): string | null {
+  if (state.freq === 'NONE') return null;
+
+  const parts: string[] = [`FREQ=${state.freq}`];
+  const interval = Math.max(1, Math.min(1000, Math.floor(state.interval || 1)));
+  if (interval > 1) {
+    parts.push(`INTERVAL=${interval}`);
+  }
+  if (state.freq === 'WEEKLY' && state.byDays.length > 0) {
+    const ordered = WEEKDAY_CODES.filter((d) => state.byDays.includes(d));
+    if (ordered.length > 0) {
+      parts.push(`BYDAY=${ordered.join(',')}`);
+    }
+  }
+  if (state.endMode === 'COUNT') {
+    const count = Math.max(1, Math.min(5000, Math.floor(state.count || 1)));
+    parts.push(`COUNT=${count}`);
+  } else if (state.endMode === 'UNTIL' && /^\d{4}-\d{2}-\d{2}$/.test(state.untilDate)) {
+    const compact = state.untilDate.replaceAll('-', '');
+    parts.push(`UNTIL=${compact}T235959Z`);
+  }
+
+  return parts.join(';');
+}
+
+export function formatRecurrenceSummary(rrule: string | null | undefined): string {
+  if (!rrule) return 'Repeating series';
+  const parsed = parseRRuleString(rrule, '2026-01-01');
+  if (parsed.freq === 'NONE') return 'Repeating series';
+
+  const unitMap: Record<Exclude<RecurrenceFrequency, 'NONE'>, [string, string]> = {
+    DAILY: ['Daily', 'days'],
+    WEEKLY: ['Weekly', 'weeks'],
+    MONTHLY: ['Monthly', 'months'],
+    YEARLY: ['Yearly', 'years'],
+  };
+  const [singular, plural] = unitMap[parsed.freq];
+  const base = parsed.interval === 1 ? singular : `Every ${parsed.interval} ${plural}`;
+  const extras: string[] = [];
+
+  if (parsed.freq === 'WEEKLY' && rrule.toUpperCase().includes('BYDAY=')) {
+    extras.push(parsed.byDays.map((d) => WEEKDAY_LABELS[d]).join(', '));
+  }
+  if (parsed.endMode === 'COUNT') {
+    extras.push(`${parsed.count} times`);
+  } else if (parsed.endMode === 'UNTIL' && parsed.untilDate) {
+    extras.push(`until ${parsed.untilDate}`);
+  }
+
+  return extras.length > 0 ? `${base} · ${extras.join(' · ')}` : base;
+}
+

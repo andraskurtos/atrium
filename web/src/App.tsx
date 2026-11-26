@@ -79,6 +79,7 @@ import type {
   InviteItem,
   MobileTab,
   NoteItem,
+  RecurrenceScope,
   SessionItem,
   TaskItem,
   UserCalendar,
@@ -96,9 +97,22 @@ function readInitialView(): AppView {
   return window.location.hash === '#account' ? 'account' : 'dashboard';
 }
 
+function buildCalendarFetchRange(todayYear: number, viewYear: number): {
+  from: string;
+  to: string;
+} {
+  const minYear = Math.min(todayYear, viewYear);
+  const maxYear = Math.max(todayYear, viewYear);
+  return {
+    from: new Date(Date.UTC(minYear - 1, 11, 1, 0, 0, 0)).toISOString(),
+    to: new Date(Date.UTC(maxYear + 1, 1, 1, 0, 0, 0)).toISOString(),
+  };
+}
+
 export function App() {
   const today = useMemo(() => new Date(), []);
   const todayKey = useMemo(() => toDateKey(today), [today]);
+  const todayYear = today.getFullYear();
 
   const {
     apiState,
@@ -143,6 +157,7 @@ export function App() {
   const [announcement, setAnnouncement] = useState<string>('');
 
   const quickCaptureRef = useRef<HTMLInputElement | null>(null);
+  const calendarViewYearRef = useRef<number>(todayYear);
 
   const announce = useCallback((message: string) => {
     setAnnouncement(message);
@@ -160,19 +175,32 @@ export function App() {
     setIsCommandOpen(false);
   }, []);
 
-  const loadCalendarData = useCallback(async () => {
-    setCalendarLoading(true);
-    try {
-      const [nextCalendars, nextEvents] = await Promise.all([
-        listCalendars(),
-        listEvents(),
-      ]);
-      setCalendars(nextCalendars);
+  const reloadEvents = useCallback(
+    async (targetYear = calendarViewYearRef.current) => {
+      const range = buildCalendarFetchRange(todayYear, targetYear);
+      const nextEvents = await listEvents(range);
       setEvents(nextEvents);
-    } finally {
-      setCalendarLoading(false);
-    }
-  }, []);
+    },
+    [todayYear],
+  );
+
+  const loadCalendarData = useCallback(
+    async (targetYear = calendarViewYearRef.current) => {
+      setCalendarLoading(true);
+      try {
+        const range = buildCalendarFetchRange(todayYear, targetYear);
+        const [nextCalendars, nextEvents] = await Promise.all([
+          listCalendars(),
+          listEvents(range),
+        ]);
+        setCalendars(nextCalendars);
+        setEvents(nextEvents);
+      } finally {
+        setCalendarLoading(false);
+      }
+    },
+    [todayYear],
+  );
 
   const loadAccountSecurityData = useCallback(async (role: UserProfile['role']) => {
     const [nextSessions, nextTokens] = await Promise.all([
@@ -419,22 +447,60 @@ export function App() {
     }
   };
 
+  const handleViewYearChange = useCallback(
+    (nextYear: number) => {
+      if (nextYear === calendarViewYearRef.current) return;
+      calendarViewYearRef.current = nextYear;
+      if (profile) {
+        void reloadEvents(nextYear);
+      }
+    },
+    [profile, reloadEvents],
+  );
+
   const handleCreateEvent = async (input: CreateEventInput) => {
     const created = await createEvent(input);
-    setEvents((prev) => [...prev, created]);
-    announce(`Added event: ${created.title}`);
+    await reloadEvents();
+    announce(
+      created.isRecurring
+        ? `Added repeating series: ${created.title}`
+        : `Added event: ${created.title}`,
+    );
   };
 
   const handleUpdateEvent = async (id: string, input: UpdateEventInput) => {
     const updated = await updateEvent(id, input);
-    setEvents((prev) => prev.map((evt) => (evt.id === updated.id ? updated : evt)));
-    announce(`Updated event: ${updated.title}`);
+    await reloadEvents();
+    if (input.scope === 'single') {
+      announce(`Updated single occurrence: ${updated.title}`);
+    } else if (updated.isRecurring) {
+      announce(`Updated repeating series: ${updated.title}`);
+    } else {
+      announce(`Updated event: ${updated.title}`);
+    }
   };
 
-  const handleDeleteEvent = async (id: string) => {
-    await deleteEvent(id);
-    setEvents((prev) => prev.filter((evt) => evt.id !== id));
-    announce('Removed event');
+  const handleDeleteEvent = async (
+    evt: CalendarEvent,
+    scope: RecurrenceScope,
+  ) => {
+    await deleteEvent(evt.id, {
+      scope: evt.isRecurring ? scope : 'series',
+      occurrenceStartAt:
+        evt.isRecurring && scope === 'single'
+          ? (evt.occurrenceStartAt ?? evt.startAt)
+          : null,
+    });
+    await reloadEvents();
+    if (evt.isRecurring) {
+      announce(
+        scope === 'single'
+          ? `Removed single occurrence of "${evt.title}"`
+          : `Removed entire series "${evt.title}"`,
+      );
+    } else {
+      announce('Removed event');
+    }
   };
 
   const handleImportIcs = async (file: File, targetCalendarId: string | 'new') => {
@@ -821,6 +887,7 @@ export function App() {
                   weekStartsOn={preferences.weekStartsOn}
                   timeFormat={preferences.timeFormat}
                   onSelectDate={setSelectedDateKey}
+                  onViewYearChange={handleViewYearChange}
                   onCreateCalendar={handleCreateCalendar}
                   onToggleCalendarVisibility={handleToggleCalendarVisibility}
                   onDeleteCalendar={handleDeleteCalendar}
