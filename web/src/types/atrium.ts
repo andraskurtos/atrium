@@ -6,9 +6,35 @@ export type AppView = 'dashboard' | 'university' | 'account';
 
 export type UserRole = 'Owner' | 'Member';
 
-export type CaptureKind = 'task' | 'event' | 'note';
+export type CaptureKind = 'task' | 'event';
 
-export type MobileTab = 'stream' | 'calendar' | 'university' | 'vault' | 'agents';
+export type MobileTab = 'stream' | 'calendar' | 'university';
+
+export interface DailyCheckItem {
+  id: string;
+  date: string;
+  title: string;
+  isCompleted: boolean;
+  completedAt: string | null;
+  dueTime: string | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DailyNote {
+  id: string;
+  date: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DailyTrackerData {
+  date: string;
+  checklistItems: DailyCheckItem[];
+  note: DailyNote | null;
+}
 
 export type UniversityActivityType =
   | 'lecture'

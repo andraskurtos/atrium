@@ -11,12 +11,6 @@ interface QuickCaptureProps {
   }) => void;
 }
 
-const PLACEHOLDERS: Record<CaptureKind, string> = {
-  task: 'Capture a task for today…',
-  event: 'Schedule an event on selected calendar day…',
-  note: 'Jot down a quick note or thought…',
-};
-
 export function QuickCapture({
   inputRef,
   selectedDateLabel,
@@ -38,11 +32,16 @@ export function QuickCapture({
     setText('');
   };
 
+  const placeholder =
+    kind === 'task'
+      ? `Add a checklist item for ${selectedDateLabel}…`
+      : `Schedule an event for ${selectedDateLabel}…`;
+
   return (
     <section className="card composer-card" aria-label="Quick capture">
       <form className="composer-form" onSubmit={handleSubmit}>
         <div className="composer-modes" role="radiogroup" aria-label="Capture type">
-          {(['task', 'event', 'note'] as const).map((option) => (
+          {(['task', 'event'] as const).map((option) => (
             <button
               key={option}
               id={`capture-mode-${option}`}
@@ -52,14 +51,12 @@ export function QuickCapture({
               className={`mode-chip ${kind === option ? 'is-active' : ''}`}
               onClick={() => setKind(option)}
             >
-              {option === 'task' ? 'Task' : option === 'event' ? 'Event' : 'Note'}
+              {option === 'task' ? 'Task' : 'Event'}
             </button>
           ))}
-          {kind === 'event' && (
-            <span className="composer-date-hint meta-text">
-              for {selectedDateLabel}
-            </span>
-          )}
+          <span className="composer-date-hint meta-text">
+            for {selectedDateLabel}
+          </span>
         </div>
 
         <div className="composer-input-row">
@@ -73,7 +70,7 @@ export function QuickCapture({
             className="input composer-input"
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={PLACEHOLDERS[kind]}
+            placeholder={placeholder}
           />
           {kind === 'event' && (
             <label className="sr-only-wrapper">

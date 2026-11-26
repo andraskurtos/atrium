@@ -1790,19 +1790,15 @@ select {
 
   /* Filter visible sections by active mobile tab */
   .dashboard-container[data-mobile-tab='stream'] [data-mobile-section]:not([data-mobile-section='stream']),
-  .dashboard-container[data-mobile-tab='calendar'] [data-mobile-section]:not([data-mobile-section='calendar']),
-  .dashboard-container[data-mobile-tab='vault'] [data-mobile-section]:not([data-mobile-section='vault']),
-  .dashboard-container[data-mobile-tab='agents'] [data-mobile-section]:not([data-mobile-section='agents']) {
+  .dashboard-container[data-mobile-tab='calendar'] [data-mobile-section]:not([data-mobile-section='calendar']) {
     display: none;
   }
 
-  .dashboard-container[data-mobile-tab='calendar'] .focus-stream,
-  .dashboard-container[data-mobile-tab='vault'] .focus-stream {
+  .dashboard-container[data-mobile-tab='calendar'] .focus-stream {
     display: none;
   }
 
-  .dashboard-container[data-mobile-tab='stream'] .context-rail,
-  .dashboard-container[data-mobile-tab='agents'] .context-rail {
+  .dashboard-container[data-mobile-tab='stream'] .context-rail {
     display: none;
   }
 
@@ -1813,7 +1809,7 @@ select {
     bottom: 0;
     z-index: 30;
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     background-color: var(--surface);
     border-top: 1px solid var(--border);
     padding: 6px var(--space-1) max(6px, env(safe-area-inset-bottom));
@@ -3293,6 +3289,94 @@ select {
   .uni-seg-btn {
     flex: 1;
     min-height: 36px;
+  }
+}
+
+/* ============================================================================
+ * Day Tracker (Header Navigation, Inline Checklist Editing, Daily Note)
+ * ============================================================================ */
+
+.day-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.day-nav-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-shrink: 0;
+}
+
+.day-relative-badge {
+  font-weight: 500;
+}
+
+.checklist-title-btn {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  width: 100%;
+}
+
+.checklist-title-btn:hover .checklist-title {
+  color: var(--accent);
+}
+
+.checklist-edit-input {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 0.9375rem;
+}
+
+.checklist-move-btn {
+  color: var(--text-muted);
+}
+
+.checklist-move-btn:hover {
+  color: var(--accent);
+}
+
+.daily-note-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.daily-note-header-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.daily-note-status {
+  font-size: 0.75rem;
+}
+
+.daily-note-retry {
+  color: var(--danger);
+}
+
+.daily-note-textarea {
+  width: 100%;
+  min-height: 132px;
+  resize: vertical;
+  line-height: 1.55;
+  font-family: inherit;
+}
+
+@media (max-width: 767px) {
+  .day-header-row {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }
 
