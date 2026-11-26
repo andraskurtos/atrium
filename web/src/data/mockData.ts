@@ -1,6 +1,5 @@
 import type {
   AgentProposal,
-  CalendarEvent,
   NoteItem,
   TaskItem,
   VaultItem,
@@ -92,90 +91,6 @@ export function createInitialTasks(): TaskItem[] {
       completed: false,
       category: 'Atrium',
       dueTime: '17:00',
-    },
-  ];
-}
-
-export function createInitialEvents(today: Date): CalendarEvent[] {
-  const todayKey = toDateKey(today);
-  const tomorrowKey = toDateKey(addDays(today, 1));
-  const plusTwoKey = toDateKey(addDays(today, 2));
-  const plusFourKey = toDateKey(addDays(today, 4));
-  const minusOneKey = toDateKey(addDays(today, -1));
-
-  return [
-    {
-      id: 'evt-1',
-      dateKey: todayKey,
-      startTime: '09:30',
-      duration: '45m',
-      title: 'Deep work: Atrium schema & auth notes',
-      location: 'Desk',
-      category: 'Focus',
-    },
-    {
-      id: 'evt-2',
-      dateKey: todayKey,
-      startTime: '14:00',
-      duration: '30m',
-      title: 'Architecture catch-up with Sam',
-      location: 'Video call',
-      category: 'Meeting',
-    },
-    {
-      id: 'evt-3',
-      dateKey: todayKey,
-      startTime: '18:15',
-      duration: '60m',
-      title: 'Strength session & stretch',
-      location: 'Neighborhood gym',
-      category: 'Health',
-    },
-    {
-      id: 'evt-4',
-      dateKey: tomorrowKey,
-      startTime: '10:00',
-      duration: '90m',
-      title: 'Quarterly reading synthesis',
-      location: 'Library',
-      category: 'Focus',
-    },
-    {
-      id: 'evt-5',
-      dateKey: tomorrowKey,
-      startTime: '19:00',
-      duration: '90m',
-      title: 'Dinner with Maya & Leo',
-      location: 'Osteria Verde',
-      category: 'Personal',
-    },
-    {
-      id: 'evt-6',
-      dateKey: plusTwoKey,
-      startTime: '08:45',
-      duration: '45m',
-      title: 'Dental check-up',
-      location: 'Midtown Clinic',
-      category: 'Health',
-      source: 'Calendar MCP',
-    },
-    {
-      id: 'evt-7',
-      dateKey: plusFourKey,
-      startTime: '11:00',
-      duration: '60m',
-      title: 'Weekly review & calendar reset',
-      location: 'Atrium',
-      category: 'Routine',
-    },
-    {
-      id: 'evt-8',
-      dateKey: minusOneKey,
-      startTime: '16:00',
-      duration: '30m',
-      title: 'Home NAS firmware update',
-      location: 'Homelab',
-      category: 'Self-Host',
     },
   ];
 }

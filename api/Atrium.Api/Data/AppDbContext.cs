@@ -10,6 +10,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<RefreshSession> RefreshSessions => Set<RefreshSession>();
     public DbSet<Invite> Invites => Set<Invite>();
     public DbSet<AgentToken> AgentTokens => Set<AgentToken>();
+    public DbSet<UserCalendar> Calendars => Set<UserCalendar>();
+    public DbSet<CalendarEvent> CalendarEvents => Set<CalendarEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -136,5 +138,98 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .HasForeignKey(t => t.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
+
+        modelBuilder.Entity<UserCalendar>(entity =>
+        {
+            entity.ToTable("calendars");
+            entity.HasKey(c => c.Id);
+            entity.Property(c => c.Id).HasColumnName("id");
+            entity.Property(c => c.UserId).HasColumnName("user_id");
+            entity.Property(c => c.Name).HasColumnName("name").HasMaxLength(80).IsRequired();
+            entity.Property(c => c.Description).HasColumnName("description").HasMaxLength(280).IsRequired();
+            entity.Property(c => c.Color).HasColumnName("color").HasMaxLength(16).IsRequired();
+            entity.Property(c => c.Timezone).HasColumnName("timezone").HasMaxLength(64).IsRequired();
+            entity.Property(c => c.IsDefault).HasColumnName("is_default").HasDefaultValue(false);
+            entity.Property(c => c.IsVisible).HasColumnName("is_visible").HasDefaultValue(true);
+            entity.Property(c => c.CreatedAt).HasColumnName("created_at");
+            entity.Property(c => c.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(c => c.UserId);
+
+            entity.HasOne(c => c.User)
+                .WithMany(u => u.Calendars)
+                .HasForeignKey(c => c.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CalendarEvent>(entity =>
+        {
+            entity.ToTable("calendar_events");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.CalendarId).HasColumnName("calendar_id");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+            entity.Property(e => e.Title).HasColumnName("title").HasMaxLength(200).IsRequired();
+            entity.Property(e => e.Description).HasColumnName("description");
+            entity.Property(e => e.Location).HasColumnName("location").HasMaxLength(280);
+            entity.Property(e => e.StartAt).HasColumnName("start_at");
+            entity.Property(e => e.EndAt).HasColumnName("end_at");
+            entity.Property(e => e.IsAllDay).HasColumnName("is_all_day").HasDefaultValue(false);
+            entity.Property(e => e.Timezone).HasColumnName("timezone").HasMaxLength(64);
+            entity.Property(e => e.Status).HasColumnName("status").HasMaxLength(16).IsRequired();
+            entity.Property(e => e.ExternalUid).HasColumnName("external_uid").HasMaxLength(255);
+            entity.Property(e => e.RecurrenceRule).HasColumnName("recurrence_rule").HasMaxLength(255);
+            entity.Property(e => e.RecurrenceMasterId).HasColumnName("recurrence_master_id");
+            entity.Property(e => e.RecurrenceOriginalStartAt).HasColumnName("recurrence_original_start_at");
+            entity.Property(e => e.IsRecurrenceExceptionDeleted).HasColumnName("is_recurrence_exception_deleted").HasDefaultValue(false);
+            entity.Property(e => e.Source).HasColumnName("source").HasMaxLength(80);
+            entity.Property(e => e.CreatedAt).HasColumnName("created_at");
+            entity.Property(e => e.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(e => new { e.UserId, e.StartAt, e.EndAt });
+            entity.HasIndex(e => new { e.CalendarId, e.StartAt });
+            entity.HasIndex(e => new { e.CalendarId, e.ExternalUid })
+                .IsUnique()
+                .HasDatabaseName("ix_calendar_events_calendar_external_uid")
+                .HasFilter("\"external_uid\" IS NOT NULL");
+            entity.HasIndex(e => new { e.RecurrenceMasterId, e.RecurrenceOriginalStartAt })
+                .IsUnique()
+                .HasDatabaseName("ix_calendar_events_master_original_start")
+                .HasFilter("\"recurrence_master_id\" IS NOT NULL");
+
+            entity.HasOne(e => e.Calendar)
+                .WithMany(c => c.Events)
+                .HasForeignKey(e => e.CalendarId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.User)
+                .WithMany()
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(e => e.RecurrenceMaster)
+                .WithMany(m => m.RecurrenceOverrides)
+                .HasForeignKey(e => e.RecurrenceMasterId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        if (string.Equals(Database.ProviderName, "Microsoft.EntityFrameworkCore.Sqlite", StringComparison.Ordinal))
+        {
+            modelBuilder.Entity<CalendarEvent>(entity =>
+            {
+                entity.Property(e => e.StartAt)
+                    .HasConversion(
+                        v => v.UtcTicks,
+                        ticks => new DateTimeOffset(ticks, TimeSpan.Zero));
+                entity.Property(e => e.EndAt)
+                    .HasConversion(
+                        v => v.UtcTicks,
+                        ticks => new DateTimeOffset(ticks, TimeSpan.Zero));
+                entity.Property(e => e.RecurrenceOriginalStartAt)
+                    .HasConversion(
+                        v => v.HasValue ? v.Value.UtcTicks : (long?)null,
+                        ticks => ticks.HasValue ? new DateTimeOffset(ticks.Value, TimeSpan.Zero) : (DateTimeOffset?)null);
+            });
+        }
     }
 }
