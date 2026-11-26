@@ -1,23 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccountPage } from './components/AccountPage';
-import { AgentProposalsCard } from './components/AgentProposalsCard';
 import { AuthScreen } from './components/AuthScreen';
 import { CalendarCard } from './components/CalendarCard';
 import { ChecklistCard } from './components/ChecklistCard';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
+import { DailyNoteCard } from './components/DailyNoteCard';
+import { ChevronLeftIcon, ChevronRightIcon } from './components/Icons';
 import { LocalStatusCard } from './components/LocalStatusCard';
 import { MobileTabBar } from './components/MobileTabBar';
-import { NotesCard } from './components/NotesCard';
 import { QuickCapture } from './components/QuickCapture';
 import { TopBar } from './components/TopBar';
 import { UniversityPage } from './components/UniversityPage';
 import { UniversityTileCard } from './components/UniversityTileCard';
-import { VaultCard } from './components/VaultCard';
 import {
-  createInitialNotes,
-  createInitialProposals,
-  createInitialTasks,
-  createInitialVault,
   formatLongDate,
   formatShortDate,
   getGreeting,
@@ -63,13 +58,21 @@ import {
   listCalendars,
   listEvents,
   localDateTimeToIso,
-  parseDurationMinutes,
   updateCalendar,
   updateEvent,
   type CreateCalendarInput,
   type CreateEventInput,
   type UpdateEventInput,
 } from './lib/calendarClient';
+import {
+  createDailyCheckItem,
+  deleteDailyCheckItem,
+  getDayTracker,
+  isValidDateKey,
+  shiftDateKey,
+  updateDailyCheckItem,
+  upsertDailyNote,
+} from './lib/dayClient';
 import {
   createUniversityActivity,
   createUniversityCourse,
@@ -93,18 +96,17 @@ import {
 } from './lib/universityClient';
 import type {
   AccountPreferences,
-  AgentProposal,
   AgentToken,
   AppView,
   CalendarEvent,
   CaptureKind,
+  DailyCheckItem,
+  DailyNote,
   HouseholdMember,
   InviteItem,
   MobileTab,
-  NoteItem,
   RecurrenceScope,
   SessionItem,
-  TaskItem,
   UniversityAttendanceStatus,
   UniversityCourse,
   UserCalendar,
@@ -122,6 +124,20 @@ function readInitialView(): AppView {
   if (window.location.hash === '#account') return 'account';
   if (window.location.hash === '#university') return 'university';
   return 'dashboard';
+}
+
+function readDateKeyFromHash(): string | null {
+  if (typeof window === 'undefined') return null;
+  const match = window.location.hash.match(/^#day\/(\d{4}-\d{2}-\d{2})$/);
+  if (!match) return null;
+  return isValidDateKey(match[1]) ? match[1] : null;
+}
+
+function getRelativeDayLabel(selectedDateKey: string, todayKey: string): string {
+  if (selectedDateKey === todayKey) return 'Today';
+  if (selectedDateKey === shiftDateKey(todayKey, -1)) return 'Yesterday';
+  if (selectedDateKey === shiftDateKey(todayKey, 1)) return 'Tomorrow';
+  return selectedDateKey < todayKey ? 'Past day' : 'Upcoming';
 }
 
 function buildCalendarFetchRange(viewYear: number): {
@@ -178,8 +194,14 @@ export function App() {
   const [members, setMembers] = useState<HouseholdMember[]>([]);
 
   const [activeView, setActiveView] = useState<AppView>(readInitialView);
-  const [selectedDateKey, setSelectedDateKey] = useState<string>(todayKey);
-  const [tasks, setTasks] = useState<TaskItem[]>(createInitialTasks);
+  const [selectedDateKey, setSelectedDateKey] = useState<string>(
+    () => readDateKeyFromHash() ?? todayKey,
+  );
+  const [dayItems, setDayItems] = useState<DailyCheckItem[]>([]);
+  const [dayNote, setDayNote] = useState<DailyNote | null>(null);
+  const [dayLoadedDateKey, setDayLoadedDateKey] = useState<string | null>(null);
+  const [dayLoading, setDayLoading] = useState(false);
+  const [dayLoadError, setDayLoadError] = useState<string | null>(null);
   const [calendars, setCalendars] = useState<UserCalendar[]>([]);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [todayEvents, setTodayEvents] = useState<CalendarEvent[]>([]);
@@ -189,11 +211,6 @@ export function App() {
   const [universityCourses, setUniversityCourses] = useState<UniversityCourse[]>([]);
   const [universityLoading, setUniversityLoading] = useState(false);
   const [focusedUniversityCourseId, setFocusedUniversityCourseId] = useState<string | null>(null);
-  const [proposals, setProposals] = useState<AgentProposal[]>(() =>
-    createInitialProposals(today),
-  );
-  const [notes, setNotes] = useState<NoteItem[]>(createInitialNotes);
-  const vaultItems = useMemo(() => createInitialVault(), []);
 
   const [mobileTab, setMobileTab] = useState<MobileTab>('stream');
   const [isCommandOpen, setIsCommandOpen] = useState(false);
@@ -201,8 +218,15 @@ export function App() {
   const [announcement, setAnnouncement] = useState<string>('');
 
   const quickCaptureRef = useRef<HTMLInputElement | null>(null);
-  const calendarViewYearRef = useRef<number>(todayYear);
+  const activeViewRef = useRef<AppView>(activeView);
+  const selectedDateKeyRef = useRef<string>(selectedDateKey);
+  const calendarViewYearRef = useRef<number>(parseDateKey(selectedDateKey).getFullYear());
   const eventsRequestSeqRef = useRef<number>(0);
+  const dayRequestSeqRef = useRef<number>(0);
+  const pendingNoteSavesRef = useRef<Map<string, Promise<void>>>(new Map());
+
+  activeViewRef.current = activeView;
+  selectedDateKeyRef.current = selectedDateKey;
 
   const announce = useCallback((message: string) => {
     setAnnouncement(message);
@@ -210,11 +234,18 @@ export function App() {
 
   const clearAuthState = useCallback(() => {
     clearAccessToken();
+    dayRequestSeqRef.current += 1;
+    pendingNoteSavesRef.current.clear();
     setProfile(null);
     setAgentTokens([]);
     setSessions([]);
     setInvites([]);
     setMembers([]);
+    setDayItems([]);
+    setDayNote(null);
+    setDayLoadedDateKey(null);
+    setDayLoading(false);
+    setDayLoadError(null);
     setCalendars([]);
     setEvents([]);
     setTodayEvents([]);
@@ -224,6 +255,69 @@ export function App() {
     setFocusedUniversityCourseId(null);
     setIsCommandOpen(false);
   }, []);
+
+  const loadDayData = useCallback(async (targetDateKey: string) => {
+    const seq = ++dayRequestSeqRef.current;
+    setDayLoading(true);
+    setDayLoadError(null);
+    try {
+      // Wait for any in-flight flush PUT for this date (e.g. rapid A -> B -> A switch)
+      const pendingSave = pendingNoteSavesRef.current.get(targetDateKey);
+      if (pendingSave) {
+        await pendingSave.catch(() => undefined);
+      }
+      if (seq !== dayRequestSeqRef.current) return;
+
+      const data = await getDayTracker(targetDateKey);
+      if (seq !== dayRequestSeqRef.current) return;
+      setDayItems(data.checklistItems);
+      setDayNote(data.note);
+      setDayLoadedDateKey(targetDateKey);
+    } catch (err) {
+      if (seq !== dayRequestSeqRef.current) return;
+      setDayItems([]);
+      setDayNote(null);
+      setDayLoadedDateKey(null);
+      setDayLoadError(
+        err instanceof Error ? err.message : 'Could not load day tracker data.',
+      );
+    } finally {
+      if (seq === dayRequestSeqRef.current) {
+        setDayLoading(false);
+      }
+    }
+  }, []);
+
+  const selectDay = useCallback(
+    (nextDateKey: string, syncHash = true) => {
+      if (!isValidDateKey(nextDateKey)) return;
+      if (nextDateKey !== selectedDateKeyRef.current) {
+        selectedDateKeyRef.current = nextDateKey;
+        setSelectedDateKey(nextDateKey);
+        setDayItems([]);
+        setDayNote(null);
+        setDayLoadedDateKey(null);
+        setDayLoadError(null);
+        setDayLoading(true);
+      }
+      if (syncHash && typeof window !== 'undefined' && activeViewRef.current === 'dashboard') {
+        const nextHash = nextDateKey === todayKey ? '' : `#day/${nextDateKey}`;
+        const nextUrl = `${window.location.pathname}${nextHash}`;
+        if (window.location.hash !== nextHash) {
+          window.history.replaceState(null, '', nextUrl);
+        }
+      }
+    },
+    [todayKey],
+  );
+
+  const shiftSelectedDay = useCallback(
+    (deltaDays: number) => {
+      const nextKey = shiftDateKey(selectedDateKeyRef.current, deltaDays);
+      selectDay(nextKey, true);
+    },
+    [selectDay],
+  );
 
   const reloadEvents = useCallback(
     async (
@@ -362,17 +456,81 @@ export function App() {
   }, [announcement]);
 
   useEffect(() => {
+    if (!profile) return;
+    void loadDayData(selectedDateKey);
+  }, [loadDayData, profile, selectedDateKey]);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      if (hash === '#account') {
+        setActiveView('account');
+      } else if (hash === '#university') {
+        setActiveView('university');
+      } else {
+        setActiveView('dashboard');
+        const hashDate = readDateKeyFromHash();
+        setSelectedDateKey(hashDate ?? todayKey);
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [todayKey]);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         if (profile) {
           setIsCommandOpen((prev) => !prev);
         }
+        return;
+      }
+
+      if (!profile || activeView !== 'dashboard' || isCommandOpen || isCalendarExpanded) {
+        return;
+      }
+
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (document.querySelector('dialog[open]')) {
+        return;
+      }
+
+      if (
+        (event.altKey && !event.ctrlKey && !event.metaKey && event.key === 'ArrowLeft') ||
+        (!event.altKey && !event.ctrlKey && !event.metaKey && event.key === '[')
+      ) {
+        event.preventDefault();
+        shiftSelectedDay(-1);
+      } else if (
+        (event.altKey && !event.ctrlKey && !event.metaKey && event.key === 'ArrowRight') ||
+        (!event.altKey && !event.ctrlKey && !event.metaKey && event.key === ']')
+      ) {
+        event.preventDefault();
+        shiftSelectedDay(1);
+      } else if (
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        event.key.toLowerCase() === 't'
+      ) {
+        event.preventDefault();
+        selectDay(todayKey, true);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [profile]);
+  }, [activeView, isCalendarExpanded, isCommandOpen, profile, selectDay, shiftSelectedDay, todayKey]);
 
   const handleAuthenticated = async (session: AuthSessionPayload) => {
     setInitialized(true);
@@ -403,6 +561,7 @@ export function App() {
   };
 
   const navigateTo = (view: AppView) => {
+    activeViewRef.current = view;
     setActiveView(view);
     if (view === 'account' && profile) {
       void loadAccountSecurityData(profile.role);
@@ -415,7 +574,9 @@ export function App() {
           ? '#account'
           : view === 'university'
             ? '#university'
-            : '';
+            : selectedDateKeyRef.current === todayKey
+              ? ''
+              : `#day/${selectedDateKeyRef.current}`;
       window.history.replaceState(
         null,
         '',
@@ -814,15 +975,26 @@ export function App() {
     text: string;
     time?: string;
   }) => {
-    const id = `${kind}-${Date.now()}`;
+    const targetDateKey = selectedDateKeyRef.current;
     if (kind === 'task') {
-      setTasks((prev) => [
-        { id, title: text, completed: false, category: 'Inbox' },
-        ...prev,
-      ]);
-      announce(`Added task: ${text}`);
-    } else if (kind === 'event') {
-      const startIso = localDateTimeToIso(selectedDateKey, time || '15:30');
+      void createDailyCheckItem(targetDateKey, { title: text })
+        .then((created) => {
+          if (selectedDateKeyRef.current === targetDateKey) {
+            setDayItems((prev) => [...prev, created]);
+          }
+          announce(
+            `Added task for ${
+              targetDateKey === todayKey
+                ? 'Today'
+                : formatShortDate(parseDateKey(targetDateKey))
+            }`,
+          );
+        })
+        .catch((err) => {
+          announce(err instanceof Error ? err.message : 'Could not add task');
+        });
+    } else {
+      const startIso = localDateTimeToIso(targetDateKey, time || '15:30');
       const endIso = new Date(new Date(startIso).getTime() + 30 * 60_000).toISOString();
       void createEvent({
         title: text,
@@ -837,97 +1009,103 @@ export function App() {
             setTodayEvents((prev) => [...prev, created]);
           }
           announce(
-            `Scheduled "${text}" for ${formatShortDate(parseDateKey(selectedDateKey))}`,
+            `Scheduled "${text}" for ${formatShortDate(parseDateKey(targetDateKey))}`,
           );
         })
         .catch(() => {
           announce('Could not schedule event');
         });
-    } else {
-      const nowLabel = new Intl.DateTimeFormat('en-US', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      }).format(new Date());
-      setNotes((prev) => [
-        {
-          id,
-          title: text.length > 48 ? `${text.slice(0, 48)}…` : text,
-          excerpt: text,
-          tag: 'Quick Note',
-          updatedAt: nowLabel,
-        },
-        ...prev,
-      ]);
-      announce(`Saved note: ${text}`);
     }
   };
 
-  const handleToggleTask = (id: string) => {
-    setTasks((prev) =>
-      prev.map((task) =>
-        task.id === id ? { ...task, completed: !task.completed } : task,
-      ),
-    );
+  const handleToggleDailyItem = async (item: DailyCheckItem) => {
+    try {
+      const updated = await updateDailyCheckItem(item.id, {
+        isCompleted: !item.isCompleted,
+      });
+      setDayItems((prev) =>
+        prev.map((row) => (row.id === updated.id ? updated : row)),
+      );
+    } catch (err) {
+      announce(err instanceof Error ? err.message : 'Could not update task');
+      throw err;
+    }
   };
 
-  const handleDeleteTask = (id: string) => {
-    setTasks((prev) => prev.filter((task) => task.id !== id));
-    announce('Removed task');
+  const handleEditDailyItemTitle = async (
+    item: DailyCheckItem,
+    title: string,
+  ) => {
+    try {
+      const updated = await updateDailyCheckItem(item.id, { title });
+      setDayItems((prev) =>
+        prev.map((row) => (row.id === updated.id ? updated : row)),
+      );
+      announce('Updated task');
+    } catch (err) {
+      announce(err instanceof Error ? err.message : 'Could not update task');
+      throw err;
+    }
   };
 
-  const handleApproveProposal = (proposal: AgentProposal) => {
-    if (proposal.payload.kind === 'event') {
-      const { dateKey, startTime, duration, title, location } = proposal.payload;
-      const startIso = localDateTimeToIso(dateKey, startTime);
-      const durationMinutes = parseDurationMinutes(duration);
-      const endIso = new Date(
-        new Date(startIso).getTime() + durationMinutes * 60_000,
-      ).toISOString();
+  const handleMoveDailyItemToNextDay = async (item: DailyCheckItem) => {
+    const nextDateKey = shiftDateKey(item.date, 1);
+    try {
+      await updateDailyCheckItem(item.id, { date: nextDateKey });
+      setDayItems((prev) => prev.filter((row) => row.id !== item.id));
+      announce(
+        `Moved "${item.title}" to ${formatShortDate(parseDateKey(nextDateKey))}`,
+      );
+    } catch (err) {
+      announce(err instanceof Error ? err.message : 'Could not move task');
+      throw err;
+    }
+  };
 
-      void createEvent({
-        title,
-        startAt: startIso,
-        endAt: endIso,
-        isAllDay: false,
-        location: location ?? null,
-        source: proposal.source,
-      })
-        .then((created) => {
-          setEvents((prev) => [...prev, created]);
-          if (eventOccursOnDateKey(created, todayKey)) {
-            setTodayEvents((prev) => [...prev, created]);
+  const handleDeleteDailyItem = async (item: DailyCheckItem) => {
+    try {
+      await deleteDailyCheckItem(item.id);
+      setDayItems((prev) => prev.filter((row) => row.id !== item.id));
+      announce('Removed task');
+    } catch (err) {
+      announce(err instanceof Error ? err.message : 'Could not remove task');
+      throw err;
+    }
+  };
+
+  const handleSaveDailyNote = useCallback(
+    async (
+      dateKey: string,
+      content: string,
+      options?: { background?: boolean },
+    ) => {
+      const savePromise = (async () => {
+        try {
+          const res = await upsertDailyNote(dateKey, content);
+          if (selectedDateKeyRef.current === dateKey) {
+            setDayNote(res.note);
           }
-          setSelectedDateKey(dateKey);
-          setProposals((prev) => prev.filter((item) => item.id !== proposal.id));
-          announce(`Approved & scheduled: ${title}`);
-        })
-        .catch(() => {
-          announce('Could not schedule approved proposal');
-        });
-      return;
-    }
+        } catch (err) {
+          if (options?.background) {
+            announce(
+              `Could not save note for ${formatShortDate(parseDateKey(dateKey))}`,
+            );
+          }
+          throw err;
+        }
+      })();
 
-    const { title, category, dueTime } = proposal.payload;
-    setTasks((prev) => [
-      {
-        id: `task-${Date.now()}`,
-        title,
-        completed: false,
-        category,
-        dueTime,
-        source: proposal.source,
-      },
-      ...prev,
-    ]);
-    announce(`Approved & added task: ${title}`);
-    setProposals((prev) => prev.filter((item) => item.id !== proposal.id));
-  };
-
-  const handleDismissProposal = (id: string) => {
-    setProposals((prev) => prev.filter((item) => item.id !== id));
-    announce('Dismissed agent proposal');
-  };
+      pendingNoteSavesRef.current.set(dateKey, savePromise);
+      try {
+        await savePromise;
+      } finally {
+        if (pendingNoteSavesRef.current.get(dateKey) === savePromise) {
+          pendingNoteSavesRef.current.delete(dateKey);
+        }
+      }
+    },
+    [announce],
+  );
 
   const handleExportData = () => {
     if (!profile) return;
@@ -939,9 +1117,12 @@ export function App() {
       },
       preferences,
       calendars,
-      tasks,
       events,
-      notes,
+      selectedDay: {
+        date: selectedDateKey,
+        checklistItems: dayItems,
+        note: dayNote,
+      },
       universityCourses,
     };
     const blob = new Blob([JSON.stringify(archive, null, 2)], {
@@ -982,19 +1163,41 @@ export function App() {
   }
 
   const visibleCalIds = new Set(calendars.filter((c) => c.isVisible).map((c) => c.id));
-  const openTaskCount = tasks.filter((t) => !t.completed).length;
-  const todayEventCount = todayEvents.filter(
-    (e) => visibleCalIds.has(e.calendarId) && eventOccursOnDateKey(e, todayKey),
+  const openTaskCount = dayItems.filter((t) => !t.isCompleted).length;
+  const completedTaskCount = dayItems.length - openTaskCount;
+  const selectedDayEventsSource =
+    selectedDateKey === todayKey && todayEvents.length > 0 ? todayEvents : events;
+  const selectedDayEventCount = selectedDayEventsSource.filter(
+    (e) => visibleCalIds.has(e.calendarId) && eventOccursOnDateKey(e, selectedDateKey),
   ).length;
-  const pendingProposalCount = proposals.length;
 
   const commands: CommandItem[] = [
     {
       id: 'cmd-dashboard',
-      label: "Go to Today's Dashboard",
-      hint: 'Stream',
+      label: 'Go to Day Tracker',
+      hint: 'Day',
       group: 'Navigation',
       onSelect: () => navigateTo('dashboard'),
+    },
+    {
+      id: 'cmd-prev-day',
+      label: 'Previous Day',
+      hint: '[ or Alt+←',
+      group: 'Day Tracker',
+      onSelect: () => {
+        navigateTo('dashboard');
+        shiftSelectedDay(-1);
+      },
+    },
+    {
+      id: 'cmd-next-day',
+      label: 'Next Day',
+      hint: '] or Alt+→',
+      group: 'Day Tracker',
+      onSelect: () => {
+        navigateTo('dashboard');
+        shiftSelectedDay(1);
+      },
     },
     {
       id: 'cmd-university',
@@ -1013,7 +1216,7 @@ export function App() {
     {
       id: 'cmd-capture',
       label: 'Focus Quick Capture',
-      hint: 'Stream',
+      hint: 'Day',
       group: 'Navigation',
       onSelect: () => {
         navigateTo('dashboard');
@@ -1033,13 +1236,13 @@ export function App() {
     },
     {
       id: 'cmd-today',
-      label: 'Jump Calendar to Today',
-      hint: formatShortDate(today),
-      group: 'Calendar',
+      label: 'Jump to Today',
+      hint: `T · ${formatShortDate(today)}`,
+      group: 'Day Tracker',
       onSelect: () => {
         navigateTo('dashboard');
-        setSelectedDateKey(todayKey);
-        announce('Calendar set to today');
+        selectDay(todayKey, true);
+        announce('Jumped to today');
       },
     },
     {
@@ -1068,11 +1271,13 @@ export function App() {
     },
   ];
 
-  const todayFormatted = formatLongDate(today);
-  const selectedDateLabel =
-    selectedDateKey === todayKey
-      ? 'Today'
-      : formatShortDate(parseDateKey(selectedDateKey));
+  const selectedDate = parseDateKey(selectedDateKey);
+  const selectedDateFormatted = formatLongDate(selectedDate);
+  const isViewingToday = selectedDateKey === todayKey;
+  const relativeDayLabel = getRelativeDayLabel(selectedDateKey, todayKey);
+  const selectedDateLabel = isViewingToday
+    ? 'Today'
+    : formatShortDate(selectedDate);
 
   const greetingText = `${getGreeting(today)}, ${profile.displayName || profile.username}`;
 
@@ -1131,7 +1336,7 @@ export function App() {
             weekStartsOn={preferences.weekStartsOn}
             timeFormat={preferences.timeFormat}
             onBackToDashboard={() => navigateTo('dashboard')}
-            onSelectDate={setSelectedDateKey}
+            onSelectDate={(nextDate) => selectDay(nextDate, false)}
             onCreateCourse={handleCreateUniversityCourse}
             onUpdateCourse={handleUpdateUniversityCourse}
             onDeleteCourse={handleDeleteUniversityCourse}
@@ -1149,7 +1354,6 @@ export function App() {
 
           <MobileTabBar
             activeTab="university"
-            pendingProposalCount={pendingProposalCount}
             onSelectTab={handleSelectMobileTab}
           />
         </>
@@ -1159,19 +1363,64 @@ export function App() {
             <main className="focus-stream">
               <header className="stream-header" data-mobile-section="stream">
                 <div className="welcome-badge-row">
-                  <span className="pill-accent welcome-badge">
-                    Welcome back · {greetingText}
+                  <span
+                    className={
+                      isViewingToday
+                        ? 'pill-accent welcome-badge'
+                        : 'pill-neutral day-relative-badge'
+                    }
+                  >
+                    {isViewingToday
+                      ? `Today · ${greetingText}`
+                      : relativeDayLabel}
                   </span>
                 </div>
-                <h1 className="page-title">{todayFormatted}</h1>
+
+                <div className="day-header-row">
+                  <h1 className="page-title">{selectedDateFormatted}</h1>
+                  <div className="day-nav-bar" role="group" aria-label="Day navigation">
+                    <button
+                      id="day-prev-btn"
+                      type="button"
+                      className="btn btn-secondary btn-compact"
+                      onClick={() => shiftSelectedDay(-1)}
+                      title="Previous day ([ or Alt+←)"
+                      aria-label="Previous day"
+                    >
+                      <ChevronLeftIcon />
+                      <span>Prev</span>
+                    </button>
+                    {!isViewingToday && (
+                      <button
+                        id="day-today-btn"
+                        type="button"
+                        className="btn btn-ghost btn-compact"
+                        onClick={() => selectDay(todayKey, true)}
+                        title="Jump to today (T)"
+                      >
+                        Today
+                      </button>
+                    )}
+                    <button
+                      id="day-next-btn"
+                      type="button"
+                      className="btn btn-secondary btn-compact"
+                      onClick={() => shiftSelectedDay(1)}
+                      title="Next day (] or Alt+→)"
+                      aria-label="Next day"
+                    >
+                      <span>Next</span>
+                      <ChevronRightIcon />
+                    </button>
+                  </div>
+                </div>
+
                 {preferences.morningBrief && (
                   <p className="stream-summary">
-                    <span className="mono-num">{openTaskCount}</span>{' '}
-                    {openTaskCount === 1 ? 'task' : 'tasks'} open ·{' '}
-                    <span className="mono-num">{todayEventCount}</span>{' '}
-                    {todayEventCount === 1 ? 'event' : 'events'} today ·{' '}
-                    <span className="mono-num">{pendingProposalCount}</span> agent{' '}
-                    {pendingProposalCount === 1 ? 'proposal' : 'proposals'}
+                    <span className="mono-num">{openTaskCount}</span> open ·{' '}
+                    <span className="mono-num">{completedTaskCount}</span> done ·{' '}
+                    <span className="mono-num">{selectedDayEventCount}</span>{' '}
+                    {selectedDayEventCount === 1 ? 'event' : 'events'}
                   </p>
                 )}
               </header>
@@ -1186,22 +1435,31 @@ export function App() {
 
               <div data-mobile-section="stream">
                 <ChecklistCard
-                  tasks={tasks}
-                  onToggleTask={handleToggleTask}
-                  onDeleteTask={handleDeleteTask}
-                />
-              </div>
-
-              <div data-mobile-section="agents">
-                <AgentProposalsCard
-                  proposals={proposals}
-                  onApprove={handleApproveProposal}
-                  onDismiss={handleDismissProposal}
+                  dateLabel={selectedDateLabel}
+                  isToday={isViewingToday}
+                  items={
+                    dayLoadedDateKey === selectedDateKey ? dayItems : []
+                  }
+                  loading={dayLoading || dayLoadedDateKey !== selectedDateKey}
+                  onToggleItem={handleToggleDailyItem}
+                  onEditItemTitle={handleEditDailyItemTitle}
+                  onMoveItemToNextDay={handleMoveDailyItemToNextDay}
+                  onDeleteItem={handleDeleteDailyItem}
                 />
               </div>
 
               <div data-mobile-section="stream">
-                <NotesCard notes={notes} />
+                <DailyNoteCard
+                  dateKey={selectedDateKey}
+                  dateLabel={selectedDateLabel}
+                  initialContent={
+                    dayNote?.date === selectedDateKey ? dayNote.content : ''
+                  }
+                  loading={dayLoading || dayLoadedDateKey !== selectedDateKey}
+                  loadError={dayLoadError}
+                  onRetryLoad={() => void loadDayData(selectedDateKey)}
+                  onSaveNote={handleSaveDailyNote}
+                />
               </div>
             </main>
 
@@ -1216,7 +1474,7 @@ export function App() {
                   isExpandedOpen={isCalendarExpanded}
                   weekStartsOn={preferences.weekStartsOn}
                   timeFormat={preferences.timeFormat}
-                  onSelectDate={setSelectedDateKey}
+                  onSelectDate={(nextDate) => selectDay(nextDate, true)}
                   onViewYearChange={handleViewYearChange}
                   onCreateCalendar={handleCreateCalendar}
                   onToggleCalendarVisibility={handleToggleCalendarVisibility}
@@ -1237,10 +1495,6 @@ export function App() {
                   timeFormat={preferences.timeFormat}
                   onOpenUniversity={openUniversityView}
                 />
-              </div>
-
-              <div className="rail-group" data-mobile-section="vault">
-                <VaultCard items={vaultItems} />
                 <LocalStatusCard
                   apiState={apiState}
                   label={apiLabel}
@@ -1253,7 +1507,6 @@ export function App() {
 
           <MobileTabBar
             activeTab={mobileTab}
-            pendingProposalCount={pendingProposalCount}
             onSelectTab={handleSelectMobileTab}
           />
         </>

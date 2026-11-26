@@ -233,6 +233,38 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.ToTable("user_preferences", (string?)null);
         });
 
+        modelBuilder.Entity("Atrium.Api.Data.Entities.DailyCheckItem", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<DateTimeOffset?>("CompletedAt").HasColumnType("timestamp with time zone").HasColumnName("completed_at");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<DateOnly>("Date").HasColumnType("date").HasColumnName("date");
+            b.Property<string>("DueTime").HasMaxLength(5).HasColumnType("character varying(5)").HasColumnName("due_time");
+            b.Property<bool>("IsCompleted").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(false).HasColumnName("is_completed");
+            b.Property<int>("SortOrder").ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(0).HasColumnName("sort_order");
+            b.Property<string>("Title").IsRequired().HasMaxLength(280).HasColumnType("character varying(280)").HasColumnName("title");
+            b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone").HasColumnName("updated_at");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("UserId", "Date", "SortOrder", "CreatedAt").HasDatabaseName("ix_daily_check_items_user_date_sort");
+            b.ToTable("daily_check_items", (string?)null);
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.DailyNote", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<string>("Content").IsRequired().HasMaxLength(10000).HasColumnType("character varying(10000)").HasColumnName("content");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<DateOnly>("Date").HasColumnType("date").HasColumnName("date");
+            b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone").HasColumnName("updated_at");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("UserId", "Date").IsUnique().HasDatabaseName("ix_daily_notes_user_date");
+            b.ToTable("daily_notes", (string?)null);
+        });
+
         modelBuilder.Entity("Atrium.Api.Data.Entities.AgentToken", b =>
         {
             b.HasOne("Atrium.Api.Data.Entities.User", "User")
@@ -261,6 +293,26 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .IsRequired();
             b.Navigation("Calendar");
             b.Navigation("RecurrenceMaster");
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.DailyCheckItem", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.DailyNote", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
             b.Navigation("User");
         });
 

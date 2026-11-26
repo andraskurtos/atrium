@@ -15,6 +15,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<UniversityCourse> UniversityCourses => Set<UniversityCourse>();
     public DbSet<UniversityCourseActivity> UniversityCourseActivities => Set<UniversityCourseActivity>();
     public DbSet<UniversityActivityItem> UniversityActivityItems => Set<UniversityActivityItem>();
+    public DbSet<DailyCheckItem> DailyCheckItems => Set<DailyCheckItem>();
+    public DbSet<DailyNote> DailyNotes => Set<DailyNote>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -326,6 +328,51 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .WithMany()
                 .HasForeignKey(i => i.CalendarEventId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<DailyCheckItem>(entity =>
+        {
+            entity.ToTable("daily_check_items");
+            entity.HasKey(i => i.Id);
+            entity.Property(i => i.Id).HasColumnName("id");
+            entity.Property(i => i.UserId).HasColumnName("user_id");
+            entity.Property(i => i.Date).HasColumnName("date").HasColumnType("date");
+            entity.Property(i => i.Title).HasColumnName("title").HasMaxLength(280).IsRequired();
+            entity.Property(i => i.IsCompleted).HasColumnName("is_completed").HasDefaultValue(false);
+            entity.Property(i => i.CompletedAt).HasColumnName("completed_at");
+            entity.Property(i => i.DueTime).HasColumnName("due_time").HasMaxLength(5);
+            entity.Property(i => i.SortOrder).HasColumnName("sort_order").HasDefaultValue(0);
+            entity.Property(i => i.CreatedAt).HasColumnName("created_at");
+            entity.Property(i => i.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(i => new { i.UserId, i.Date, i.SortOrder, i.CreatedAt })
+                .HasDatabaseName("ix_daily_check_items_user_date_sort");
+
+            entity.HasOne(i => i.User)
+                .WithMany()
+                .HasForeignKey(i => i.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<DailyNote>(entity =>
+        {
+            entity.ToTable("daily_notes");
+            entity.HasKey(n => n.Id);
+            entity.Property(n => n.Id).HasColumnName("id");
+            entity.Property(n => n.UserId).HasColumnName("user_id");
+            entity.Property(n => n.Date).HasColumnName("date").HasColumnType("date");
+            entity.Property(n => n.Content).HasColumnName("content").HasMaxLength(10000).IsRequired();
+            entity.Property(n => n.CreatedAt).HasColumnName("created_at");
+            entity.Property(n => n.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(n => new { n.UserId, n.Date })
+                .IsUnique()
+                .HasDatabaseName("ix_daily_notes_user_date");
+
+            entity.HasOne(n => n.User)
+                .WithMany()
+                .HasForeignKey(n => n.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         if (string.Equals(Database.ProviderName, "Microsoft.EntityFrameworkCore.Sqlite", StringComparison.Ordinal))

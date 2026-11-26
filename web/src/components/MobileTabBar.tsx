@@ -1,34 +1,23 @@
 import type { MobileTab } from '../types/atrium';
 import {
-  AgentIcon,
   CalendarIcon,
   GraduationCapIcon,
   StreamIcon,
-  VaultIcon,
 } from './Icons';
 
 interface MobileTabBarProps {
   activeTab: MobileTab;
-  pendingProposalCount: number;
   onSelectTab: (tab: MobileTab) => void;
 }
 
 export function MobileTabBar({
   activeTab,
-  pendingProposalCount,
   onSelectTab,
 }: MobileTabBarProps) {
-  const tabs: { id: MobileTab; label: string; icon: typeof StreamIcon; badge?: number }[] = [
-    { id: 'stream', label: 'Stream', icon: StreamIcon },
+  const tabs: { id: MobileTab; label: string; icon: typeof StreamIcon }[] = [
+    { id: 'stream', label: 'Day', icon: StreamIcon },
     { id: 'calendar', label: 'Calendar', icon: CalendarIcon },
     { id: 'university', label: 'University', icon: GraduationCapIcon },
-    { id: 'vault', label: 'Vault', icon: VaultIcon },
-    {
-      id: 'agents',
-      label: 'Agents',
-      icon: AgentIcon,
-      badge: pendingProposalCount > 0 ? pendingProposalCount : undefined,
-    },
   ];
 
   return (
@@ -47,11 +36,6 @@ export function MobileTabBar({
           >
             <span className="mobile-tab-icon-wrap">
               <Icon />
-              {tab.badge !== undefined && (
-                <span className="mobile-tab-badge mono-num" aria-hidden="true">
-                  {tab.badge}
-                </span>
-              )}
             </span>
             <span className="mobile-tab-label">{tab.label}</span>
           </button>
