@@ -10,6 +10,7 @@ public sealed class UserCalendar
     public string Timezone { get; set; } = "UTC";
     public bool IsDefault { get; set; }
     public bool IsVisible { get; set; } = true;
+    public string? Module { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 

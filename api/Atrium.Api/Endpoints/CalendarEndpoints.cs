@@ -216,6 +216,14 @@ public static partial class CalendarEndpoints
             var target = userCalendars.FirstOrDefault(c => c.Id == id);
             if (target is null) return Results.NotFound();
 
+            if (!string.IsNullOrWhiteSpace(target.Module))
+            {
+                return Results.BadRequest(new
+                {
+                    error = $"This calendar is managed by the {target.Module} module and cannot be deleted directly.",
+                });
+            }
+
             if (userCalendars.Count <= 1)
             {
                 return Results.BadRequest(new { error = "You must keep at least one calendar." });
@@ -1013,7 +1021,7 @@ public static partial class CalendarEndpoints
         return null;
     }
 
-    private static async Task<List<UserCalendar>> EnsureUserCalendarsAsync(
+    internal static async Task<List<UserCalendar>> EnsureUserCalendarsAsync(
         AppDbContext db,
         Guid userId,
         CancellationToken ct)
@@ -1465,7 +1473,7 @@ public static partial class CalendarEndpoints
         return sb.Length > 0 ? sb.ToString() : "calendar";
     }
 
-    private static CalendarDto ToCalendarDto(UserCalendar c) => new(
+    internal static CalendarDto ToCalendarDto(UserCalendar c) => new(
         c.Id,
         c.Name,
         c.Description,
@@ -1474,7 +1482,8 @@ public static partial class CalendarEndpoints
         c.IsDefault,
         c.IsVisible,
         c.CreatedAt,
-        c.UpdatedAt);
+        c.UpdatedAt,
+        c.Module);
 
     private static CalendarEventDto ToEventDto(CalendarEvent e, UserCalendar c)
     {

@@ -1242,6 +1242,7 @@ export function CalendarCard({
                       />
                       <span className="calendar-manager-name">{cal.name}</span>
                       {cal.isDefault && <span className="pill-muted">Default</span>}
+                      {cal.module && <span className="pill-muted">Module</span>}
                     </label>
                     <div className="calendar-manager-item-actions">
                       <button
@@ -1253,7 +1254,7 @@ export function CalendarCard({
                       >
                         <DownloadIcon />
                       </button>
-                      {calendars.length > 1 && (
+                      {calendars.length > 1 && !cal.module && (
                         <button
                           type="button"
                           className="btn btn-ghost btn-icon-sm"

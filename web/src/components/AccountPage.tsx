@@ -83,6 +83,8 @@ const AVAILABLE_SCOPES = [
   'tasks:read',
   'tasks:propose',
   'vault:read',
+  'university:read',
+  'university:propose',
 ];
 
 export function AccountPage({

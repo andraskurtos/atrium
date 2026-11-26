@@ -12,6 +12,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<AgentToken> AgentTokens => Set<AgentToken>();
     public DbSet<UserCalendar> Calendars => Set<UserCalendar>();
     public DbSet<CalendarEvent> CalendarEvents => Set<CalendarEvent>();
+    public DbSet<UniversityCourse> UniversityCourses => Set<UniversityCourse>();
+    public DbSet<UniversityCourseActivity> UniversityCourseActivities => Set<UniversityCourseActivity>();
+    public DbSet<UniversityActivityItem> UniversityActivityItems => Set<UniversityActivityItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -151,10 +154,15 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(c => c.Timezone).HasColumnName("timezone").HasMaxLength(64).IsRequired();
             entity.Property(c => c.IsDefault).HasColumnName("is_default").HasDefaultValue(false);
             entity.Property(c => c.IsVisible).HasColumnName("is_visible").HasDefaultValue(true);
+            entity.Property(c => c.Module).HasColumnName("module").HasMaxLength(32);
             entity.Property(c => c.CreatedAt).HasColumnName("created_at");
             entity.Property(c => c.UpdatedAt).HasColumnName("updated_at");
 
             entity.HasIndex(c => c.UserId);
+            entity.HasIndex(c => new { c.UserId, c.Module })
+                .IsUnique()
+                .HasDatabaseName("ix_calendars_user_module")
+                .HasFilter("\"module\" IS NOT NULL");
 
             entity.HasOne(c => c.User)
                 .WithMany(u => u.Calendars)
@@ -211,6 +219,113 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .WithMany(m => m.RecurrenceOverrides)
                 .HasForeignKey(e => e.RecurrenceMasterId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UniversityCourse>(entity =>
+        {
+            entity.ToTable("university_courses");
+            entity.HasKey(c => c.Id);
+            entity.Property(c => c.Id).HasColumnName("id");
+            entity.Property(c => c.UserId).HasColumnName("user_id");
+            entity.Property(c => c.Name).HasColumnName("name").HasMaxLength(140).IsRequired();
+            entity.Property(c => c.Code).HasColumnName("code").HasMaxLength(32);
+            entity.Property(c => c.Semester).HasColumnName("semester").HasMaxLength(64);
+            entity.Property(c => c.Description).HasColumnName("description");
+            entity.Property(c => c.Instructor).HasColumnName("instructor").HasMaxLength(120);
+            entity.Property(c => c.Credits).HasColumnName("credits").HasPrecision(5, 2);
+            entity.Property(c => c.Color).HasColumnName("color").HasMaxLength(16).IsRequired();
+            entity.Property(c => c.Status).HasColumnName("status").HasMaxLength(16).HasDefaultValue("active").IsRequired();
+            entity.Property(c => c.MetadataJson).HasColumnName("metadata_json");
+            entity.Property(c => c.CreatedAt).HasColumnName("created_at");
+            entity.Property(c => c.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(c => new { c.UserId, c.Semester });
+            entity.HasIndex(c => new { c.UserId, c.Status });
+
+            entity.HasOne(c => c.User)
+                .WithMany(u => u.UniversityCourses)
+                .HasForeignKey(c => c.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UniversityCourseActivity>(entity =>
+        {
+            entity.ToTable("university_course_activities");
+            entity.HasKey(a => a.Id);
+            entity.Property(a => a.Id).HasColumnName("id");
+            entity.Property(a => a.CourseId).HasColumnName("course_id");
+            entity.Property(a => a.UserId).HasColumnName("user_id");
+            entity.Property(a => a.ActivityType).HasColumnName("activity_type").HasMaxLength(32).IsRequired();
+            entity.Property(a => a.Title).HasColumnName("title").HasMaxLength(120);
+            entity.Property(a => a.Description).HasColumnName("description");
+            entity.Property(a => a.DefaultLocation).HasColumnName("default_location").HasMaxLength(280);
+            entity.Property(a => a.MinAttendanceCount).HasColumnName("min_attendance_count");
+            entity.Property(a => a.MinAttendancePercent).HasColumnName("min_attendance_percent").HasPrecision(5, 2);
+            entity.Property(a => a.PlannedTotalCount).HasColumnName("planned_total_count");
+            entity.Property(a => a.SortOrder).HasColumnName("sort_order").HasDefaultValue(0);
+            entity.Property(a => a.MetadataJson).HasColumnName("metadata_json");
+            entity.Property(a => a.CreatedAt).HasColumnName("created_at");
+            entity.Property(a => a.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(a => new { a.CourseId, a.SortOrder });
+            entity.HasIndex(a => a.UserId);
+
+            entity.HasOne(a => a.Course)
+                .WithMany(c => c.Activities)
+                .HasForeignKey(a => a.CourseId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(a => a.User)
+                .WithMany()
+                .HasForeignKey(a => a.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UniversityActivityItem>(entity =>
+        {
+            entity.ToTable("university_activity_items");
+            entity.HasKey(i => i.Id);
+            entity.Property(i => i.Id).HasColumnName("id");
+            entity.Property(i => i.ActivityId).HasColumnName("activity_id");
+            entity.Property(i => i.CourseId).HasColumnName("course_id");
+            entity.Property(i => i.UserId).HasColumnName("user_id");
+            entity.Property(i => i.CalendarEventId).HasColumnName("calendar_event_id");
+            entity.Property(i => i.Title).HasColumnName("title").HasMaxLength(200).IsRequired();
+            entity.Property(i => i.Theme).HasColumnName("theme");
+            entity.Property(i => i.Notes).HasColumnName("notes");
+            entity.Property(i => i.SequenceNumber).HasColumnName("sequence_number");
+            entity.Property(i => i.AttendanceStatus).HasColumnName("attendance_status").HasMaxLength(16).HasDefaultValue("pending").IsRequired();
+            entity.Property(i => i.MetadataJson).HasColumnName("metadata_json");
+            entity.Property(i => i.CreatedAt).HasColumnName("created_at");
+            entity.Property(i => i.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(i => new { i.ActivityId, i.SequenceNumber });
+            entity.HasIndex(i => i.CourseId);
+            entity.HasIndex(i => i.UserId);
+            entity.HasIndex(i => i.CalendarEventId)
+                .IsUnique()
+                .HasDatabaseName("ix_university_activity_items_calendar_event")
+                .HasFilter("\"calendar_event_id\" IS NOT NULL");
+
+            entity.HasOne(i => i.Activity)
+                .WithMany(a => a.Items)
+                .HasForeignKey(i => i.ActivityId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(i => i.Course)
+                .WithMany()
+                .HasForeignKey(i => i.CourseId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(i => i.User)
+                .WithMany()
+                .HasForeignKey(i => i.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(i => i.CalendarEvent)
+                .WithMany()
+                .HasForeignKey(i => i.CalendarEventId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         if (string.Equals(Database.ProviderName, "Microsoft.EntityFrameworkCore.Sqlite", StringComparison.Ordinal))

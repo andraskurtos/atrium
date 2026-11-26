@@ -9,7 +9,8 @@ public sealed record CalendarDto(
     bool IsDefault,
     bool IsVisible,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    string? Module = null);
 
 public sealed record CreateCalendarRequest(
     string Name,

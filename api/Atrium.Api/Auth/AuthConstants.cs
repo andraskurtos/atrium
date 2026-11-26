@@ -36,5 +36,7 @@ public static class AuthConstants
         "tasks:read",
         "tasks:propose",
         "vault:read",
+        "university:read",
+        "university:propose",
     };
 }

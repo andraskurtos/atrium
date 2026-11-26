@@ -2,13 +2,119 @@ export type ApiState = 'checking' | 'ok' | 'degraded' | 'offline';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
-export type AppView = 'dashboard' | 'account';
+export type AppView = 'dashboard' | 'university' | 'account';
 
 export type UserRole = 'Owner' | 'Member';
 
 export type CaptureKind = 'task' | 'event' | 'note';
 
-export type MobileTab = 'stream' | 'calendar' | 'vault' | 'agents';
+export type MobileTab = 'stream' | 'calendar' | 'university' | 'vault' | 'agents';
+
+export type UniversityActivityType =
+  | 'lecture'
+  | 'practice'
+  | 'laboratory'
+  | 'homework_assignment'
+  | 'semester_assignment'
+  | 'midterm'
+  | 'exam';
+
+export type UniversityCourseStatus = 'active' | 'completed' | 'archived';
+
+export type UniversityAttendanceStatus =
+  | 'pending'
+  | 'attended'
+  | 'missed'
+  | 'excused';
+
+export type AttendanceSummaryStatus =
+  | 'not_applicable'
+  | 'not_configured'
+  | 'no_data'
+  | 'met'
+  | 'on_track'
+  | 'at_risk'
+  | 'impossible';
+
+export interface AttendanceSummary {
+  supportsAttendance: boolean;
+  hasRequirement: boolean;
+  attendedCount: number;
+  missedCount: number;
+  excusedCount: number;
+  pendingCount: number;
+  totalItemsCount: number;
+  effectiveTotalCount: number;
+  minAttendanceCount: number | null;
+  minAttendancePercent: number | null;
+  plannedTotalCount: number | null;
+  requiredCount: number | null;
+  remainingRequired: number | null;
+  remainingOpportunities: number | null;
+  maxAllowedMissesLeft: number | null;
+  currentRatePercent: number | null;
+  recordedRatePercent: number | null;
+  status: AttendanceSummaryStatus;
+}
+
+export interface UniversityActivityItem {
+  id: string;
+  activityId: string;
+  courseId: string;
+  calendarEventId: string | null;
+  title: string;
+  theme: string | null;
+  notes: string | null;
+  sequenceNumber: number | null;
+  attendanceStatus: UniversityAttendanceStatus;
+  startAt: string | null;
+  endAt: string | null;
+  isAllDay: boolean;
+  location: string | null;
+  metadataJson: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UniversityCourseActivity {
+  id: string;
+  courseId: string;
+  activityType: UniversityActivityType;
+  title: string | null;
+  description: string | null;
+  defaultLocation: string | null;
+  minAttendanceCount: number | null;
+  minAttendancePercent: number | null;
+  plannedTotalCount: number | null;
+  sortOrder: number;
+  metadataJson: string | null;
+  attendance: AttendanceSummary;
+  items: UniversityActivityItem[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UniversityCourse {
+  id: string;
+  name: string;
+  code: string | null;
+  semester: string | null;
+  description: string | null;
+  instructor: string | null;
+  credits: number | null;
+  color: string;
+  status: UniversityCourseStatus;
+  metadataJson: string | null;
+  activities: UniversityCourseActivity[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UniversityWorkspace {
+  calendar: UserCalendar;
+  semesters: string[];
+  courses: UniversityCourse[];
+}
 
 export interface UserProfile {
   id: string;
@@ -95,6 +201,7 @@ export interface UserCalendar {
   timezone: string;
   isDefault: boolean;
   isVisible: boolean;
+  module?: string | null;
   createdAt: string;
   updatedAt: string;
 }
