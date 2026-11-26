@@ -114,16 +114,18 @@ export function UniversityTileCard({
             <div className="university-tile-attendance-row">
               {attendanceStats.atRisk > 0 ? (
                 <span className="uni-status-pill is-warn">
-                  <span className="mono-num">{attendanceStats.atRisk}</span>{' '}
-                  {attendanceStats.atRisk === 1 ? 'activity' : 'activities'} at
-                  risk
+                  <span className="mono-num">{attendanceStats.atRisk}</span>
+                  <span>
+                    {attendanceStats.atRisk === 1 ? 'activity' : 'activities'}{' '}
+                    at risk
+                  </span>
                 </span>
               ) : attendanceStats.remainingActivities > 0 ? (
-                <span className="pill-neutral">
+                <span className="pill-neutral uni-pill-spaced">
                   <span className="mono-num">
                     {attendanceStats.totalRemainingSessions}
-                  </span>{' '}
-                  required sessions left
+                  </span>
+                  <span>required sessions left</span>
                 </span>
               ) : (
                 <span className="uni-status-pill is-ok">

@@ -246,19 +246,23 @@ function renderAttendanceProgress(
             <span className="uni-status-pill is-ok">Requirement met</span>
           ) : summary.status === 'impossible' ? (
             <span className="uni-status-pill is-danger">
-              <span className="mono-num">{remaining}</span> more needed · cannot
-              reach with current plan
+              <span className="mono-num">{remaining}</span>
+              <span>more needed · cannot reach with current plan</span>
             </span>
           ) : summary.status === 'at_risk' ? (
             <span className="uni-status-pill is-warn">
-              <span className="mono-num">{remaining}</span> more needed
-              {summary.maxAllowedMissesLeft === 0
-                ? ' · no misses left'
-                : ' · add sessions or check plan'}
+              <span className="mono-num">{remaining}</span>
+              <span>
+                more needed
+                {summary.maxAllowedMissesLeft === 0
+                  ? ' · no misses left'
+                  : ' · add sessions or check plan'}
+              </span>
             </span>
           ) : (
-            <span className="pill-accent">
-              <span className="mono-num">{remaining}</span> more needed
+            <span className="pill-accent uni-pill-spaced">
+              <span className="mono-num">{remaining}</span>
+              <span>more needed</span>
             </span>
           )}
         </div>

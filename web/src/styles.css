@@ -2431,6 +2431,10 @@ select {
   color: var(--accent-soft-text);
 }
 
+.uni-pill-spaced {
+  gap: 4px;
+}
+
 .stack-md {
   display: flex;
   flex-direction: column;
