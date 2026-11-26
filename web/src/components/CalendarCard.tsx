@@ -97,7 +97,8 @@ function buildMonthGrid(
     });
   }
 
-  const targetCells = cells.length > 35 ? 42 : 35;
+  // Always render 6 full weeks (42 cells) so month height stays consistent across 4/5/6-week months
+  const targetCells = 42;
   let nextDay = 1;
   while (cells.length < targetCells) {
     const d = new Date(viewYear, viewMonth + 1, nextDay);
@@ -702,6 +703,7 @@ export function CalendarCard({
             className="calendar-filter-chip calendar-filter-action"
             onClick={() => {
               onToggleExpanded(true);
+              setShowImportPanel(false);
               setShowNewCalendarForm(true);
             }}
             title="Create or import calendars"
@@ -783,6 +785,7 @@ export function CalendarCard({
               className="btn btn-ghost btn-xs"
               onClick={() => {
                 onToggleExpanded(true);
+                setShowNewCalendarForm(false);
                 setShowImportPanel(true);
               }}
               title="Import standard .ics calendar file"
@@ -846,7 +849,13 @@ export function CalendarCard({
               id="calendar-modal-import-btn"
               type="button"
               className="btn btn-secondary btn-compact"
-              onClick={() => setShowImportPanel((prev) => !prev)}
+              onClick={() => {
+                setShowImportPanel((prev) => {
+                  const next = !prev;
+                  if (next) setShowNewCalendarForm(false);
+                  return next;
+                });
+              }}
             >
               <UploadIcon />
               <span>Import .ics</span>
@@ -894,7 +903,13 @@ export function CalendarCard({
               id="calendar-new-toggle"
               type="button"
               className="btn btn-ghost btn-xs"
-              onClick={() => setShowNewCalendarForm((prev) => !prev)}
+              onClick={() => {
+                setShowNewCalendarForm((prev) => {
+                  const next = !prev;
+                  if (next) setShowImportPanel(false);
+                  return next;
+                });
+              }}
             >
               <PlusIcon />
               <span>{showNewCalendarForm ? 'Close' : 'New calendar'}</span>
@@ -1067,11 +1082,21 @@ export function CalendarCard({
                       .join(' ')}
                     onClick={() => onSelectDate(cell.dateKey)}
                   >
-                    <span className="calendar-modal-day-num mono-num">
-                      {cell.dayNumber}
-                    </span>
+                    <div className="calendar-modal-cell-head">
+                      <span className="calendar-modal-day-num mono-num">
+                        {cell.dayNumber}
+                      </span>
+                      {dayEvents.length > 2 && (
+                        <span
+                          className="meta-text mono-num calendar-cell-more"
+                          title={`${dayEvents.length} events on this day`}
+                        >
+                          +{dayEvents.length - 2}
+                        </span>
+                      )}
+                    </div>
                     <div className="calendar-modal-cell-events">
-                      {dayEvents.slice(0, 3).map((evt) => {
+                      {dayEvents.slice(0, 2).map((evt) => {
                         const labels = formatEventTimeLabels(evt, timeFormat);
                         return (
                           <span
@@ -1084,11 +1109,6 @@ export function CalendarCard({
                           </span>
                         );
                       })}
-                      {dayEvents.length > 3 && (
-                        <span className="meta-text mono-num calendar-cell-more">
-                          +{dayEvents.length - 3} more
-                        </span>
-                      )}
                     </div>
                   </button>
                 );
@@ -1125,16 +1145,18 @@ export function CalendarCard({
               </button>
             </div>
 
-            {showEventForm && isExpandedOpen && renderEventForm('modal')}
+            <div className="calendar-modal-detail-body">
+              {showEventForm && isExpandedOpen && renderEventForm('modal')}
 
-            <div className="stack-sm">
-              {selectedDayEvents.length === 0 ? (
-                <p className="empty-state meta-text">
-                  No visible events scheduled for this day. Add an event or import an .ics file.
-                </p>
-              ) : (
-                selectedDayEvents.map((evt) => renderEventRow(evt, 'h4'))
-              )}
+              <div className="stack-sm">
+                {selectedDayEvents.length === 0 ? (
+                  <p className="empty-state meta-text">
+                    No visible events scheduled for this day. Add an event or import an .ics file.
+                  </p>
+                ) : (
+                  selectedDayEvents.map((evt) => renderEventRow(evt, 'h4'))
+                )}
+              </div>
             </div>
           </aside>
         </div>
