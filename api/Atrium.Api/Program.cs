@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.IdentityModel.Tokens;
 
@@ -145,6 +147,28 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 var app = builder.Build();
 
+if (args.Contains("--migration-script", StringComparer.OrdinalIgnoreCase))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    var migrator = db.Database.GetInfrastructure().GetRequiredService<IMigrator>();
+    var sql = migrator.GenerateScript(
+        fromMigration: null,
+        toMigration: null,
+        options: MigrationsSqlGenerationOptions.Idempotent);
+    Console.WriteLine(sql);
+    return;
+}
+
+if (args.Contains("--migrate", StringComparer.OrdinalIgnoreCase))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+    Console.WriteLine("Atrium database migrations applied successfully.");
+    return;
+}
+
 if (builder.Configuration.GetValue("Atrium:Database:AutoMigrate", true))
 {
     using var scope = app.Services.CreateScope();
@@ -185,6 +209,7 @@ app.MapAuthEndpoints();
 app.MapAccountEndpoints();
 app.MapTokenEndpoints();
 app.MapHouseholdEndpoints();
+app.MapCalendarEndpoints();
 
 var configuredDistPath = builder.Configuration["Atrium:WebDistPath"];
 var resolvedDistPath = !string.IsNullOrWhiteSpace(configuredDistPath)

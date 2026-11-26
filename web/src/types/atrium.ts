@@ -83,17 +83,49 @@ export interface TaskItem {
   source?: string;
 }
 
+export type CalendarEventStatus = 'confirmed' | 'tentative' | 'cancelled';
+
+export interface UserCalendar {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+  timezone: string;
+  isDefault: boolean;
+  isVisible: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CalendarEvent {
   id: string;
-  /** Local ISO date key: YYYY-MM-DD */
-  dateKey: string;
-  /** 24h time string: HH:MM */
-  startTime: string;
-  duration: string;
+  calendarId: string;
+  calendarName: string;
+  calendarColor: string;
   title: string;
-  location?: string;
-  category: string;
-  source?: string;
+  description: string | null;
+  location: string | null;
+  /** UTC ISO-8601 timestamp */
+  startAt: string;
+  /** UTC ISO-8601 timestamp */
+  endAt: string;
+  isAllDay: boolean;
+  timezone: string | null;
+  status: CalendarEventStatus;
+  externalUid: string | null;
+  recurrenceRule: string | null;
+  source: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IcsImportSummary {
+  calendar: UserCalendar;
+  importedCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  warnings: string[];
+  events: CalendarEvent[];
 }
 
 export interface AgentProposal {

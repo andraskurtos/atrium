@@ -93,13 +93,14 @@ export async function refreshAccessToken(): Promise<boolean> {
   return inFlightRefresh;
 }
 
-async function apiFetch<T>(
+export async function authenticatedRawFetch(
   path: string,
   options: RequestInit = {},
   { authenticated = true, retryOn401 = true } = {},
-): Promise<T> {
+): Promise<Response> {
   const headers = new Headers(options.headers);
-  if (options.body && !headers.has('Content-Type')) {
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  if (options.body && !isFormData && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
   if (authenticated && memoryAccessToken) {
@@ -115,7 +116,7 @@ async function apiFetch<T>(
   if (response.status === 401 && authenticated && retryOn401) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
-      return apiFetch<T>(path, options, { authenticated, retryOn401: false });
+      return authenticatedRawFetch(path, options, { authenticated, retryOn401: false });
     }
     unauthorizedHandler?.();
   }
@@ -123,6 +124,19 @@ async function apiFetch<T>(
   if (!response.ok) {
     throw new ApiError(response.status, await parseErrorMessage(response));
   }
+
+  return response;
+}
+
+export async function apiFetch<T>(
+  path: string,
+  options: RequestInit = {},
+  { authenticated = true, retryOn401 = true } = {},
+): Promise<T> {
+  const response = await authenticatedRawFetch(path, options, {
+    authenticated,
+    retryOn401,
+  });
 
   if (response.status === 204) {
     return undefined as T;

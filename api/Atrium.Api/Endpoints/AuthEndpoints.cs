@@ -68,6 +68,7 @@ public static class AuthEndpoints
             var prefs = CreateDefaultPreferences(user.Id);
             db.Users.Add(user);
             db.UserPreferences.Add(prefs);
+            db.Calendars.Add(CalendarEndpoints.CreateDefaultCalendar(user.Id, user.Timezone, now));
 
             var (session, rawRefresh) = CreateRefreshSession(user.Id, httpContext, now, authOptions.Value);
             db.RefreshSessions.Add(session);
@@ -214,6 +215,7 @@ public static class AuthEndpoints
 
             db.Users.Add(user);
             db.UserPreferences.Add(prefs);
+            db.Calendars.Add(CalendarEndpoints.CreateDefaultCalendar(user.Id, user.Timezone, now));
 
             var (session, rawRefresh) = CreateRefreshSession(user.Id, httpContext, now, authOptions.Value);
             db.RefreshSessions.Add(session);

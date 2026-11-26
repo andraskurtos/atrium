@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AccountPage } from './components/AccountPage';
 import { AgentProposalsCard } from './components/AgentProposalsCard';
 import { AuthScreen } from './components/AuthScreen';
-import { CalendarMockupCard } from './components/CalendarMockupCard';
+import { CalendarCard } from './components/CalendarCard';
 import { ChecklistCard } from './components/ChecklistCard';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
 import { LocalStatusCard } from './components/LocalStatusCard';
@@ -12,7 +12,6 @@ import { QuickCapture } from './components/QuickCapture';
 import { TopBar } from './components/TopBar';
 import { VaultCard } from './components/VaultCard';
 import {
-  createInitialEvents,
   createInitialNotes,
   createInitialProposals,
   createInitialTasks,
@@ -50,6 +49,25 @@ import {
   type AuthSessionPayload,
   type CreateInvitePayload,
 } from './lib/authClient';
+import {
+  createCalendar,
+  createEvent,
+  deleteCalendar,
+  deleteEvent,
+  downloadCalendarIcs,
+  eventOccursOnDateKey,
+  importIcsAsNewCalendar,
+  importIcsToCalendar,
+  listCalendars,
+  listEvents,
+  localDateTimeToIso,
+  parseDurationMinutes,
+  updateCalendar,
+  updateEvent,
+  type CreateCalendarInput,
+  type CreateEventInput,
+  type UpdateEventInput,
+} from './lib/calendarClient';
 import type {
   AccountPreferences,
   AgentProposal,
@@ -63,6 +81,7 @@ import type {
   NoteItem,
   SessionItem,
   TaskItem,
+  UserCalendar,
   UserProfile,
 } from './types/atrium';
 
@@ -109,9 +128,9 @@ export function App() {
   const [activeView, setActiveView] = useState<AppView>(readInitialView);
   const [selectedDateKey, setSelectedDateKey] = useState<string>(todayKey);
   const [tasks, setTasks] = useState<TaskItem[]>(createInitialTasks);
-  const [events, setEvents] = useState<CalendarEvent[]>(() =>
-    createInitialEvents(today),
-  );
+  const [calendars, setCalendars] = useState<UserCalendar[]>([]);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
   const [proposals, setProposals] = useState<AgentProposal[]>(() =>
     createInitialProposals(today),
   );
@@ -136,7 +155,23 @@ export function App() {
     setSessions([]);
     setInvites([]);
     setMembers([]);
+    setCalendars([]);
+    setEvents([]);
     setIsCommandOpen(false);
+  }, []);
+
+  const loadCalendarData = useCallback(async () => {
+    setCalendarLoading(true);
+    try {
+      const [nextCalendars, nextEvents] = await Promise.all([
+        listCalendars(),
+        listEvents(),
+      ]);
+      setCalendars(nextCalendars);
+      setEvents(nextEvents);
+    } finally {
+      setCalendarLoading(false);
+    }
   }, []);
 
   const loadAccountSecurityData = useCallback(async (role: UserProfile['role']) => {
@@ -181,7 +216,10 @@ export function App() {
             setProfile(me.user);
             setPreferences(me.preferences);
             setTheme(me.preferences.theme);
-            await loadAccountSecurityData(me.user.role);
+            await Promise.all([
+              loadAccountSecurityData(me.user.role),
+              loadCalendarData(),
+            ]);
           }
         }
       } catch {
@@ -194,7 +232,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [loadAccountSecurityData, setTheme]);
+  }, [loadAccountSecurityData, loadCalendarData, setTheme]);
 
   useEffect(() => {
     if (!announcement) return;
@@ -225,9 +263,12 @@ export function App() {
       window.history.replaceState(null, '', window.location.pathname);
     }
     try {
-      await loadAccountSecurityData(session.user.role);
+      await Promise.all([
+        loadAccountSecurityData(session.user.role),
+        loadCalendarData(),
+      ]);
     } catch {
-      // Non-fatal; AccountPage refreshes when opened
+      // Non-fatal; individual views can refresh
     }
     announce(`Signed in as ${session.user.displayName || session.user.username}`);
   };
@@ -338,6 +379,85 @@ export function App() {
     announce('Household member removed');
   };
 
+  const handleCreateCalendar = async (input: CreateCalendarInput) => {
+    const created = await createCalendar(input);
+    setCalendars((prev) =>
+      created.isDefault
+        ? [created, ...prev.map((c) => ({ ...c, isDefault: false }))]
+        : [...prev, created],
+    );
+    announce(`Created calendar "${created.name}"`);
+  };
+
+  const handleToggleCalendarVisibility = async (calendar: UserCalendar) => {
+    const nextVisible = !calendar.isVisible;
+    setCalendars((prev) =>
+      prev.map((c) => (c.id === calendar.id ? { ...c, isVisible: nextVisible } : c)),
+    );
+    try {
+      const updated = await updateCalendar(calendar.id, {
+        name: calendar.name,
+        description: calendar.description,
+        color: calendar.color,
+        timezone: calendar.timezone,
+        isVisible: nextVisible,
+      });
+      setCalendars((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    } catch {
+      setCalendars((prev) => prev.map((c) => (c.id === calendar.id ? calendar : c)));
+      announce('Could not update calendar visibility');
+    }
+  };
+
+  const handleDeleteCalendar = async (id: string) => {
+    try {
+      await deleteCalendar(id);
+      await loadCalendarData();
+      announce('Deleted calendar');
+    } catch (err) {
+      announce(err instanceof Error ? err.message : 'Could not delete calendar');
+    }
+  };
+
+  const handleCreateEvent = async (input: CreateEventInput) => {
+    const created = await createEvent(input);
+    setEvents((prev) => [...prev, created]);
+    announce(`Added event: ${created.title}`);
+  };
+
+  const handleUpdateEvent = async (id: string, input: UpdateEventInput) => {
+    const updated = await updateEvent(id, input);
+    setEvents((prev) => prev.map((evt) => (evt.id === updated.id ? updated : evt)));
+    announce(`Updated event: ${updated.title}`);
+  };
+
+  const handleDeleteEvent = async (id: string) => {
+    await deleteEvent(id);
+    setEvents((prev) => prev.filter((evt) => evt.id !== id));
+    announce('Removed event');
+  };
+
+  const handleImportIcs = async (file: File, targetCalendarId: string | 'new') => {
+    const summary =
+      targetCalendarId === 'new'
+        ? await importIcsAsNewCalendar(file)
+        : await importIcsToCalendar(targetCalendarId, file);
+    await loadCalendarData();
+    const parts = [`${summary.importedCount} imported`];
+    if (summary.updatedCount > 0) parts.push(`${summary.updatedCount} updated`);
+    if (summary.skippedCount > 0) parts.push(`${summary.skippedCount} skipped`);
+    announce(`Imported into "${summary.calendar.name}" (${parts.join(', ')})`);
+  };
+
+  const handleExportIcs = async (calendar: UserCalendar) => {
+    try {
+      await downloadCalendarIcs(calendar.id, calendar.name);
+      announce(`Exported "${calendar.name}.ics"`);
+    } catch {
+      announce('Could not export calendar');
+    }
+  };
+
   const handleCapture = ({
     kind,
     text,
@@ -355,20 +475,24 @@ export function App() {
       ]);
       announce(`Added task: ${text}`);
     } else if (kind === 'event') {
-      setEvents((prev) => [
-        ...prev,
-        {
-          id,
-          dateKey: selectedDateKey,
-          startTime: time || '15:30',
-          duration: '30m',
-          title: text,
-          category: 'Personal',
-        },
-      ]);
-      announce(
-        `Scheduled "${text}" for ${formatShortDate(parseDateKey(selectedDateKey))}`,
-      );
+      const startIso = localDateTimeToIso(selectedDateKey, time || '15:30');
+      const endIso = new Date(new Date(startIso).getTime() + 30 * 60_000).toISOString();
+      void createEvent({
+        title: text,
+        startAt: startIso,
+        endAt: endIso,
+        isAllDay: false,
+        source: 'Quick Capture',
+      })
+        .then((created) => {
+          setEvents((prev) => [...prev, created]);
+          announce(
+            `Scheduled "${text}" for ${formatShortDate(parseDateKey(selectedDateKey))}`,
+          );
+        })
+        .catch(() => {
+          announce('Could not schedule event');
+        });
     } else {
       const nowLabel = new Intl.DateTimeFormat('en-US', {
         hour: '2-digit',
@@ -402,50 +526,48 @@ export function App() {
     announce('Removed task');
   };
 
-  const handleAddEvent = (eventData: Omit<CalendarEvent, 'id'>) => {
-    setEvents((prev) => [...prev, { ...eventData, id: `evt-${Date.now()}` }]);
-    announce(`Added event: ${eventData.title}`);
-  };
-
-  const handleDeleteEvent = (id: string) => {
-    setEvents((prev) => prev.filter((evt) => evt.id !== id));
-    announce('Removed event');
-  };
-
   const handleApproveProposal = (proposal: AgentProposal) => {
     if (proposal.payload.kind === 'event') {
-      const { dateKey, startTime, duration, title, location, category } =
-        proposal.payload;
-      setEvents((prev) => [
-        ...prev,
-        {
-          id: `evt-${Date.now()}`,
-          dateKey,
-          startTime,
-          duration,
-          title,
-          location,
-          category,
-          source: proposal.source,
-        },
-      ]);
-      setSelectedDateKey(dateKey);
-      announce(`Approved & scheduled: ${title}`);
-    } else {
-      const { title, category, dueTime } = proposal.payload;
-      setTasks((prev) => [
-        {
-          id: `task-${Date.now()}`,
-          title,
-          completed: false,
-          category,
-          dueTime,
-          source: proposal.source,
-        },
-        ...prev,
-      ]);
-      announce(`Approved & added task: ${title}`);
+      const { dateKey, startTime, duration, title, location } = proposal.payload;
+      const startIso = localDateTimeToIso(dateKey, startTime);
+      const durationMinutes = parseDurationMinutes(duration);
+      const endIso = new Date(
+        new Date(startIso).getTime() + durationMinutes * 60_000,
+      ).toISOString();
+
+      void createEvent({
+        title,
+        startAt: startIso,
+        endAt: endIso,
+        isAllDay: false,
+        location: location ?? null,
+        source: proposal.source,
+      })
+        .then((created) => {
+          setEvents((prev) => [...prev, created]);
+          setSelectedDateKey(dateKey);
+          setProposals((prev) => prev.filter((item) => item.id !== proposal.id));
+          announce(`Approved & scheduled: ${title}`);
+        })
+        .catch(() => {
+          announce('Could not schedule approved proposal');
+        });
+      return;
     }
+
+    const { title, category, dueTime } = proposal.payload;
+    setTasks((prev) => [
+      {
+        id: `task-${Date.now()}`,
+        title,
+        completed: false,
+        category,
+        dueTime,
+        source: proposal.source,
+      },
+      ...prev,
+    ]);
+    announce(`Approved & added task: ${title}`);
     setProposals((prev) => prev.filter((item) => item.id !== proposal.id));
   };
 
@@ -463,6 +585,7 @@ export function App() {
         avatarDataUrl: profile.avatarDataUrl ? '[embedded image]' : null,
       },
       preferences,
+      calendars,
       tasks,
       events,
       notes,
@@ -504,8 +627,11 @@ export function App() {
     );
   }
 
+  const visibleCalIds = new Set(calendars.filter((c) => c.isVisible).map((c) => c.id));
   const openTaskCount = tasks.filter((t) => !t.completed).length;
-  const todayEventCount = events.filter((e) => e.dateKey === todayKey).length;
+  const todayEventCount = events.filter(
+    (e) => visibleCalIds.has(e.calendarId) && eventOccursOnDateKey(e, todayKey),
+  ).length;
   const pendingProposalCount = proposals.length;
 
   const commands: CommandItem[] = [
@@ -685,15 +811,24 @@ export function App() {
 
             <aside className="context-rail" aria-label="Context utility rail">
               <div className="rail-group" data-mobile-section="calendar">
-                <CalendarMockupCard
+                <CalendarCard
                   todayKey={todayKey}
                   selectedDateKey={selectedDateKey}
+                  calendars={calendars}
                   events={events}
+                  loading={calendarLoading}
                   isExpandedOpen={isCalendarExpanded}
                   weekStartsOn={preferences.weekStartsOn}
+                  timeFormat={preferences.timeFormat}
                   onSelectDate={setSelectedDateKey}
-                  onAddEvent={handleAddEvent}
+                  onCreateCalendar={handleCreateCalendar}
+                  onToggleCalendarVisibility={handleToggleCalendarVisibility}
+                  onDeleteCalendar={handleDeleteCalendar}
+                  onCreateEvent={handleCreateEvent}
+                  onUpdateEvent={handleUpdateEvent}
                   onDeleteEvent={handleDeleteEvent}
+                  onImportIcs={handleImportIcs}
+                  onExportIcs={handleExportIcs}
                   onToggleExpanded={setIsCalendarExpanded}
                 />
               </div>

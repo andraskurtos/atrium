@@ -19,4 +19,5 @@ public sealed class User
     public UserPreferences? Preferences { get; set; }
     public ICollection<RefreshSession> RefreshSessions { get; } = [];
     public ICollection<AgentToken> AgentTokens { get; } = [];
+    public ICollection<UserCalendar> Calendars { get; } = [];
 }
