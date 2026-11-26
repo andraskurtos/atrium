@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -62,11 +63,22 @@ async function main() {
   );
 
   const webDistPath = path.join(ROOT_DIR, 'web', 'dist');
+  let jwtSecret = env.ATRIUM_JWT_SECRET || env.Atrium__Auth__JwtSigningKey || '';
+  if (Buffer.byteLength(jwtSecret, 'utf8') < 32) {
+    jwtSecret = crypto.randomBytes(48).toString('base64url');
+    logLine(
+      'prod',
+      COLORS.yellow,
+      'ATRIUM_JWT_SECRET not set in .env; using ephemeral random key for this local production run.',
+    );
+  }
+
   const prodEnv = {
     ...env,
     ASPNETCORE_ENVIRONMENT: 'Production',
     ASPNETCORE_URLS: `http://localhost:${env.API_PORT}`,
     Atrium__WebDistPath: webDistPath,
+    Atrium__Auth__JwtSigningKey: jwtSecret,
   };
 
   logLine(

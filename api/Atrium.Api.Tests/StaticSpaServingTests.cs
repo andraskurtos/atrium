@@ -46,6 +46,8 @@ public sealed class StaticSpaServingTests : IDisposable
             builder.UseSetting(
                 "ConnectionStrings:DefaultConnection",
                 "Host=127.0.0.1;Port=5432;Database=atrium_test;Username=atrium;Password=test");
+            builder.UseSetting("Atrium:Database:AutoMigrate", "false");
+            builder.UseSetting("Atrium:Auth:JwtSigningKey", TestAppFactory.TestJwtSigningKey);
             builder.UseSetting("Atrium:WebDistPath", _tempDistDir);
 
             builder.ConfigureServices(services =>

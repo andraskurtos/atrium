@@ -23,6 +23,8 @@ public class HealthEndpointTests
     {
         return new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
+            builder.UseSetting("Atrium:Database:AutoMigrate", "false");
+            builder.UseSetting("Atrium:Auth:JwtSigningKey", TestAppFactory.TestJwtSigningKey);
             builder.ConfigureAppConfiguration((_, config) =>
             {
                 config.AddInMemoryCollection(new Dictionary<string, string?>

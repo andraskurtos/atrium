@@ -2,23 +2,29 @@ export type ApiState = 'checking' | 'ok' | 'degraded' | 'offline';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
-export type AppView = 'welcome' | 'dashboard' | 'account';
+export type AppView = 'dashboard' | 'account';
+
+export type UserRole = 'Owner' | 'Member';
 
 export type CaptureKind = 'task' | 'event' | 'note';
 
 export type MobileTab = 'stream' | 'calendar' | 'vault' | 'agents';
 
 export interface UserProfile {
+  id: string;
   displayName: string;
   username: string;
   email: string;
   bio: string;
   timezone: string;
   avatarDataUrl: string | null;
+  role: UserRole;
   passwordUpdatedAt: string;
+  createdAt: string;
 }
 
 export interface AccountPreferences {
+  theme: ThemePreference;
   weekStartsOn: 'monday' | 'sunday';
   timeFormat: '24h' | '12h';
   requireAgentApproval: boolean;
@@ -26,27 +32,46 @@ export interface AccountPreferences {
   eventReminders: boolean;
 }
 
-export interface PasskeyItem {
-  id: string;
-  deviceName: string;
-  addedAt: string;
-  lastUsed: string;
-}
-
 export interface AgentToken {
   id: string;
   name: string;
   prefix: string;
   scopes: string[];
-  lastUsed: string;
+  createdAt: string;
+  lastUsedAt: string | null;
 }
 
 export interface SessionItem {
   id: string;
   device: string;
   location: string;
-  lastActive: string;
+  lastActiveAt: string;
+  expiresAt: string;
   isCurrent: boolean;
+}
+
+export interface InviteItem {
+  id: string;
+  codePrefix: string;
+  label: string | null;
+  createdAt: string;
+  expiresAt: string;
+  usedAt: string | null;
+  revokedAt: string | null;
+  status: 'pending' | 'used' | 'revoked' | 'expired';
+}
+
+export interface HouseholdMember {
+  id: string;
+  username: string;
+  displayName: string;
+  email: string;
+  role: UserRole;
+  isActive: boolean;
+  createdAt: string;
+  lastActiveAt: string | null;
+  activeSessionCount: number;
+  activeTokenCount: number;
 }
 
 export interface TaskItem {

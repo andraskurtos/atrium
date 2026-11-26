@@ -1,8 +1,18 @@
+using System.Text;
+using System.Threading.RateLimiting;
+using Atrium.Api.Auth;
 using Atrium.Api.Data;
+using Atrium.Api.Data.Entities;
+using Atrium.Api.Endpoints;
 using Atrium.Api.Health;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
+using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,21 +23,139 @@ if (string.IsNullOrWhiteSpace(connectionString))
         "Missing required database connection string 'ConnectionStrings:DefaultConnection'.");
 }
 
+var authOptions = new AuthOptions();
+builder.Configuration.GetSection(AuthOptions.SectionName).Bind(authOptions);
+authOptions.ValidateForEnvironment(builder.Environment.IsDevelopment());
+builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
+
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(connectionString));
 
 builder.Services.AddScoped<IDatabaseHealthCheck, EfDatabaseHealthCheck>();
+builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
+builder.Services.AddSingleton<JwtTokenService>();
+
+builder.Services
+    .AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = AuthConstants.CompositeScheme;
+        options.DefaultChallengeScheme = AuthConstants.CompositeScheme;
+    })
+    .AddPolicyScheme(AuthConstants.CompositeScheme, "JWT or Atrium PAT", options =>
+    {
+        options.ForwardDefaultSelector = context =>
+        {
+            var authHeader = context.Request.Headers.Authorization.ToString();
+            if (authHeader.StartsWith("Bearer " + AuthConstants.PatPrefixTag, StringComparison.OrdinalIgnoreCase))
+            {
+                return AuthConstants.PatScheme;
+            }
+
+            return AuthConstants.JwtScheme;
+        };
+    })
+    .AddJwtBearer(AuthConstants.JwtScheme, options =>
+    {
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = authOptions.Issuer,
+            ValidateAudience = true,
+            ValidAudience = authOptions.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(authOptions.JwtSigningKey)),
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30),
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var principal = context.Principal;
+                var userId = principal?.GetUserId();
+                var sessionId = principal?.GetSessionId();
+                if (userId is null || sessionId is null)
+                {
+                    context.Fail("Missing required session claims.");
+                    return;
+                }
+
+                var db = context.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var now = DateTimeOffset.UtcNow;
+                var session = await db.RefreshSessions
+                    .AsNoTracking()
+                    .Include(s => s.User)
+                    .FirstOrDefaultAsync(
+                        s => s.Id == sessionId.Value && s.UserId == userId.Value,
+                        context.HttpContext.RequestAborted);
+
+                if (session is null || session.RevokedAt is not null || session.ExpiresAt <= now || !session.User.IsActive)
+                {
+                    context.Fail("Session has been revoked or account is inactive.");
+                }
+            },
+        };
+    })
+    .AddScheme<AuthenticationSchemeOptions, PatAuthenticationHandler>(AuthConstants.PatScheme, null);
+
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy(AuthConstants.HumanJwtOnlyPolicy, policy =>
+    {
+        policy.AddAuthenticationSchemes(AuthConstants.JwtScheme);
+        policy.RequireAuthenticatedUser();
+        policy.RequireClaim(AuthConstants.AuthTypeClaim, AuthConstants.JwtAuthType);
+    })
+    .AddPolicy(AuthConstants.OwnerOnlyPolicy, policy =>
+    {
+        policy.AddAuthenticationSchemes(AuthConstants.JwtScheme);
+        policy.RequireAuthenticatedUser();
+        policy.RequireClaim(AuthConstants.AuthTypeClaim, AuthConstants.JwtAuthType);
+        policy.RequireRole(AuthConstants.OwnerRole);
+    })
+    .AddPolicy(AuthConstants.HumanOrAgentPolicy, policy =>
+    {
+        policy.AddAuthenticationSchemes(AuthConstants.CompositeScheme);
+        policy.RequireAuthenticatedUser();
+    });
+
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(AuthConstants.AuthRateLimitPolicy, httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: TokenCrypto.GetClientIp(httpContext),
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+});
 
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    options.KnownIPNetworks.Clear();
-    options.KnownProxies.Clear();
+    if (builder.Configuration.GetValue("Atrium:TrustForwardedHeaders", false))
+    {
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+    }
 });
 
 var app = builder.Build();
 
+if (builder.Configuration.GetValue("Atrium:Database:AutoMigrate", true))
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+}
+
 app.UseForwardedHeaders();
+app.UseRateLimiter();
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.MapGet("/api/health", async (IDatabaseHealthCheck dbHealth, ILogger<Program> logger, CancellationToken ct) =>
 {
@@ -52,6 +180,11 @@ app.MapGet("/api/health", async (IDatabaseHealthCheck dbHealth, ILogger<Program>
 
     return Results.Ok(new { status = "ok", database = "connected", timestamp });
 });
+
+app.MapAuthEndpoints();
+app.MapAccountEndpoints();
+app.MapTokenEndpoints();
+app.MapHouseholdEndpoints();
 
 var configuredDistPath = builder.Configuration["Atrium:WebDistPath"];
 var resolvedDistPath = !string.IsNullOrWhiteSpace(configuredDistPath)

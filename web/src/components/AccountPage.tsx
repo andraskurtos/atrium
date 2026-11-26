@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { getInitials } from '../data/mockData';
+import { ApiError, formatRelativeTime, type CreateInvitePayload } from '../lib/authClient';
 import type {
   AccountPreferences,
   AgentToken,
   ApiState,
-  PasskeyItem,
+  HouseholdMember,
+  InviteItem,
   SessionItem,
   ThemePreference,
   UserProfile,
@@ -27,24 +29,35 @@ interface AccountPageProps {
   profile: UserProfile;
   preferences: AccountPreferences;
   theme: ThemePreference;
-  passkeys: PasskeyItem[];
   agentTokens: AgentToken[];
   sessions: SessionItem[];
+  invites: InviteItem[];
+  members: HouseholdMember[];
   apiState: ApiState;
   apiLabel: string;
   lastChecked: string;
   onBackToDashboard: () => void;
-  onUpdateProfile: (next: UserProfile) => void;
-  onUpdatePreferences: (next: AccountPreferences) => void;
+  onUpdateProfile: (next: {
+    displayName: string;
+    username: string;
+    email: string;
+    bio: string;
+    timezone: string;
+    avatarDataUrl: string | null;
+  }) => Promise<void>;
+  onUpdatePreferences: (next: AccountPreferences) => Promise<void>;
   onSetTheme: (theme: ThemePreference) => void;
-  onAddPasskey: (deviceName: string) => void;
-  onRevokePasskey: (id: string) => void;
-  onCreateToken: (name: string, scopes: string[]) => string;
-  onRevokeToken: (id: string) => void;
-  onRevokeSession: (id: string) => void;
-  onSignOutOtherSessions: () => void;
+  onChangePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  onCreateToken: (name: string, scopes: string[]) => Promise<string>;
+  onRevokeToken: (id: string) => Promise<void>;
+  onRevokeSession: (id: string) => Promise<void>;
+  onSignOutOtherSessions: () => Promise<void>;
+  onCreateInvite: (label: string | null, expiresInDays: number) => Promise<CreateInvitePayload>;
+  onRevokeInvite: (id: string) => Promise<void>;
+  onToggleMemberActive: (id: string, isActive: boolean) => Promise<void>;
+  onDeleteMember: (id: string) => Promise<void>;
   onExportData: () => void;
-  onResetWorkspace: () => void;
+  onSignOut: () => void;
   onRefreshHealth: () => void;
   onAnnounce: (message: string) => void;
 }
@@ -76,9 +89,10 @@ export function AccountPage({
   profile,
   preferences,
   theme,
-  passkeys,
   agentTokens,
   sessions,
+  invites,
+  members,
   apiState,
   apiLabel,
   lastChecked,
@@ -86,17 +100,22 @@ export function AccountPage({
   onUpdateProfile,
   onUpdatePreferences,
   onSetTheme,
-  onAddPasskey,
-  onRevokePasskey,
+  onChangePassword,
   onCreateToken,
   onRevokeToken,
   onRevokeSession,
   onSignOutOtherSessions,
+  onCreateInvite,
+  onRevokeInvite,
+  onToggleMemberActive,
+  onDeleteMember,
   onExportData,
-  onResetWorkspace,
+  onSignOut,
   onRefreshHealth,
   onAnnounce,
 }: AccountPageProps) {
+  const isOwner = profile.role === 'Owner';
+
   // Profile draft state
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [username, setUsername] = useState(profile.username);
@@ -105,9 +124,9 @@ export function AccountPage({
   const [timezone, setTimezone] = useState(profile.timezone);
   const [avatarError, setAvatarError] = useState('');
   const [profileError, setProfileError] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Sync draft when profile resets externally
   useEffect(() => {
     setDisplayName(profile.displayName);
     setUsername(profile.username);
@@ -122,10 +141,7 @@ export function AccountPage({
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPasswords, setShowPasswords] = useState(false);
   const [passwordError, setPasswordError] = useState('');
-
-  // Passkey inline form
-  const [showPasskeyForm, setShowPasskeyForm] = useState(false);
-  const [newPasskeyName, setNewPasskeyName] = useState('');
+  const [savingPassword, setSavingPassword] = useState(false);
 
   // Scoped MCP token inline form
   const [showTokenForm, setShowTokenForm] = useState(false);
@@ -135,22 +151,14 @@ export function AccountPage({
     'calendar:propose',
   ]);
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
+  const [tokenError, setTokenError] = useState('');
 
-  // Destructive confirmation dialog
-  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
-  const [deletePhrase, setDeletePhrase] = useState('');
-  const deleteDialogRef = useRef<HTMLDialogElement | null>(null);
-
-  useEffect(() => {
-    const dialog = deleteDialogRef.current;
-    if (!dialog) return;
-    if (confirmDeleteOpen && !dialog.open) {
-      setDeletePhrase('');
-      dialog.showModal();
-    } else if (!confirmDeleteOpen && dialog.open) {
-      dialog.close();
-    }
-  }, [confirmDeleteOpen]);
+  // Household invites inline form (Owner-only)
+  const [showInviteForm, setShowInviteForm] = useState(false);
+  const [inviteLabel, setInviteLabel] = useState('');
+  const [inviteDays, setInviteDays] = useState(7);
+  const [createdInvite, setCreatedInvite] = useState<CreateInvitePayload | null>(null);
+  const [householdError, setHouseholdError] = useState('');
 
   const timezoneOptions = COMMON_TIMEZONES.includes(timezone)
     ? COMMON_TIMEZONES
@@ -191,29 +199,45 @@ export function AccountPage({
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       if (typeof reader.result === 'string') {
-        onUpdateProfile({
-          ...profile,
-          avatarDataUrl: reader.result,
-        });
-        onAnnounce('Profile photo updated');
+        try {
+          await onUpdateProfile({
+            displayName: profile.displayName,
+            username: profile.username,
+            email: profile.email,
+            bio: profile.bio,
+            timezone: profile.timezone,
+            avatarDataUrl: reader.result,
+          });
+          onAnnounce('Profile photo updated');
+        } catch (err: unknown) {
+          setAvatarError(err instanceof ApiError ? err.message : 'Could not upload avatar.');
+        }
       }
     };
     reader.readAsDataURL(file);
     event.target.value = '';
   };
 
-  const handleRemoveAvatar = () => {
+  const handleRemoveAvatar = async () => {
     setAvatarError('');
-    onUpdateProfile({
-      ...profile,
-      avatarDataUrl: null,
-    });
-    onAnnounce('Profile photo removed');
+    try {
+      await onUpdateProfile({
+        displayName: profile.displayName,
+        username: profile.username,
+        email: profile.email,
+        bio: profile.bio,
+        timezone: profile.timezone,
+        avatarDataUrl: null,
+      });
+      onAnnounce('Profile photo removed');
+    } catch (err: unknown) {
+      setAvatarError(err instanceof ApiError ? err.message : 'Could not remove avatar.');
+    }
   };
 
-  const handleProfileSubmit = (event: FormEvent) => {
+  const handleProfileSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setProfileError('');
 
@@ -231,18 +255,25 @@ export function AccountPage({
       return;
     }
 
-    onUpdateProfile({
-      ...profile,
-      displayName: displayName.trim(),
-      username: cleanUsername,
-      email: cleanEmail,
-      bio: bio.trim(),
-      timezone,
-    });
-    onAnnounce('Account profile saved');
+    setSavingProfile(true);
+    try {
+      await onUpdateProfile({
+        displayName: displayName.trim(),
+        username: cleanUsername,
+        email: cleanEmail,
+        bio: bio.trim(),
+        timezone,
+        avatarDataUrl: profile.avatarDataUrl,
+      });
+      onAnnounce('Account profile saved');
+    } catch (err: unknown) {
+      setProfileError(err instanceof ApiError ? err.message : 'Could not save profile.');
+    } finally {
+      setSavingProfile(false);
+    }
   };
 
-  const handlePasswordSubmit = (event: FormEvent) => {
+  const handlePasswordSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setPasswordError('');
 
@@ -261,23 +292,18 @@ export function AccountPage({
       return;
     }
 
-    onUpdateProfile({
-      ...profile,
-      passwordUpdatedAt: 'Just now',
-    });
-    setCurrentPassword('');
-    setNewPassword('');
-    setConfirmPassword('');
-    onAnnounce('Password updated');
-  };
-
-  const handlePasskeySubmit = (event: FormEvent) => {
-    event.preventDefault();
-    const trimmed = newPasskeyName.trim();
-    if (!trimmed) return;
-    onAddPasskey(trimmed);
-    setNewPasskeyName('');
-    setShowPasskeyForm(false);
+    setSavingPassword(true);
+    try {
+      await onChangePassword(currentPassword, newPassword);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      onAnnounce('Password updated and other sessions signed out');
+    } catch (err: unknown) {
+      setPasswordError(err instanceof ApiError ? err.message : 'Could not update password.');
+    } finally {
+      setSavingPassword(false);
+    }
   };
 
   const toggleScope = (scope: string) => {
@@ -288,31 +314,41 @@ export function AccountPage({
     );
   };
 
-  const handleCreateTokenSubmit = (event: FormEvent) => {
+  const handleCreateTokenSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    setTokenError('');
     const trimmed = newTokenName.trim();
     if (!trimmed || selectedScopes.length === 0) return;
-    const secret = onCreateToken(trimmed, selectedScopes);
-    setCreatedSecret(secret);
-    setNewTokenName('');
-    setShowTokenForm(false);
-  };
-
-  const handleCopySecret = async () => {
-    if (!createdSecret) return;
     try {
-      await navigator.clipboard.writeText(createdSecret);
-      onAnnounce('Scoped token copied to clipboard');
-    } catch {
-      onAnnounce('Copy manually from the token box');
+      const secret = await onCreateToken(trimmed, selectedScopes);
+      setCreatedSecret(secret);
+      setNewTokenName('');
+      setShowTokenForm(false);
+    } catch (err: unknown) {
+      setTokenError(err instanceof ApiError ? err.message : 'Could not create token.');
     }
   };
 
-  const handleConfirmDelete = (event: FormEvent) => {
+  const handleCreateInviteSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (deletePhrase.trim().toLowerCase() !== 'reset atrium') return;
-    setConfirmDeleteOpen(false);
-    onResetWorkspace();
+    setHouseholdError('');
+    try {
+      const result = await onCreateInvite(inviteLabel.trim() || null, inviteDays);
+      setCreatedInvite(result);
+      setInviteLabel('');
+      setShowInviteForm(false);
+    } catch (err: unknown) {
+      setHouseholdError(err instanceof ApiError ? err.message : 'Could not create invite.');
+    }
+  };
+
+  const handleCopyText = async (value: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      onAnnounce(`${label} copied to clipboard`);
+    } catch {
+      onAnnounce(`Copy ${label.toLowerCase()} manually from the box`);
+    }
   };
 
   const otherSessionCount = sessions.filter((s) => !s.isCurrent).length;
@@ -335,8 +371,8 @@ export function AccountPage({
           <p className="kicker">ATRIUM · ACCOUNT &amp; SECURITY</p>
           <h1 className="page-title">Account &amp; Settings</h1>
           <p className="stream-summary">
-            Manage your profile identity, password, passkeys, workspace preferences,
-            and scoped MCP agent credentials.
+            Manage your profile identity, password, workspace preferences, active
+            sessions, and scoped MCP agent credentials.
           </p>
         </header>
 
@@ -346,7 +382,7 @@ export function AccountPage({
             <h2 id="profile-heading" className="card-title">
               Profile &amp; Identity
             </h2>
-            <span className="pill-accent">Owner</span>
+            <span className="pill-accent">{profile.role}</span>
           </div>
 
           <div className="avatar-row">
@@ -361,7 +397,7 @@ export function AccountPage({
             <div className="avatar-controls">
               <p className="row-title">Profile picture</p>
               <p className="meta-text">
-                Stored locally in your Atrium instance. PNG, JPG, or WebP up to 2 MB.
+                Stored in your Atrium PostgreSQL instance. PNG, JPG, or WebP up to 2 MB.
               </p>
               <div className="avatar-actions">
                 <input
@@ -502,9 +538,9 @@ export function AccountPage({
                 id="account-save-profile-btn"
                 type="submit"
                 className="btn btn-primary"
-                disabled={!isProfileDirty}
+                disabled={!isProfileDirty || savingProfile}
               >
-                Save Profile
+                {savingProfile ? 'Saving…' : 'Save Profile'}
               </button>
             </div>
           </form>
@@ -519,7 +555,7 @@ export function AccountPage({
               </h2>
             </div>
             <span className="meta-text mono-num">
-              Updated {profile.passwordUpdatedAt}
+              Updated {formatRelativeTime(profile.passwordUpdatedAt)}
             </span>
           </div>
 
@@ -617,14 +653,15 @@ export function AccountPage({
 
             <div className="form-footer">
               <span className="meta-text">
-                Use a passphrase or password manager for local vault security.
+                Changing your password signs out all other active sessions.
               </span>
               <button
                 id="account-update-password-btn"
                 type="submit"
                 className="btn btn-primary"
+                disabled={savingPassword}
               >
-                Update Password
+                {savingPassword ? 'Updating…' : 'Update Password'}
               </button>
             </div>
           </form>
@@ -635,71 +672,201 @@ export function AccountPage({
                 <ShieldIcon className="meta-icon" />
                 <h3 className="row-title">Passkeys (WebAuthn)</h3>
               </div>
+              <span className="pill-neutral">Coming next</span>
+            </div>
+            <p className="meta-text">
+              Hardware and platform WebAuthn passkeys will be enabled in the dedicated
+              Passkeys follow-up release.
+            </p>
+          </div>
+        </section>
+
+        {/* 3. Household Invites & Members (Owner-only) */}
+        {isOwner && (
+          <section className="card" aria-labelledby="household-heading">
+            <div className="card-header">
+              <div className="card-header-group">
+                <h2 id="household-heading" className="card-title">
+                  Household Invites &amp; Members
+                </h2>
+                <span className="pill-accent">Owner Only</span>
+              </div>
               <button
-                id="account-add-passkey-toggle"
+                id="account-create-invite-toggle"
                 type="button"
                 className="btn btn-secondary btn-xs"
-                onClick={() => setShowPasskeyForm((prev) => !prev)}
-                aria-expanded={showPasskeyForm}
+                onClick={() => setShowInviteForm((prev) => !prev)}
+                aria-expanded={showInviteForm}
               >
                 <PlusIcon />
-                <span>{showPasskeyForm ? 'Cancel' : 'Register Passkey'}</span>
+                <span>{showInviteForm ? 'Cancel' : 'New Invite'}</span>
               </button>
             </div>
 
-            {showPasskeyForm && (
+            {householdError && (
+              <p className="field-error" role="alert">
+                {householdError}
+              </p>
+            )}
+
+            {createdInvite && (
+              <div className="card-soft token-reveal-box" role="status">
+                <div className="token-reveal-header">
+                  <span className="status-inline">
+                    <span className="status-dot" data-state="ok" aria-hidden="true" />
+                    <span className="row-title">One-time invite created — copy now</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-icon-sm"
+                    onClick={() => setCreatedInvite(null)}
+                    aria-label="Dismiss invite banner"
+                  >
+                    <CloseIcon />
+                  </button>
+                </div>
+                <div className="token-reveal-value">
+                  <code className="mono-num">
+                    {`${window.location.origin}${createdInvite.invitePath}`}
+                  </code>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-xs"
+                    onClick={() =>
+                      handleCopyText(
+                        `${window.location.origin}${createdInvite.invitePath}`,
+                        'Invite link',
+                      )
+                    }
+                  >
+                    <CopyIcon />
+                    <span>Copy Link</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {showInviteForm && (
               <form
-                className="card-soft inline-create-row"
-                onSubmit={handlePasskeySubmit}
+                className="card-soft token-create-form"
+                onSubmit={handleCreateInviteSubmit}
               >
-                <input
-                  id="account-passkey-name-input"
-                  type="text"
-                  className="input"
-                  value={newPasskeyName}
-                  onChange={(e) => setNewPasskeyName(e.target.value)}
-                  placeholder="Device label (e.g. YubiKey 5C)"
-                  required
-                />
-                <button
-                  id="account-passkey-submit"
-                  type="submit"
-                  className="btn btn-primary btn-compact"
-                >
-                  Add
-                </button>
+                <div className="form-grid-2">
+                  <div className="form-field">
+                    <label className="field-label" htmlFor="invite-label-input">
+                      Label <span className="text-faint">(optional)</span>
+                    </label>
+                    <input
+                      id="invite-label-input"
+                      type="text"
+                      className="input"
+                      value={inviteLabel}
+                      onChange={(e) => setInviteLabel(e.target.value)}
+                      placeholder="e.g. Partner's laptop"
+                      maxLength={80}
+                    />
+                  </div>
+                  <div className="form-field">
+                    <label className="field-label" htmlFor="invite-days-select">
+                      Expires in
+                    </label>
+                    <select
+                      id="invite-days-select"
+                      className="input"
+                      value={inviteDays}
+                      onChange={(e) => setInviteDays(Number(e.target.value))}
+                    >
+                      <option value={1}>1 day</option>
+                      <option value={7}>7 days</option>
+                      <option value={14}>14 days</option>
+                      <option value={30}>30 days</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="form-footer">
+                  <span className="meta-text">
+                    Invites always create a household Member account.
+                  </span>
+                  <button type="submit" className="btn btn-primary btn-compact">
+                    Generate Invite
+                  </button>
+                </div>
               </form>
             )}
 
             <div className="stack-sm">
-              {passkeys.map((pk) => (
-                <div key={pk.id} className="card-soft setting-item-row">
+              <p className="field-label">Household Members ({members.length})</p>
+              {members.map((member) => (
+                <div key={member.id} className="card-soft setting-item-row">
                   <div className="setting-item-body">
-                    <span className="row-title">{pk.deviceName}</span>
+                    <div className="card-header-group">
+                      <span className="row-title">{member.displayName}</span>
+                      <span className="meta-text mono-num">@{member.username}</span>
+                      <span className="pill-neutral">{member.role}</span>
+                      {!member.isActive && <span className="pill-neutral">Deactivated</span>}
+                    </div>
                     <span className="meta-text">
-                      Added {pk.addedAt} · Last used {pk.lastUsed}
+                      {member.email} · {member.activeSessionCount} sessions ·{' '}
+                      {member.activeTokenCount} tokens
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-xs"
-                    onClick={() => onRevokePasskey(pk.id)}
-                    disabled={passkeys.length <= 1}
-                    title={
-                      passkeys.length <= 1
-                        ? 'Keep at least one passkey registered'
-                        : 'Revoke passkey'
-                    }
-                  >
-                    Revoke
-                  </button>
+                  {member.role !== 'Owner' && (
+                    <div className="avatar-actions">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => onToggleMemberActive(member.id, !member.isActive)}
+                      >
+                        {member.isActive ? 'Deactivate' : 'Reactivate'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-danger-outline btn-xs"
+                        onClick={() => onDeleteMember(member.id)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
-          </div>
-        </section>
 
-        {/* 3. Preferences & Notifications */}
+            {invites.length > 0 && (
+              <div className="subsection-divider stack-sm">
+                <p className="field-label">Invites ({invites.length})</p>
+                {invites.map((invite) => (
+                  <div key={invite.id} className="card-soft setting-item-row">
+                    <div className="setting-item-body">
+                      <div className="card-header-group">
+                        <span className="row-title">
+                          {invite.label || 'Household invite'}
+                        </span>
+                        <span className="meta-text mono-num">{invite.codePrefix}••••</span>
+                        <span className="pill-neutral">{invite.status}</span>
+                      </div>
+                      <span className="meta-text">
+                        Created {formatRelativeTime(invite.createdAt)} · Expires{' '}
+                        {new Date(invite.expiresAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                    {invite.status === 'pending' && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => onRevokeInvite(invite.id)}
+                      >
+                        Revoke
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* 4. Preferences & Notifications */}
         <section className="card" aria-labelledby="preferences-heading">
           <div className="card-header">
             <h2 id="preferences-heading" className="card-title">
@@ -733,6 +900,7 @@ export function AccountPage({
                     }`}
                     onClick={() => {
                       onSetTheme(option.id);
+                      void onUpdatePreferences({ ...preferences, theme: option.id });
                       onAnnounce(`Theme set to ${option.label}`);
                     }}
                   >
@@ -753,7 +921,7 @@ export function AccountPage({
                   value={preferences.weekStartsOn}
                   onChange={(e) => {
                     const value = e.target.value as 'monday' | 'sunday';
-                    onUpdatePreferences({ ...preferences, weekStartsOn: value });
+                    void onUpdatePreferences({ ...preferences, weekStartsOn: value });
                     onAnnounce(
                       `Calendar week now starts on ${
                         value === 'monday' ? 'Monday' : 'Sunday'
@@ -776,7 +944,7 @@ export function AccountPage({
                   value={preferences.timeFormat}
                   onChange={(e) => {
                     const value = e.target.value as '24h' | '12h';
-                    onUpdatePreferences({ ...preferences, timeFormat: value });
+                    void onUpdatePreferences({ ...preferences, timeFormat: value });
                     onAnnounce(`Time format set to ${value}`);
                   }}
                 >
@@ -795,7 +963,7 @@ export function AccountPage({
                     className="native-checkbox"
                     checked={preferences.requireAgentApproval}
                     onChange={(e) =>
-                      onUpdatePreferences({
+                      void onUpdatePreferences({
                         ...preferences,
                         requireAgentApproval: e.target.checked,
                       })
@@ -821,7 +989,7 @@ export function AccountPage({
                     className="native-checkbox"
                     checked={preferences.morningBrief}
                     onChange={(e) =>
-                      onUpdatePreferences({
+                      void onUpdatePreferences({
                         ...preferences,
                         morningBrief: e.target.checked,
                       })
@@ -845,7 +1013,7 @@ export function AccountPage({
                     className="native-checkbox"
                     checked={preferences.eventReminders}
                     onChange={(e) =>
-                      onUpdatePreferences({
+                      void onUpdatePreferences({
                         ...preferences,
                         eventReminders: e.target.checked,
                       })
@@ -866,7 +1034,7 @@ export function AccountPage({
           </div>
         </section>
 
-        {/* 4. Scoped MCP Agent Tokens */}
+        {/* 5. Scoped MCP Agent Tokens */}
         <section className="card" aria-labelledby="tokens-heading">
           <div className="card-header">
             <div className="card-header-group">
@@ -886,6 +1054,12 @@ export function AccountPage({
               <span>{showTokenForm ? 'Cancel' : 'Create Token'}</span>
             </button>
           </div>
+
+          {tokenError && (
+            <p className="field-error" role="alert">
+              {tokenError}
+            </p>
+          )}
 
           {createdSecret && (
             <div className="card-soft token-reveal-box" role="status">
@@ -908,7 +1082,7 @@ export function AccountPage({
                 <button
                   type="button"
                   className="btn btn-secondary btn-xs"
-                  onClick={handleCopySecret}
+                  onClick={() => handleCopyText(createdSecret, 'Scoped token')}
                 >
                   <CopyIcon />
                   <span>Copy</span>
@@ -959,7 +1133,7 @@ export function AccountPage({
 
               <div className="form-footer">
                 <span className="meta-text">
-                  Tokens are least-privilege and revocable at any time.
+                  Tokens are hashed with SHA-256 and revocable at any time.
                 </span>
                 <button
                   id="account-token-submit"
@@ -985,7 +1159,7 @@ export function AccountPage({
                     <div className="card-header-group">
                       <KeyIcon className="meta-icon" />
                       <span className="row-title">{token.name}</span>
-                      <span className="meta-text mono-num">{token.prefix}</span>
+                      <span className="meta-text mono-num">{token.prefix}••••</span>
                     </div>
                     <div className="token-scope-list">
                       {token.scopes.map((scope) => (
@@ -993,13 +1167,15 @@ export function AccountPage({
                           {scope}
                         </span>
                       ))}
-                      <span className="meta-text">· Last used {token.lastUsed}</span>
+                      <span className="meta-text">
+                        · Last used {formatRelativeTime(token.lastUsedAt)}
+                      </span>
                     </div>
                   </div>
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs"
-                    onClick={() => onRevokeToken(token.id)}
+                    onClick={() => void onRevokeToken(token.id)}
                   >
                     Revoke
                   </button>
@@ -1009,50 +1185,31 @@ export function AccountPage({
           )}
         </section>
 
-        {/* 5. Data & Danger Zone */}
-        <section className="card" aria-labelledby="danger-heading">
+        {/* 6. Data Export */}
+        <section className="card" aria-labelledby="export-heading">
           <div className="card-header">
-            <h2 id="danger-heading" className="card-title">
-              Data &amp; Danger Zone
+            <h2 id="export-heading" className="card-title">
+              Data Export
             </h2>
           </div>
 
-          <div className="stack-sm">
-            <div className="card-soft setting-item-row">
-              <div className="setting-item-body">
-                <span className="row-title">Export personal archive</span>
-                <span className="meta-text">
-                  Download your profile, tasks, calendar events, and notes as JSON.
-                </span>
-              </div>
-              <button
-                id="account-export-btn"
-                type="button"
-                className="btn btn-secondary btn-compact"
-                onClick={onExportData}
-              >
-                <DownloadIcon />
-                <span>Export JSON</span>
-              </button>
+          <div className="card-soft setting-item-row">
+            <div className="setting-item-body">
+              <span className="row-title">Export personal archive</span>
+              <span className="meta-text">
+                Download your profile, preferences, tasks, calendar events, and notes as
+                JSON.
+              </span>
             </div>
-
-            <div className="card-soft setting-item-row">
-              <div className="setting-item-body">
-                <span className="row-title">Reset local workspace data</span>
-                <span className="meta-text">
-                  Clears locally stored profile overrides and restores default Atrium
-                  demo records.
-                </span>
-              </div>
-              <button
-                id="account-reset-btn"
-                type="button"
-                className="btn btn-danger-outline btn-compact"
-                onClick={() => setConfirmDeleteOpen(true)}
-              >
-                Reset Account
-              </button>
-            </div>
+            <button
+              id="account-export-btn"
+              type="button"
+              className="btn btn-secondary btn-compact"
+              onClick={onExportData}
+            >
+              <DownloadIcon />
+              <span>Export JSON</span>
+            </button>
           </div>
         </section>
       </main>
@@ -1069,13 +1226,17 @@ export function AccountPage({
             </div>
             <div className="account-summary-meta">
               <h2 id="account-card-heading" className="card-title">
-                {profile.displayName || 'Atrium Owner'}
+                {profile.displayName || profile.username}
               </h2>
               <p className="meta-text mono-num">@{profile.username}</p>
             </div>
           </div>
 
           <dl className="account-meta-list">
+            <div className="account-meta-row">
+              <dt className="meta-text">Role</dt>
+              <dd className="account-meta-val">{profile.role}</dd>
+            </div>
             <div className="account-meta-row">
               <dt className="meta-text">Email</dt>
               <dd className="account-meta-val">{profile.email}</dd>
@@ -1085,14 +1246,19 @@ export function AccountPage({
               <dd className="account-meta-val mono-num">{profile.timezone}</dd>
             </div>
             <div className="account-meta-row">
-              <dt className="meta-text">Instance</dt>
-              <dd className="account-meta-val">Self-Hosted Local</dd>
-            </div>
-            <div className="account-meta-row">
               <dt className="meta-text">MCP Tokens</dt>
               <dd className="account-meta-val mono-num">{agentTokens.length} active</dd>
             </div>
           </dl>
+
+          <button
+            id="account-signout-btn"
+            type="button"
+            className="btn btn-secondary btn-compact"
+            onClick={onSignOut}
+          >
+            Sign out of this device
+          </button>
         </section>
 
         <section className="card" aria-labelledby="sessions-heading">
@@ -1105,7 +1271,7 @@ export function AccountPage({
                 id="account-signout-others-btn"
                 type="button"
                 className="btn btn-ghost btn-xs"
-                onClick={onSignOutOtherSessions}
+                onClick={() => void onSignOutOtherSessions()}
               >
                 Sign out others
               </button>
@@ -1127,13 +1293,13 @@ export function AccountPage({
                 </div>
                 <div className="session-bottom">
                   <span className="meta-text">
-                    {session.location} · {session.lastActive}
+                    {session.location} · {formatRelativeTime(session.lastActiveAt)}
                   </span>
                   {!session.isCurrent && (
                     <button
                       type="button"
                       className="btn btn-ghost btn-xs"
-                      onClick={() => onRevokeSession(session.id)}
+                      onClick={() => void onRevokeSession(session.id)}
                     >
                       Revoke
                     </button>
@@ -1151,74 +1317,6 @@ export function AccountPage({
           onRefresh={onRefreshHealth}
         />
       </aside>
-
-      <dialog
-        ref={deleteDialogRef}
-        className="atrium-dialog"
-        aria-labelledby="reset-dialog-title"
-        onCancel={(e) => {
-          e.preventDefault();
-          setConfirmDeleteOpen(false);
-        }}
-        onClick={(e) => {
-          if (e.target === deleteDialogRef.current) {
-            setConfirmDeleteOpen(false);
-          }
-        }}
-      >
-        <div className="dialog-header">
-          <div>
-            <p className="kicker">DANGER ZONE</p>
-            <h2 id="reset-dialog-title" className="dialog-title">
-              Reset local Atrium account data?
-            </h2>
-          </div>
-          <button
-            type="button"
-            className="btn btn-ghost btn-icon-sm"
-            onClick={() => setConfirmDeleteOpen(false)}
-            aria-label="Close confirmation dialog"
-          >
-            <CloseIcon />
-          </button>
-        </div>
-
-        <form className="settings-form" onSubmit={handleConfirmDelete}>
-          <p className="meta-text">
-            This clears your locally saved profile photo, custom settings, and
-            restores initial mock items. Type{' '}
-            <strong className="mono-num">reset atrium</strong> to confirm.
-          </p>
-
-          <input
-            id="account-reset-confirm-input"
-            type="text"
-            className="input mono-num"
-            value={deletePhrase}
-            onChange={(e) => setDeletePhrase(e.target.value)}
-            placeholder="reset atrium"
-            autoComplete="off"
-          />
-
-          <div className="dialog-actions-end">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => setConfirmDeleteOpen(false)}
-            >
-              Cancel
-            </button>
-            <button
-              id="account-reset-confirm-btn"
-              type="submit"
-              className="btn btn-danger-solid"
-              disabled={deletePhrase.trim().toLowerCase() !== 'reset atrium'}
-            >
-              Reset Local Data
-            </button>
-          </div>
-        </form>
-      </dialog>
     </div>
   );
 }
