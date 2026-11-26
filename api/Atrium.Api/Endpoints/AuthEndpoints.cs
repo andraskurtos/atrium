@@ -209,8 +209,8 @@ public static class AuthEndpoints
             user.PasswordHash = passwordHasher.HashPassword(user, request.Password);
 
             var prefs = CreateDefaultPreferences(user.Id);
-            invite.UsedAt = now;
-            invite.UsedByUserId = user.Id;
+
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
 
             db.Users.Add(user);
             db.UserPreferences.Add(prefs);
@@ -224,8 +224,25 @@ public static class AuthEndpoints
             }
             catch (DbUpdateException)
             {
-                return Results.Conflict(new { error = "Username, email, or invite code could not be claimed." });
+                await tx.RollbackAsync(ct);
+                return Results.Conflict(new { error = "Username or email is already in use." });
             }
+
+            var claimed = await db.Invites
+                .Where(i => i.Id == invite.Id && i.UsedAt == null && i.RevokedAt == null)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(i => i.UsedAt, now)
+                        .SetProperty(i => i.UsedByUserId, user.Id),
+                    ct);
+
+            if (claimed != 1)
+            {
+                await tx.RollbackAsync(ct);
+                return Results.Conflict(new { error = "This invite code has already been used or revoked." });
+            }
+
+            await tx.CommitAsync(ct);
 
             var (accessToken, accessExpiresAt) = jwtService.CreateAccessToken(user, session.Id);
             RefreshCookieHelper.AppendRefreshCookie(httpContext, rawRefresh, session.ExpiresAt);
@@ -312,11 +329,29 @@ public static class AuthEndpoints
                 ExpiresAt = nextExpiry,
             };
 
-            existing.RevokedAt = now;
-            existing.ReplacedBySessionId = nextSession.Id;
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+            var rotated = await db.RefreshSessions
+                .Where(s => s.Id == existing.Id && s.RevokedAt == null)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(s => s.RevokedAt, now)
+                        .SetProperty(s => s.ReplacedBySessionId, nextSession.Id),
+                    ct);
+
+            if (rotated != 1)
+            {
+                await db.RefreshSessions
+                    .Where(s => s.FamilyId == existing.FamilyId && s.RevokedAt == null)
+                    .ExecuteUpdateAsync(setters => setters.SetProperty(s => s.RevokedAt, now), ct);
+                await tx.CommitAsync(ct);
+                RefreshCookieHelper.ClearRefreshCookie(httpContext);
+                return Results.Json(new { error = "Session invalidated due to token reuse." }, statusCode: StatusCodes.Status401Unauthorized);
+            }
 
             db.RefreshSessions.Add(nextSession);
             await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
 
             var (accessToken, accessExpiresAt) = jwtService.CreateAccessToken(existing.User, nextSession.Id);
             RefreshCookieHelper.AppendRefreshCookie(httpContext, nextRawToken, nextSession.ExpiresAt);

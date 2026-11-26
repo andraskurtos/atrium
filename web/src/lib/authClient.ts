@@ -228,10 +228,14 @@ export async function changePassword(payload: {
   currentPassword: string;
   newPassword: string;
 }): Promise<{ passwordUpdatedAt: string }> {
-  return apiFetch<{ passwordUpdatedAt: string }>('/api/account/password', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
+  return apiFetch<{ passwordUpdatedAt: string }>(
+    '/api/account/password',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    { retryOn401: false },
+  );
 }
 
 export async function listSessions(): Promise<SessionItem[]> {

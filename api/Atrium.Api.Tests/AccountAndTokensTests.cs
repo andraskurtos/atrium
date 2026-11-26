@@ -70,12 +70,19 @@ public sealed class AccountAndTokensTests
         var wrongCurrent = await client.PostAsJsonAsync(
             "/api/account/password",
             new ChangePasswordRequest("WrongCurrent123!", NewStrongPassword));
-        Assert.Equal(HttpStatusCode.Unauthorized, wrongCurrent.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongCurrent.StatusCode);
 
         var changed = await client.PostAsJsonAsync(
             "/api/account/password",
             new ChangePasswordRequest(StrongPassword, NewStrongPassword));
         Assert.Equal(HttpStatusCode.OK, changed.StatusCode);
+
+        // Revoked second session's JWT must immediately fail on /api/account/*
+        var secondSessionPayload = await secondLogin.Content.ReadFromJsonAsync<AuthSessionResponse>();
+        Assert.NotNull(secondSessionPayload);
+        secondClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secondSessionPayload.AccessToken);
+        var revokedJwtRes = await secondClient.GetAsync("/api/account/sessions");
+        Assert.Equal(HttpStatusCode.Unauthorized, revokedJwtRes.StatusCode);
 
         var afterSessions = await client.GetFromJsonAsync<List<SessionDto>>("/api/account/sessions");
         Assert.NotNull(afterSessions);

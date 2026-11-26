@@ -79,6 +79,16 @@ public sealed class HouseholdInvitesAndMembersTests
             new UpdateMemberStatusRequest(false));
         Assert.Equal(HttpStatusCode.OK, deactivateRes.StatusCode);
 
+        // Member's still-unexpired JWT must immediately fail on all authenticated endpoints
+        var jwtSessionsAfterDeactivate = await memberClient.GetAsync("/api/account/sessions");
+        Assert.Equal(HttpStatusCode.Unauthorized, jwtSessionsAfterDeactivate.StatusCode);
+
+        var jwtTokensAfterDeactivate = await memberClient.GetAsync("/api/account/tokens");
+        Assert.Equal(HttpStatusCode.Unauthorized, jwtTokensAfterDeactivate.StatusCode);
+
+        var jwtWhoamiAfterDeactivate = await memberClient.GetAsync("/api/agent/whoami");
+        Assert.Equal(HttpStatusCode.Unauthorized, jwtWhoamiAfterDeactivate.StatusCode);
+
         // Member refresh fails
         using var refreshReq = new HttpRequestMessage(HttpMethod.Post, "/api/auth/refresh");
         refreshReq.Headers.Add("Cookie", memberRefreshCookie);

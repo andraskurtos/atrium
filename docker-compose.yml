@@ -31,6 +31,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://+:8080
       Atrium__WebDistPath: /app/wwwroot
+      Atrium__TrustForwardedHeaders: "true"
       Atrium__Auth__JwtSigningKey: ${ATRIUM_JWT_SECRET:-}
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=${POSTGRES_DB:-atrium};Username=${POSTGRES_USER:-atrium};Password=${POSTGRES_PASSWORD:-atrium_dev_password}
     ports:

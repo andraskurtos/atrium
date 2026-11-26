@@ -68,6 +68,34 @@ builder.Services
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(30),
         };
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var principal = context.Principal;
+                var userId = principal?.GetUserId();
+                var sessionId = principal?.GetSessionId();
+                if (userId is null || sessionId is null)
+                {
+                    context.Fail("Missing required session claims.");
+                    return;
+                }
+
+                var db = context.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var now = DateTimeOffset.UtcNow;
+                var session = await db.RefreshSessions
+                    .AsNoTracking()
+                    .Include(s => s.User)
+                    .FirstOrDefaultAsync(
+                        s => s.Id == sessionId.Value && s.UserId == userId.Value,
+                        context.HttpContext.RequestAborted);
+
+                if (session is null || session.RevokedAt is not null || session.ExpiresAt <= now || !session.User.IsActive)
+                {
+                    context.Fail("Session has been revoked or account is inactive.");
+                }
+            },
+        };
     })
     .AddScheme<AuthenticationSchemeOptions, PatAuthenticationHandler>(AuthConstants.PatScheme, null);
 
@@ -94,19 +122,25 @@ builder.Services.AddAuthorizationBuilder()
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddFixedWindowLimiter(AuthConstants.AuthRateLimitPolicy, limiter =>
-    {
-        limiter.PermitLimit = 60;
-        limiter.Window = TimeSpan.FromMinutes(1);
-        limiter.QueueLimit = 0;
-    });
+    options.AddPolicy(AuthConstants.AuthRateLimitPolicy, httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: TokenCrypto.GetClientIp(httpContext),
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
 });
 
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    options.KnownIPNetworks.Clear();
-    options.KnownProxies.Clear();
+    if (builder.Configuration.GetValue("Atrium:TrustForwardedHeaders", false))
+    {
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+    }
 });
 
 var app = builder.Build();

@@ -161,7 +161,7 @@ public static class AccountEndpoints
             var verify = passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.CurrentPassword);
             if (verify == PasswordVerificationResult.Failed)
             {
-                return Results.Json(new { error = "Current password is incorrect." }, statusCode: StatusCodes.Status401Unauthorized);
+                return Results.BadRequest(new { error = "Current password is incorrect." });
             }
 
             var passwordError = TokenCrypto.ValidatePassword(request.NewPassword);
