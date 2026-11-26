@@ -1,5 +1,11 @@
 import type { MobileTab } from '../types/atrium';
-import { AgentIcon, CalendarIcon, StreamIcon, VaultIcon } from './Icons';
+import {
+  AgentIcon,
+  CalendarIcon,
+  GraduationCapIcon,
+  StreamIcon,
+  VaultIcon,
+} from './Icons';
 
 interface MobileTabBarProps {
   activeTab: MobileTab;
@@ -15,6 +21,7 @@ export function MobileTabBar({
   const tabs: { id: MobileTab; label: string; icon: typeof StreamIcon; badge?: number }[] = [
     { id: 'stream', label: 'Stream', icon: StreamIcon },
     { id: 'calendar', label: 'Calendar', icon: CalendarIcon },
+    { id: 'university', label: 'University', icon: GraduationCapIcon },
     { id: 'vault', label: 'Vault', icon: VaultIcon },
     {
       id: 'agents',

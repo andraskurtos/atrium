@@ -8,7 +8,7 @@ export type UserRole = 'Owner' | 'Member';
 
 export type CaptureKind = 'task' | 'event' | 'note';
 
-export type MobileTab = 'stream' | 'calendar' | 'vault' | 'agents';
+export type MobileTab = 'stream' | 'calendar' | 'university' | 'vault' | 'agents';
 
 export type UniversityActivityType =
   | 'lecture'

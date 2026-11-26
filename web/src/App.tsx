@@ -426,6 +426,17 @@ export function App() {
     navigateTo('university');
   };
 
+  const handleSelectMobileTab = (tab: MobileTab) => {
+    if (tab === 'university') {
+      openUniversityView();
+      return;
+    }
+    setMobileTab(tab);
+    if (activeView !== 'dashboard') {
+      navigateTo('dashboard');
+    }
+  };
+
   const handleUpdateProfile = async (next: {
     displayName: string;
     username: string;
@@ -1078,32 +1089,40 @@ export function App() {
           onAnnounce={announce}
         />
       ) : activeView === 'university' ? (
-        <UniversityPage
-          todayKey={todayKey}
-          selectedDateKey={selectedDateKey}
-          calendar={universityCalendar}
-          semesters={universitySemesters}
-          courses={universityCourses}
-          loading={universityLoading}
-          initialCourseId={focusedUniversityCourseId}
-          weekStartsOn={preferences.weekStartsOn}
-          timeFormat={preferences.timeFormat}
-          onBackToDashboard={() => navigateTo('dashboard')}
-          onSelectDate={setSelectedDateKey}
-          onCreateCourse={handleCreateUniversityCourse}
-          onUpdateCourse={handleUpdateUniversityCourse}
-          onDeleteCourse={handleDeleteUniversityCourse}
-          onCreateActivity={handleCreateUniversityActivity}
-          onUpdateActivity={handleUpdateUniversityActivity}
-          onDeleteActivity={handleDeleteUniversityActivity}
-          onCreateItem={handleCreateUniversityItem}
-          onUpdateItem={handleUpdateUniversityItem}
-          onUpdateItemAttendance={handleUpdateUniversityItemAttendance}
-          onDeleteItem={handleDeleteUniversityItem}
-          onGenerateSeries={handleGenerateUniversitySeries}
-          onToggleCalendarVisibility={handleToggleCalendarVisibility}
-          onExportIcs={handleExportIcs}
-        />
+        <>
+          <UniversityPage
+            todayKey={todayKey}
+            selectedDateKey={selectedDateKey}
+            calendar={universityCalendar}
+            semesters={universitySemesters}
+            courses={universityCourses}
+            loading={universityLoading}
+            initialCourseId={focusedUniversityCourseId}
+            weekStartsOn={preferences.weekStartsOn}
+            timeFormat={preferences.timeFormat}
+            onBackToDashboard={() => navigateTo('dashboard')}
+            onSelectDate={setSelectedDateKey}
+            onCreateCourse={handleCreateUniversityCourse}
+            onUpdateCourse={handleUpdateUniversityCourse}
+            onDeleteCourse={handleDeleteUniversityCourse}
+            onCreateActivity={handleCreateUniversityActivity}
+            onUpdateActivity={handleUpdateUniversityActivity}
+            onDeleteActivity={handleDeleteUniversityActivity}
+            onCreateItem={handleCreateUniversityItem}
+            onUpdateItem={handleUpdateUniversityItem}
+            onUpdateItemAttendance={handleUpdateUniversityItemAttendance}
+            onDeleteItem={handleDeleteUniversityItem}
+            onGenerateSeries={handleGenerateUniversitySeries}
+            onToggleCalendarVisibility={handleToggleCalendarVisibility}
+            onExportIcs={handleExportIcs}
+          />
+
+          <MobileTabBar
+            activeTab="university"
+            pendingProposalCount={pendingProposalCount}
+            onSelectTab={handleSelectMobileTab}
+          />
+        </>
       ) : (
         <>
           <div className="dashboard-container" data-mobile-tab={mobileTab}>
@@ -1205,7 +1224,7 @@ export function App() {
           <MobileTabBar
             activeTab={mobileTab}
             pendingProposalCount={pendingProposalCount}
-            onSelectTab={setMobileTab}
+            onSelectTab={handleSelectMobileTab}
           />
         </>
       )}
