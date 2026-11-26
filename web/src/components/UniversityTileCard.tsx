@@ -26,17 +26,32 @@ export function UniversityTileCard({
     [courses],
   );
 
+  const todayKey = toDateKey(new Date());
+
   const upcomingEvents = useMemo(() => {
     const nowMs = Date.now();
     return flattenScheduledUniversityItems(activeCourses)
       .filter((entry) => {
+        if (entry.item.isAllDay && entry.item.startAt) {
+          const startKey = entry.item.startAt.slice(0, 10);
+          let inclusiveEndKey = startKey;
+          if (entry.item.endAt) {
+            const endUtc = new Date(entry.item.endAt);
+            const endMinusOne = new Date(endUtc.getTime() - 86_400_000);
+            const candidate = endMinusOne.toISOString().slice(0, 10);
+            if (candidate >= startKey) {
+              inclusiveEndKey = candidate;
+            }
+          }
+          return inclusiveEndKey >= todayKey;
+        }
         const endMs = new Date(
           entry.item.endAt ?? entry.item.startAt ?? 0,
         ).getTime();
         return endMs >= nowMs;
       })
       .slice(0, 3);
-  }, [activeCourses]);
+  }, [activeCourses, todayKey]);
 
   const attendanceStats = useMemo(() => {
     let met = 0;
@@ -62,8 +77,6 @@ export function UniversityTileCard({
 
     return { met, remainingActivities, atRisk, totalRemainingSessions };
   }, [activeCourses]);
-
-  const todayKey = toDateKey(new Date());
 
   return (
     <section
@@ -138,8 +151,10 @@ export function UniversityTileCard({
           {upcomingEvents.length > 0 ? (
             <div className="stack-sm">
               {upcomingEvents.map(({ item, activity, course }) => {
-                const startDate = new Date(item.startAt ?? 0);
-                const dateKey = toDateKey(startDate);
+                const dateKey =
+                  item.isAllDay && item.startAt
+                    ? item.startAt.slice(0, 10)
+                    : toDateKey(new Date(item.startAt ?? 0));
                 const dateLabel =
                   dateKey === todayKey
                     ? 'Today'

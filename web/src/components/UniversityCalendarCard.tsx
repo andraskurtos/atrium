@@ -123,6 +123,7 @@ export function UniversityCalendarCard({
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [isExpanded, setIsExpanded] = useState(false);
   const [togglingVisibility, setTogglingVisibility] = useState(false);
+  const [busyItemIds, setBusyItemIds] = useState<Record<string, boolean>>({});
 
   const dialogRef = useRef<HTMLDialogElement | null>(null);
 
@@ -265,7 +266,20 @@ export function UniversityCalendarCard({
                   type="button"
                   className={`uni-status-pill is-${item.attendanceStatus}`}
                   title={`Status: ${statusLabel}. Click to mark as ${getAttendanceStatusLabel(nextStatus, activity.activityType)}.`}
-                  onClick={() => void onQuickAttendance(item.id, nextStatus)}
+                  disabled={Boolean(busyItemIds[item.id])}
+                  onClick={() => {
+                    if (busyItemIds[item.id]) return;
+                    setBusyItemIds((prev) => ({ ...prev, [item.id]: true }));
+                    void onQuickAttendance(item.id, nextStatus)
+                      .catch(() => undefined)
+                      .finally(() => {
+                        setBusyItemIds((prev) => {
+                          const next = { ...prev };
+                          delete next[item.id];
+                          return next;
+                        });
+                      });
+                  }}
                 >
                   {statusLabel}
                 </button>

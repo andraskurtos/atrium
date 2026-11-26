@@ -547,13 +547,19 @@ public static partial class UniversityEndpoints
             var defaultTheme = TrimOrNull(request.DefaultTheme);
             var uniCalendar = await EnsureUniversityCalendarAsync(db, userId.Value, ct);
             var duration = request.EndAt - request.StartAt;
+            var firstStartUtc = request.StartAt.ToUniversalTime();
+            var seriesTimeZone = request.IsAllDay ? TimeZoneInfo.Utc : ResolveTimeZone(uniCalendar.Timezone);
             var now = DateTimeOffset.UtcNow;
 
             var createdItems = new List<UniversityActivityItem>(request.Count);
             for (var index = 0; index < request.Count; index++)
             {
                 var seq = request.StartNumber + index;
-                var occStart = request.StartAt.ToUniversalTime().AddDays(index * request.IntervalWeeks * 7);
+                var occStart = AddWeeksPreservingWallClock(
+                    firstStartUtc,
+                    index * request.IntervalWeeks,
+                    request.IsAllDay,
+                    seriesTimeZone);
                 var occEnd = occStart + duration;
                 var itemTitle = string.Create(CultureInfo.InvariantCulture, $"{titlePrefix} {seq}");
 
@@ -677,7 +683,7 @@ public static partial class UniversityEndpoints
                 {
                     item.CalendarEvent.Title = BuildCalendarEventTitle(item.Course, item.Title);
                     item.CalendarEvent.Description = BuildCalendarEventDescription(item.Activity, item.Theme, item.Notes);
-                    item.CalendarEvent.Location = TrimOrNull(request.Schedule.Location) ?? item.Activity.DefaultLocation;
+                    item.CalendarEvent.Location = TrimOrNull(request.Schedule.Location);
                     item.CalendarEvent.StartAt = request.Schedule.StartAt.ToUniversalTime();
                     item.CalendarEvent.EndAt = request.Schedule.EndAt.ToUniversalTime();
                     item.CalendarEvent.IsAllDay = request.Schedule.IsAllDay;
@@ -816,8 +822,72 @@ public static partial class UniversityEndpoints
         };
 
         db.Calendars.Add(uniCalendar);
-        await db.SaveChangesAsync(ct);
-        return uniCalendar;
+        try
+        {
+            await db.SaveChangesAsync(ct);
+            return uniCalendar;
+        }
+        catch (DbUpdateException)
+        {
+            db.Entry(uniCalendar).State = EntityState.Detached;
+            var raced = await db.Calendars.FirstOrDefaultAsync(
+                c => c.UserId == userId && c.Module == UniversityConstants.CalendarModuleKey,
+                ct);
+            if (raced is not null)
+            {
+                return raced;
+            }
+
+            throw;
+        }
+    }
+
+    private static DateTimeOffset AddWeeksPreservingWallClock(
+        DateTimeOffset startUtc,
+        int weeks,
+        bool isAllDay,
+        TimeZoneInfo tzInfo)
+    {
+        if (weeks == 0)
+        {
+            return startUtc;
+        }
+
+        if (isAllDay || tzInfo.Equals(TimeZoneInfo.Utc))
+        {
+            return startUtc.AddDays(weeks * 7);
+        }
+
+        var localStart = TimeZoneInfo.ConvertTimeFromUtc(startUtc.UtcDateTime, tzInfo);
+        var targetLocal = DateTime.SpecifyKind(localStart.AddDays(weeks * 7), DateTimeKind.Unspecified);
+        if (tzInfo.IsInvalidTime(targetLocal))
+        {
+            targetLocal = targetLocal.AddHours(1);
+        }
+
+        var offset = tzInfo.GetUtcOffset(targetLocal);
+        return new DateTimeOffset(targetLocal, offset).ToUniversalTime();
+    }
+
+    private static TimeZoneInfo ResolveTimeZone(string? timezone)
+    {
+        if (string.IsNullOrWhiteSpace(timezone) || timezone.Equals("UTC", StringComparison.OrdinalIgnoreCase))
+        {
+            return TimeZoneInfo.Utc;
+        }
+
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(timezone);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.Utc;
+        }
+        catch (InvalidTimeZoneException)
+        {
+            return TimeZoneInfo.Utc;
+        }
     }
 
     private static async Task<List<UniversityCourse>> LoadUserCoursesAsync(

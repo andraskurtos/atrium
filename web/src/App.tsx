@@ -337,7 +337,9 @@ export function App() {
             setTheme(me.preferences.theme);
             await Promise.all([
               loadAccountSecurityData(me.user.role),
-              loadUniversityData().then(() => loadCalendarData()),
+              loadUniversityData()
+                .catch(() => undefined)
+                .then(() => loadCalendarData()),
             ]);
           }
         }
@@ -384,7 +386,9 @@ export function App() {
     try {
       await Promise.all([
         loadAccountSecurityData(session.user.role),
-        loadUniversityData().then(() => loadCalendarData()),
+        loadUniversityData()
+          .catch(() => undefined)
+          .then(() => loadCalendarData()),
       ]);
     } catch {
       // Non-fatal; individual views can refresh
@@ -664,9 +668,16 @@ export function App() {
   };
 
   const handleDeleteUniversityCourse = async (courseId: string) => {
-    await deleteUniversityCourse(courseId);
-    await Promise.all([loadUniversityData(), reloadEvents()]);
-    announce('Deleted university course');
+    try {
+      await deleteUniversityCourse(courseId);
+      await Promise.all([loadUniversityData(), reloadEvents()]);
+      announce('Deleted university course');
+    } catch (err) {
+      announce(
+        err instanceof Error ? err.message : 'Could not delete university course',
+      );
+      throw err;
+    }
   };
 
   const handleCreateUniversityActivity = async (
@@ -688,9 +699,16 @@ export function App() {
   };
 
   const handleDeleteUniversityActivity = async (activityId: string) => {
-    await deleteUniversityActivity(activityId);
-    await Promise.all([loadUniversityData(), reloadEvents()]);
-    announce('Removed course activity');
+    try {
+      await deleteUniversityActivity(activityId);
+      await Promise.all([loadUniversityData(), reloadEvents()]);
+      announce('Removed course activity');
+    } catch (err) {
+      announce(
+        err instanceof Error ? err.message : 'Could not remove course activity',
+      );
+      throw err;
+    }
   };
 
   const handleCreateUniversityItem = async (
@@ -718,31 +736,43 @@ export function App() {
     itemId: string,
     status: UniversityAttendanceStatus,
   ) => {
-    const result = await updateUniversityItemAttendance(itemId, status);
-    setUniversityCourses((prev) =>
-      prev.map((course) => {
-        if (course.id !== result.item.courseId) return course;
-        return {
-          ...course,
-          activities: course.activities.map((act) => {
-            if (act.id !== result.item.activityId) return act;
-            return {
-              ...act,
-              attendance: result.attendance,
-              items: act.items.map((it) =>
-                it.id === result.item.id ? result.item : it,
-              ),
-            };
-          }),
-        };
-      }),
-    );
+    try {
+      const result = await updateUniversityItemAttendance(itemId, status);
+      setUniversityCourses((prev) =>
+        prev.map((course) => {
+          if (course.id !== result.item.courseId) return course;
+          return {
+            ...course,
+            activities: course.activities.map((act) => {
+              if (act.id !== result.item.activityId) return act;
+              return {
+                ...act,
+                attendance: result.attendance,
+                items: act.items.map((it) =>
+                  it.id === result.item.id ? result.item : it,
+                ),
+              };
+            }),
+          };
+        }),
+      );
+    } catch (err) {
+      announce(
+        err instanceof Error ? err.message : 'Could not update attendance',
+      );
+      throw err;
+    }
   };
 
   const handleDeleteUniversityItem = async (itemId: string) => {
-    await deleteUniversityItem(itemId);
-    await Promise.all([loadUniversityData(), reloadEvents()]);
-    announce('Removed item');
+    try {
+      await deleteUniversityItem(itemId);
+      await Promise.all([loadUniversityData(), reloadEvents()]);
+      announce('Removed item');
+    } catch (err) {
+      announce(err instanceof Error ? err.message : 'Could not remove item');
+      throw err;
+    }
   };
 
   const handleGenerateUniversitySeries = async (

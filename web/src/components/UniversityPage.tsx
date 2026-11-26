@@ -341,6 +341,12 @@ export function UniversityPage({
   const [pendingDeleteActivityId, setPendingDeleteActivityId] = useState<
     string | null
   >(null);
+  const [pendingDeleteItemId, setPendingDeleteItemId] = useState<string | null>(
+    null,
+  );
+  const [busyActionIds, setBusyActionIds] = useState<Record<string, boolean>>(
+    {},
+  );
 
   // Course modal state
   const [courseModalOpen, setCourseModalOpen] = useState(false);
@@ -733,7 +739,7 @@ export function UniversityPage({
     setItemStartTime(form.startTime);
     setItemEndDate(form.endDate);
     setItemEndTime(form.endTime);
-    setItemLocation(form.location || activity.defaultLocation || '');
+    setItemLocation(form.hasSchedule ? form.location : (activity.defaultLocation ?? ''));
     setItemError(null);
     setItemModalOpen(true);
   };
@@ -1201,17 +1207,36 @@ export function UniversityPage({
                       <button
                         type="button"
                         className="btn btn-danger btn-compact"
+                        disabled={Boolean(busyActionIds[selectedCourse.id])}
                         onClick={async () => {
-                          await onDeleteCourse(selectedCourse.id);
-                          setPendingDeleteCourseId(null);
-                          setSelectedCourseId(null);
+                          if (busyActionIds[selectedCourse.id]) return;
+                          setBusyActionIds((prev) => ({
+                            ...prev,
+                            [selectedCourse.id]: true,
+                          }));
+                          try {
+                            await onDeleteCourse(selectedCourse.id);
+                            setPendingDeleteCourseId(null);
+                            setSelectedCourseId(null);
+                          } catch {
+                            // Error announced by App handler
+                          } finally {
+                            setBusyActionIds((prev) => {
+                              const next = { ...prev };
+                              delete next[selectedCourse.id];
+                              return next;
+                            });
+                          }
                         }}
                       >
-                        Confirm delete
+                        {busyActionIds[selectedCourse.id]
+                          ? 'Deleting…'
+                          : 'Confirm delete'}
                       </button>
                       <button
                         type="button"
                         className="btn btn-ghost btn-compact"
+                        disabled={Boolean(busyActionIds[selectedCourse.id])}
                         onClick={() => setPendingDeleteCourseId(null)}
                       >
                         Cancel
@@ -1343,16 +1368,35 @@ export function UniversityPage({
                                 <button
                                   type="button"
                                   className="btn btn-danger btn-compact"
+                                  disabled={Boolean(busyActionIds[activity.id])}
                                   onClick={async () => {
-                                    await onDeleteActivity(activity.id);
-                                    setPendingDeleteActivityId(null);
+                                    if (busyActionIds[activity.id]) return;
+                                    setBusyActionIds((prev) => ({
+                                      ...prev,
+                                      [activity.id]: true,
+                                    }));
+                                    try {
+                                      await onDeleteActivity(activity.id);
+                                      setPendingDeleteActivityId(null);
+                                    } catch {
+                                      // Error announced by App handler
+                                    } finally {
+                                      setBusyActionIds((prev) => {
+                                        const next = { ...prev };
+                                        delete next[activity.id];
+                                        return next;
+                                      });
+                                    }
                                   }}
                                 >
-                                  Delete
+                                  {busyActionIds[activity.id]
+                                    ? 'Deleting…'
+                                    : 'Delete'}
                                 </button>
                                 <button
                                   type="button"
                                   className="btn btn-ghost btn-compact"
+                                  disabled={Boolean(busyActionIds[activity.id])}
                                   onClick={() =>
                                     setPendingDeleteActivityId(null)
                                   }
@@ -1460,12 +1504,26 @@ export function UniversityPage({
                                           aria-pressed={
                                             item.attendanceStatus === st
                                           }
-                                          onClick={() =>
+                                          disabled={Boolean(busyActionIds[item.id])}
+                                          onClick={() => {
+                                            if (busyActionIds[item.id]) return;
+                                            setBusyActionIds((prev) => ({
+                                              ...prev,
+                                              [item.id]: true,
+                                            }));
                                             void onUpdateItemAttendance(
                                               item.id,
                                               st,
                                             )
-                                          }
+                                              .catch(() => undefined)
+                                              .finally(() => {
+                                                setBusyActionIds((prev) => {
+                                                  const next = { ...prev };
+                                                  delete next[item.id];
+                                                  return next;
+                                                });
+                                              });
+                                          }}
                                         >
                                           {getAttendanceStatusLabel(
                                             st,
@@ -1479,21 +1537,66 @@ export function UniversityPage({
                                       <button
                                         type="button"
                                         className="btn btn-ghost btn-compact"
+                                        disabled={Boolean(busyActionIds[item.id])}
                                         onClick={() =>
                                           openEditItem(activity, item)
                                         }
                                       >
                                         Edit
                                       </button>
-                                      <button
-                                        type="button"
-                                        className="btn btn-ghost btn-compact uni-danger-text"
-                                        onClick={() =>
-                                          void onDeleteItem(item.id)
-                                        }
-                                      >
-                                        Delete
-                                      </button>
+                                      {pendingDeleteItemId === item.id ? (
+                                        <div className="uni-inline-confirm">
+                                          <button
+                                            type="button"
+                                            className="btn btn-danger btn-compact"
+                                            disabled={Boolean(busyActionIds[item.id])}
+                                            onClick={async () => {
+                                              if (busyActionIds[item.id]) return;
+                                              setBusyActionIds((prev) => ({
+                                                ...prev,
+                                                [item.id]: true,
+                                              }));
+                                              try {
+                                                await onDeleteItem(item.id);
+                                                setPendingDeleteItemId(null);
+                                              } catch {
+                                                // Error announced by App handler
+                                              } finally {
+                                                setBusyActionIds((prev) => {
+                                                  const next = { ...prev };
+                                                  delete next[item.id];
+                                                  return next;
+                                                });
+                                              }
+                                            }}
+                                          >
+                                            {busyActionIds[item.id]
+                                              ? 'Deleting…'
+                                              : 'Confirm'}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="btn btn-ghost btn-compact"
+                                            disabled={Boolean(busyActionIds[item.id])}
+                                            onClick={() =>
+                                              setPendingDeleteItemId(null)
+                                            }
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          className="btn btn-ghost btn-compact uni-danger-text"
+                                          disabled={Boolean(busyActionIds[item.id])}
+                                          onClick={() =>
+                                            setPendingDeleteItemId(item.id)
+                                          }
+                                        >
+                                          Delete
+                                        </button>
+                                      )}
                                     </div>
                                   </div>
                                 </div>

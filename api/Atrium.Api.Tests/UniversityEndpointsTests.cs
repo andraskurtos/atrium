@@ -395,4 +395,222 @@ public sealed class UniversityEndpointsTests
         var forbiddenRes = await patNoScopeClient.GetAsync("/api/university/workspace");
         Assert.Equal(HttpStatusCode.Forbidden, forbiddenRes.StatusCode);
     }
+
+    [Fact]
+    public async Task GenerateSeries_PreservesWallClockTimeAcrossDstTransition()
+    {
+        using var factory = new TestAppFactory();
+        using var client = factory.CreateClient();
+        await SetupOwnerAsync(client);
+
+        // Set user timezone to Europe/Budapest (clocks fall back on Sun 2026-10-25: CEST UTC+2 -> CET UTC+1)
+        var tzRes = await client.PutAsJsonAsync(
+            "/api/account/profile",
+            new UpdateProfileRequest("András", "andras", "andras@atrium.local", "", "Europe/Budapest", null));
+        Assert.Equal(HttpStatusCode.OK, tzRes.StatusCode);
+
+        var course = await (await client.PostAsJsonAsync(
+            "/api/university/courses",
+            new CreateCourseRequest("Physics")))
+            .Content.ReadFromJsonAsync<UniversityCourseDto>();
+        Assert.NotNull(course);
+
+        var lecture = await (await client.PostAsJsonAsync(
+            $"/api/university/courses/{course.Id}/activities",
+            new CreateActivityRequest("lecture")))
+            .Content.ReadFromJsonAsync<UniversityCourseActivityDto>();
+        Assert.NotNull(lecture);
+
+        // First lecture: Mon 2026-10-19 10:00 CEST = 08:00 UTC
+        // Second lecture: Mon 2026-10-26 10:00 CET = 09:00 UTC (must stay 10:00 local, NOT 09:00 local!)
+        var firstStart = new DateTimeOffset(2026, 10, 19, 8, 0, 0, TimeSpan.Zero);
+        var firstEnd = new DateTimeOffset(2026, 10, 19, 9, 30, 0, TimeSpan.Zero);
+        var seriesRes = await client.PostAsJsonAsync(
+            $"/api/university/activities/{lecture.Id}/items/generate-series",
+            new GenerateActivitySeriesRequest(
+                StartAt: firstStart,
+                EndAt: firstEnd,
+                Count: 2,
+                IntervalWeeks: 1,
+                TitlePrefix: "Lecture",
+                StartNumber: 1));
+        Assert.Equal(HttpStatusCode.Created, seriesRes.StatusCode);
+        var series = await seriesRes.Content.ReadFromJsonAsync<GenerateActivitySeriesResponse>();
+        Assert.NotNull(series);
+        Assert.Equal(2, series.CreatedItems.Count);
+        Assert.Equal(new DateTimeOffset(2026, 10, 19, 8, 0, 0, TimeSpan.Zero), series.CreatedItems[0].StartAt);
+        Assert.Equal(new DateTimeOffset(2026, 10, 26, 9, 0, 0, TimeSpan.Zero), series.CreatedItems[1].StartAt);
+        Assert.Equal(new DateTimeOffset(2026, 10, 26, 10, 30, 0, TimeSpan.Zero), series.CreatedItems[1].EndAt);
+    }
+
+    [Fact]
+    public async Task CourseUpdate_ItemUnscheduleLocationClear_AndDeletesSyncCalendarEvents()
+    {
+        using var factory = new TestAppFactory();
+        using var client = factory.CreateClient();
+        await SetupOwnerAsync(client);
+
+        var course = await (await client.PostAsJsonAsync(
+            "/api/university/courses",
+            new CreateCourseRequest("Operating Systems", Code: "CS301")))
+            .Content.ReadFromJsonAsync<UniversityCourseDto>();
+        Assert.NotNull(course);
+
+        var lab = await (await client.PostAsJsonAsync(
+            $"/api/university/courses/{course.Id}/activities",
+            new CreateActivityRequest("laboratory", DefaultLocation: "Lab 101")))
+            .Content.ReadFromJsonAsync<UniversityCourseActivityDto>();
+        Assert.NotNull(lab);
+
+        var start = new DateTimeOffset(2026, 11, 5, 14, 0, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 11, 5, 15, 30, 0, TimeSpan.Zero);
+        var item1 = await (await client.PostAsJsonAsync(
+            $"/api/university/activities/{lab.Id}/items",
+            new CreateActivityItemRequest(
+                "Lab 1",
+                Schedule: new ActivityItemScheduleInput(start, end, false, "Lab 101"))))
+            .Content.ReadFromJsonAsync<UniversityActivityItemDto>();
+        Assert.NotNull(item1);
+        Assert.NotNull(item1.CalendarEventId);
+
+        var item2 = await (await client.PostAsJsonAsync(
+            $"/api/university/activities/{lab.Id}/items",
+            new CreateActivityItemRequest(
+                "Lab 2",
+                Schedule: new ActivityItemScheduleInput(start.AddDays(7), end.AddDays(7), false, "Lab 101"))))
+            .Content.ReadFromJsonAsync<UniversityActivityItemDto>();
+        Assert.NotNull(item2);
+        Assert.NotNull(item2.CalendarEventId);
+
+        // 1. Renaming the course updates linked calendar event titles
+        var renameRes = await client.PutAsJsonAsync(
+            $"/api/university/courses/{course.Id}",
+            new UpdateCourseRequest("Systems Engineering", Code: "CS302"));
+        Assert.Equal(HttpStatusCode.OK, renameRes.StatusCode);
+
+        var calEvt1 = await client.GetFromJsonAsync<CalendarEventDto>($"/api/events/{item1.CalendarEventId}");
+        Assert.NotNull(calEvt1);
+        Assert.Equal("CS302 · Lab 1", calEvt1.Title);
+
+        // 2. Clearing location on an existing scheduled item clears it instead of re-applying DefaultLocation
+        var clearLocRes = await client.PutAsJsonAsync(
+            $"/api/university/items/{item1.Id}",
+            new UpdateActivityItemRequest(
+                "Lab 1",
+                Schedule: new ActivityItemScheduleInput(start, end, false, "")));
+        Assert.Equal(HttpStatusCode.OK, clearLocRes.StatusCode);
+        var cleared = await clearLocRes.Content.ReadFromJsonAsync<UniversityActivityItemDto>();
+        Assert.NotNull(cleared);
+        Assert.Null(cleared.Location);
+
+        // 3. RemoveCalendarEvent = true unlinks and deletes the calendar event
+        var unschedRes = await client.PutAsJsonAsync(
+            $"/api/university/items/{item1.Id}",
+            new UpdateActivityItemRequest("Lab 1", RemoveCalendarEvent: true));
+        Assert.Equal(HttpStatusCode.OK, unschedRes.StatusCode);
+        var unscheduled = await unschedRes.Content.ReadFromJsonAsync<UniversityActivityItemDto>();
+        Assert.NotNull(unscheduled);
+        Assert.Null(unscheduled.CalendarEventId);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/events/{item1.CalendarEventId}")).StatusCode);
+
+        // 4. Deleting an item removes its linked calendar event
+        var delItemRes = await client.DeleteAsync($"/api/university/items/{item2.Id}");
+        Assert.Equal(HttpStatusCode.NoContent, delItemRes.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/events/{item2.CalendarEventId}")).StatusCode);
+
+        // 5. Deleting an activity removes linked calendar events for all its items
+        var item3 = await (await client.PostAsJsonAsync(
+            $"/api/university/activities/{lab.Id}/items",
+            new CreateActivityItemRequest(
+                "Lab 3",
+                Schedule: new ActivityItemScheduleInput(start.AddDays(14), end.AddDays(14), false, null))))
+            .Content.ReadFromJsonAsync<UniversityActivityItemDto>();
+        Assert.NotNull(item3);
+        Assert.NotNull(item3.CalendarEventId);
+
+        var delActRes = await client.DeleteAsync($"/api/university/activities/{lab.Id}");
+        Assert.Equal(HttpStatusCode.NoContent, delActRes.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/events/{item3.CalendarEventId}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task ValidationEdgeCases_AndCrossUserActivityItemIsolation()
+    {
+        using var factory = new TestAppFactory();
+        using var ownerClient = factory.CreateClient();
+        using var memberClient = factory.CreateClient();
+        await SetupOwnerAsync(ownerClient);
+        await CreateInvitedMemberAsync(ownerClient, memberClient);
+
+        // Invalid course color
+        var badColor = await ownerClient.PostAsJsonAsync(
+            "/api/university/courses",
+            new CreateCourseRequest("Math", Color: "not-a-hex"));
+        Assert.Equal(HttpStatusCode.BadRequest, badColor.StatusCode);
+
+        var course = await (await ownerClient.PostAsJsonAsync(
+            "/api/university/courses",
+            new CreateCourseRequest("Math")))
+            .Content.ReadFromJsonAsync<UniversityCourseDto>();
+        Assert.NotNull(course);
+
+        var act = await (await ownerClient.PostAsJsonAsync(
+            $"/api/university/courses/{course.Id}/activities",
+            new CreateActivityRequest("lecture")))
+            .Content.ReadFromJsonAsync<UniversityCourseActivityDto>();
+        Assert.NotNull(act);
+
+        // EndAt < StartAt and invalid MetadataJson
+        var badDates = await ownerClient.PostAsJsonAsync(
+            $"/api/university/activities/{act.Id}/items",
+            new CreateActivityItemRequest(
+                "Bad Dates",
+                Schedule: new ActivityItemScheduleInput(
+                    new DateTimeOffset(2026, 11, 5, 12, 0, 0, TimeSpan.Zero),
+                    new DateTimeOffset(2026, 11, 5, 10, 0, 0, TimeSpan.Zero))));
+        Assert.Equal(HttpStatusCode.BadRequest, badDates.StatusCode);
+
+        var badJson = await ownerClient.PostAsJsonAsync(
+            $"/api/university/activities/{act.Id}/items",
+            new CreateActivityItemRequest("Bad JSON", MetadataJson: "{not valid json"));
+        Assert.Equal(HttpStatusCode.BadRequest, badJson.StatusCode);
+
+        // Count > 52 on generate-series
+        var badCount = await ownerClient.PostAsJsonAsync(
+            $"/api/university/activities/{act.Id}/items/generate-series",
+            new GenerateActivitySeriesRequest(
+                new DateTimeOffset(2026, 9, 7, 8, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 9, 7, 9, 0, 0, TimeSpan.Zero),
+                Count: 53));
+        Assert.Equal(HttpStatusCode.BadRequest, badCount.StatusCode);
+
+        var item = await (await ownerClient.PostAsJsonAsync(
+            $"/api/university/activities/{act.Id}/items",
+            new CreateActivityItemRequest("Lecture 1")))
+            .Content.ReadFromJsonAsync<UniversityActivityItemDto>();
+        Assert.NotNull(item);
+
+        // Cross-user isolation on activity & item mutations
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await memberClient.PutAsJsonAsync(
+                $"/api/university/activities/{act.Id}",
+                new UpdateActivityRequest(Title: "Hijacked"))).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await memberClient.DeleteAsync($"/api/university/activities/{act.Id}")).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await memberClient.PutAsJsonAsync(
+                $"/api/university/items/{item.Id}",
+                new UpdateActivityItemRequest("Hijacked"))).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await memberClient.PatchAsJsonAsync(
+                $"/api/university/items/{item.Id}/attendance",
+                new UpdateAttendanceStatusRequest("attended"))).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.NotFound,
+            (await memberClient.DeleteAsync($"/api/university/items/{item.Id}")).StatusCode);
+    }
 }
