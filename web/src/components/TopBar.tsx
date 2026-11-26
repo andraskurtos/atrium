@@ -1,6 +1,7 @@
 import { getInitials } from '../data/mockData';
 import type { AppView, ThemePreference, UserProfile } from '../types/atrium';
 import {
+  GraduationCapIcon,
   MoonIcon,
   SearchIcon,
   SunIcon,
@@ -32,6 +33,12 @@ export function TopBar({
     theme === 'light' ? 'Light' : theme === 'dark' ? 'Dark' : 'System';
 
   const initials = getInitials(profile.displayName, profile.username);
+  const breadcrumbLabel =
+    activeView === 'account'
+      ? 'Account'
+      : activeView === 'university'
+        ? 'University'
+        : 'Today';
 
   return (
     <header className="topbar">
@@ -56,12 +63,26 @@ export function TopBar({
           <span className="breadcrumb-sep" aria-hidden="true">
             /
           </span>
-          <span className="breadcrumb-current">
-            {activeView === 'account' ? 'Account' : 'Today'}
-          </span>
+          <span className="breadcrumb-current">{breadcrumbLabel}</span>
         </div>
 
         <nav className="topbar-actions" aria-label="Global actions">
+          <button
+            id="topbar-university-btn"
+            type="button"
+            className={`btn btn-compact topbar-nav-pill ${
+              activeView === 'university' ? 'is-active' : 'btn-ghost'
+            }`}
+            onClick={() =>
+              onNavigate(activeView === 'university' ? 'dashboard' : 'university')
+            }
+            aria-current={activeView === 'university' ? 'page' : undefined}
+            title="University Courses & Calendar"
+          >
+            <GraduationCapIcon />
+            <span className="topbar-nav-pill-label">University</span>
+          </button>
+
           <button
             id="topbar-command-btn"
             type="button"

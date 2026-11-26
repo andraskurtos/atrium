@@ -9,6 +9,7 @@ Atrium uses **Entity Framework Core 10** (`Npgsql.EntityFrameworkCore.PostgreSQL
 | `20261125222000_InitialAuthAndAccounts` | Creates `users`, `user_preferences`, `refresh_sessions`, `invites`, and `agent_tokens`. |
 | `20261126120000_AddCalendarsAndEvents` | Creates `calendars` and `calendar_events` (multi-calendar support, overlapping events, and idempotent `.ics` UID indexing). |
 | `20261126150000_AddRecurrenceOverrides` | Adds `recurrence_master_id`, `recurrence_original_start_at`, `is_recurrence_exception_deleted`, and `ix_calendar_events_master_original_start` for recurring event series overrides and single-occurrence deletions. |
+| `20261126180000_AddUniversityModule` | Adds `calendars.module` (`ix_calendars_user_module`) and creates `university_courses`, `university_course_activities`, and `university_activity_items` for the University courses, attendance, and dedicated calendar module. |
 
 ---
 
@@ -84,3 +85,4 @@ Expected rows:
 - `20261125222000_InitialAuthAndAccounts`
 - `20261126120000_AddCalendarsAndEvents`
 - `20261126150000_AddRecurrenceOverrides`
+- `20261126180000_AddUniversityModule`

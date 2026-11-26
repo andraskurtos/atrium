@@ -10,6 +10,8 @@ import { MobileTabBar } from './components/MobileTabBar';
 import { NotesCard } from './components/NotesCard';
 import { QuickCapture } from './components/QuickCapture';
 import { TopBar } from './components/TopBar';
+import { UniversityPage } from './components/UniversityPage';
+import { UniversityTileCard } from './components/UniversityTileCard';
 import { VaultCard } from './components/VaultCard';
 import {
   createInitialNotes,
@@ -68,6 +70,27 @@ import {
   type CreateEventInput,
   type UpdateEventInput,
 } from './lib/calendarClient';
+import {
+  createUniversityActivity,
+  createUniversityCourse,
+  createUniversityItem,
+  deleteUniversityActivity,
+  deleteUniversityCourse,
+  deleteUniversityItem,
+  generateUniversitySeries,
+  getUniversityWorkspace,
+  updateUniversityActivity,
+  updateUniversityCourse,
+  updateUniversityItem,
+  updateUniversityItemAttendance,
+  type CreateActivityInput,
+  type CreateActivityItemInput,
+  type CreateCourseInput,
+  type GenerateSeriesInput,
+  type UpdateActivityInput,
+  type UpdateActivityItemInput,
+  type UpdateCourseInput,
+} from './lib/universityClient';
 import type {
   AccountPreferences,
   AgentProposal,
@@ -82,6 +105,8 @@ import type {
   RecurrenceScope,
   SessionItem,
   TaskItem,
+  UniversityAttendanceStatus,
+  UniversityCourse,
   UserCalendar,
   UserProfile,
 } from './types/atrium';
@@ -94,7 +119,9 @@ function readInviteCodeFromHash(): string {
 
 function readInitialView(): AppView {
   if (typeof window === 'undefined') return 'dashboard';
-  return window.location.hash === '#account' ? 'account' : 'dashboard';
+  if (window.location.hash === '#account') return 'account';
+  if (window.location.hash === '#university') return 'university';
+  return 'dashboard';
 }
 
 function buildCalendarFetchRange(viewYear: number): {
@@ -157,6 +184,11 @@ export function App() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [todayEvents, setTodayEvents] = useState<CalendarEvent[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [universityCalendar, setUniversityCalendar] = useState<UserCalendar | null>(null);
+  const [universitySemesters, setUniversitySemesters] = useState<string[]>([]);
+  const [universityCourses, setUniversityCourses] = useState<UniversityCourse[]>([]);
+  const [universityLoading, setUniversityLoading] = useState(false);
+  const [focusedUniversityCourseId, setFocusedUniversityCourseId] = useState<string | null>(null);
   const [proposals, setProposals] = useState<AgentProposal[]>(() =>
     createInitialProposals(today),
   );
@@ -186,6 +218,10 @@ export function App() {
     setCalendars([]);
     setEvents([]);
     setTodayEvents([]);
+    setUniversityCalendar(null);
+    setUniversitySemesters([]);
+    setUniversityCourses([]);
+    setFocusedUniversityCourseId(null);
     setIsCommandOpen(false);
   }, []);
 
@@ -245,6 +281,18 @@ export function App() {
     [today, todayYear],
   );
 
+  const loadUniversityData = useCallback(async () => {
+    setUniversityLoading(true);
+    try {
+      const workspace = await getUniversityWorkspace();
+      setUniversityCalendar(workspace.calendar);
+      setUniversitySemesters(workspace.semesters);
+      setUniversityCourses(workspace.courses);
+    } finally {
+      setUniversityLoading(false);
+    }
+  }, []);
+
   const loadAccountSecurityData = useCallback(async (role: UserProfile['role']) => {
     const [nextSessions, nextTokens] = await Promise.all([
       listSessions(),
@@ -289,7 +337,7 @@ export function App() {
             setTheme(me.preferences.theme);
             await Promise.all([
               loadAccountSecurityData(me.user.role),
-              loadCalendarData(),
+              loadUniversityData().then(() => loadCalendarData()),
             ]);
           }
         }
@@ -303,7 +351,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [loadAccountSecurityData, loadCalendarData, setTheme]);
+  }, [loadAccountSecurityData, loadCalendarData, loadUniversityData, setTheme]);
 
   useEffect(() => {
     if (!announcement) return;
@@ -336,7 +384,7 @@ export function App() {
     try {
       await Promise.all([
         loadAccountSecurityData(session.user.role),
-        loadCalendarData(),
+        loadUniversityData().then(() => loadCalendarData()),
       ]);
     } catch {
       // Non-fatal; individual views can refresh
@@ -354,8 +402,28 @@ export function App() {
     setActiveView(view);
     if (view === 'account' && profile) {
       void loadAccountSecurityData(profile.role);
+    } else if (view === 'university' && profile) {
+      void loadUniversityData();
+    }
+    if (typeof window !== 'undefined') {
+      const nextHash =
+        view === 'account'
+          ? '#account'
+          : view === 'university'
+            ? '#university'
+            : '';
+      window.history.replaceState(
+        null,
+        '',
+        `${window.location.pathname}${nextHash}`,
+      );
     }
     window.scrollTo({ top: 0, behavior: 'auto' });
+  };
+
+  const openUniversityView = (courseId?: string) => {
+    setFocusedUniversityCourseId(courseId ?? null);
+    navigateTo('university');
   };
 
   const handleUpdateProfile = async (next: {
@@ -465,6 +533,9 @@ export function App() {
     setCalendars((prev) =>
       prev.map((c) => (c.id === calendar.id ? { ...c, isVisible: nextVisible } : c)),
     );
+    if (universityCalendar?.id === calendar.id) {
+      setUniversityCalendar({ ...universityCalendar, isVisible: nextVisible });
+    }
     try {
       const updated = await updateCalendar(calendar.id, {
         name: calendar.name,
@@ -474,8 +545,14 @@ export function App() {
         isVisible: nextVisible,
       });
       setCalendars((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      if (universityCalendar?.id === updated.id) {
+        setUniversityCalendar(updated);
+      }
     } catch {
       setCalendars((prev) => prev.map((c) => (c.id === calendar.id ? calendar : c)));
+      if (universityCalendar?.id === calendar.id) {
+        setUniversityCalendar(calendar);
+      }
       announce('Could not update calendar visibility');
     }
   };
@@ -513,7 +590,12 @@ export function App() {
 
   const handleUpdateEvent = async (id: string, input: UpdateEventInput) => {
     const updated = await updateEvent(id, input);
-    await reloadEvents();
+    await Promise.all([
+      reloadEvents(),
+      universityCalendar && input.calendarId === universityCalendar.id
+        ? loadUniversityData()
+        : Promise.resolve(),
+    ]);
     if (input.scope === 'single') {
       announce(`Updated single occurrence: ${updated.title}`);
     } else if (updated.isRecurring) {
@@ -534,7 +616,12 @@ export function App() {
           ? (evt.occurrenceStartAt ?? evt.startAt)
           : null,
     });
-    await reloadEvents();
+    await Promise.all([
+      reloadEvents(),
+      universityCalendar && evt.calendarId === universityCalendar.id
+        ? loadUniversityData()
+        : Promise.resolve(),
+    ]);
     if (evt.isRecurring) {
       announce(
         scope === 'single'
@@ -544,6 +631,116 @@ export function App() {
     } else {
       announce('Removed event');
     }
+  };
+
+  const handleCreateUniversityCourse = async (
+    input: CreateCourseInput,
+  ): Promise<UniversityCourse> => {
+    const created = await createUniversityCourse(input);
+    await Promise.all([loadUniversityData(), loadCalendarData()]);
+    announce(`Added course: ${created.name}`);
+    return created;
+  };
+
+  const handleUpdateUniversityCourse = async (
+    courseId: string,
+    input: UpdateCourseInput,
+  ): Promise<UniversityCourse> => {
+    const updated = await updateUniversityCourse(courseId, input);
+    await Promise.all([loadUniversityData(), reloadEvents()]);
+    announce(`Updated course: ${updated.name}`);
+    return updated;
+  };
+
+  const handleDeleteUniversityCourse = async (courseId: string) => {
+    await deleteUniversityCourse(courseId);
+    await Promise.all([loadUniversityData(), reloadEvents()]);
+    announce('Deleted university course');
+  };
+
+  const handleCreateUniversityActivity = async (
+    courseId: string,
+    input: CreateActivityInput,
+  ) => {
+    await createUniversityActivity(courseId, input);
+    await loadUniversityData();
+    announce('Added course activity');
+  };
+
+  const handleUpdateUniversityActivity = async (
+    activityId: string,
+    input: UpdateActivityInput,
+  ) => {
+    await updateUniversityActivity(activityId, input);
+    await loadUniversityData();
+    announce('Updated course activity');
+  };
+
+  const handleDeleteUniversityActivity = async (activityId: string) => {
+    await deleteUniversityActivity(activityId);
+    await Promise.all([loadUniversityData(), reloadEvents()]);
+    announce('Removed course activity');
+  };
+
+  const handleCreateUniversityItem = async (
+    activityId: string,
+    input: CreateActivityItemInput,
+  ) => {
+    const created = await createUniversityItem(activityId, input);
+    await Promise.all([
+      loadUniversityData(),
+      created.calendarEventId ? reloadEvents() : Promise.resolve(),
+    ]);
+    announce(`Added: ${created.title}`);
+  };
+
+  const handleUpdateUniversityItem = async (
+    itemId: string,
+    input: UpdateActivityItemInput,
+  ) => {
+    const updated = await updateUniversityItem(itemId, input);
+    await Promise.all([loadUniversityData(), reloadEvents()]);
+    announce(`Updated: ${updated.title}`);
+  };
+
+  const handleUpdateUniversityItemAttendance = async (
+    itemId: string,
+    status: UniversityAttendanceStatus,
+  ) => {
+    const result = await updateUniversityItemAttendance(itemId, status);
+    setUniversityCourses((prev) =>
+      prev.map((course) => {
+        if (course.id !== result.item.courseId) return course;
+        return {
+          ...course,
+          activities: course.activities.map((act) => {
+            if (act.id !== result.item.activityId) return act;
+            return {
+              ...act,
+              attendance: result.attendance,
+              items: act.items.map((it) =>
+                it.id === result.item.id ? result.item : it,
+              ),
+            };
+          }),
+        };
+      }),
+    );
+  };
+
+  const handleDeleteUniversityItem = async (itemId: string) => {
+    await deleteUniversityItem(itemId);
+    await Promise.all([loadUniversityData(), reloadEvents()]);
+    announce('Removed item');
+  };
+
+  const handleGenerateUniversitySeries = async (
+    activityId: string,
+    input: GenerateSeriesInput,
+  ) => {
+    const res = await generateUniversitySeries(activityId, input);
+    await Promise.all([loadUniversityData(), reloadEvents()]);
+    announce(`Generated ${res.createdItems.length} scheduled sessions`);
   };
 
   const handleImportIcs = async (file: File, targetCalendarId: string | 'new') => {
@@ -704,6 +901,7 @@ export function App() {
       tasks,
       events,
       notes,
+      universityCourses,
     };
     const blob = new Blob([JSON.stringify(archive, null, 2)], {
       type: 'application/json',
@@ -756,6 +954,13 @@ export function App() {
       hint: 'Stream',
       group: 'Navigation',
       onSelect: () => navigateTo('dashboard'),
+    },
+    {
+      id: 'cmd-university',
+      label: 'Open University Courses & Calendar',
+      hint: `${universityCourses.filter((c) => c.status === 'active').length} courses`,
+      group: 'Navigation',
+      onSelect: () => openUniversityView(),
     },
     {
       id: 'cmd-account',
@@ -872,6 +1077,33 @@ export function App() {
           onRefreshHealth={refreshHealth}
           onAnnounce={announce}
         />
+      ) : activeView === 'university' ? (
+        <UniversityPage
+          todayKey={todayKey}
+          selectedDateKey={selectedDateKey}
+          calendar={universityCalendar}
+          semesters={universitySemesters}
+          courses={universityCourses}
+          loading={universityLoading}
+          initialCourseId={focusedUniversityCourseId}
+          weekStartsOn={preferences.weekStartsOn}
+          timeFormat={preferences.timeFormat}
+          onBackToDashboard={() => navigateTo('dashboard')}
+          onSelectDate={setSelectedDateKey}
+          onCreateCourse={handleCreateUniversityCourse}
+          onUpdateCourse={handleUpdateUniversityCourse}
+          onDeleteCourse={handleDeleteUniversityCourse}
+          onCreateActivity={handleCreateUniversityActivity}
+          onUpdateActivity={handleUpdateUniversityActivity}
+          onDeleteActivity={handleDeleteUniversityActivity}
+          onCreateItem={handleCreateUniversityItem}
+          onUpdateItem={handleUpdateUniversityItem}
+          onUpdateItemAttendance={handleUpdateUniversityItemAttendance}
+          onDeleteItem={handleDeleteUniversityItem}
+          onGenerateSeries={handleGenerateUniversitySeries}
+          onToggleCalendarVisibility={handleToggleCalendarVisibility}
+          onExportIcs={handleExportIcs}
+        />
       ) : (
         <>
           <div className="dashboard-container" data-mobile-tab={mobileTab}>
@@ -946,6 +1178,15 @@ export function App() {
                   onImportIcs={handleImportIcs}
                   onExportIcs={handleExportIcs}
                   onToggleExpanded={setIsCalendarExpanded}
+                />
+              </div>
+
+              <div className="rail-group" data-mobile-section="stream">
+                <UniversityTileCard
+                  courses={universityCourses}
+                  loading={universityLoading}
+                  timeFormat={preferences.timeFormat}
+                  onOpenUniversity={openUniversityView}
                 />
               </div>
 

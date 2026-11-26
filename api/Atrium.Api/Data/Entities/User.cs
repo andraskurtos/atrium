@@ -20,4 +20,5 @@ public sealed class User
     public ICollection<RefreshSession> RefreshSessions { get; } = [];
     public ICollection<AgentToken> AgentTokens { get; } = [];
     public ICollection<UserCalendar> Calendars { get; } = [];
+    public ICollection<UniversityCourse> UniversityCourses { get; } = [];
 }

@@ -2421,4 +2421,872 @@ select {
   }
 }
 
+/* ========================
+   University Module
+   ======================== */
+
+.topbar-nav-pill.is-active {
+  background-color: var(--accent-soft);
+  border-color: var(--border-strong);
+  color: var(--accent-soft-text);
+}
+
+.stack-md {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.input-control {
+  width: 100%;
+  background-color: var(--surface-muted);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 11px;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  transition:
+    border-color var(--duration-fast) var(--ease-tactile),
+    background-color var(--duration-fast) var(--ease-tactile);
+}
+
+.input-control::placeholder {
+  color: var(--text-faint);
+}
+
+.input-control:hover {
+  border-color: var(--border-strong);
+}
+
+.input-control:focus {
+  border-color: var(--accent);
+  background-color: var(--surface);
+  outline: none;
+}
+
+.input-control:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.uni-textarea {
+  resize: vertical;
+  min-height: 64px;
+  font-family: var(--font-body);
+}
+
+.form-error {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--danger);
+}
+
+/* Dashboard University Tile */
+.university-tile-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.university-tile-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.university-tile-attendance-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.university-tile-event {
+  width: 100%;
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-tactile),
+    background-color var(--duration-fast) var(--ease-tactile);
+}
+
+.university-tile-event:hover {
+  border-color: var(--border-strong);
+  background-color: var(--surface-muted);
+}
+
+.uni-color-bar {
+  width: 3px;
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
+}
+
+.uni-color-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.uni-color-dot-lg {
+  width: 12px;
+  height: 12px;
+  margin-top: 6px;
+}
+
+.university-tile-event-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.university-tile-event-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.university-tile-theme {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* University Page Shell & Header */
+.university-page-container {
+  padding-bottom: var(--space-8);
+}
+
+.uni-page-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.uni-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.uni-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.uni-page-icon {
+  width: 22px;
+  height: 22px;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.uni-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+}
+
+.uni-semester-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.uni-filter-pill {
+  padding: 5px 11px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background-color: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-tactile),
+    border-color var(--duration-fast) var(--ease-tactile),
+    color var(--duration-fast) var(--ease-tactile);
+}
+
+.uni-filter-pill:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.uni-filter-pill.is-active {
+  background-color: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-soft-text);
+  font-weight: 600;
+}
+
+.uni-status-select {
+  width: auto;
+  min-width: 124px;
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+}
+
+/* Course Cards & Detail Header */
+.uni-course-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.uni-course-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-tactile),
+    background-color var(--duration-fast) var(--ease-tactile);
+}
+
+.uni-course-card:hover {
+  border-color: var(--border-strong);
+}
+
+.uni-course-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.uni-course-title-block {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+  flex: 1;
+}
+
+.uni-course-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.uni-course-name {
+  font-size: 1.0625rem;
+}
+
+.uni-course-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.uni-detail-description {
+  margin: var(--space-3) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  white-space: pre-wrap;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.uni-detail-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.uni-inline-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.uni-danger-text {
+  color: var(--danger);
+}
+
+.uni-empty-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.uni-empty-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Activity Chips on Course Card */
+.uni-activity-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.uni-activity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background-color: var(--surface-subtle);
+  font-size: 0.75rem;
+  color: var(--text);
+}
+
+.uni-activity-chip strong {
+  font-weight: 600;
+}
+
+.uni-activity-chip.is-ok {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.uni-activity-chip.is-warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.uni-activity-chip.is-danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Activities Section & Cards */
+.uni-activities-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.uni-section-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.uni-activity-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.uni-activity-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.uni-activity-custom-title {
+  margin-top: 2px;
+}
+
+.uni-activity-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Attendance Progress Box */
+.uni-attendance-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background-color: var(--surface-subtle);
+}
+
+.uni-attendance-box.is-unconfigured {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.uni-attendance-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.uni-attendance-headline {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.uni-attendance-fraction {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.uni-progress-track {
+  width: 100%;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background-color: var(--surface-muted);
+  overflow: hidden;
+}
+
+.uni-progress-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background-color: var(--accent);
+  transition: width var(--duration-base) var(--ease-tactile);
+}
+
+.uni-progress-fill.is-ok {
+  background-color: var(--ok);
+}
+
+.uni-progress-fill.is-warn {
+  background-color: var(--warn);
+}
+
+.uni-progress-fill.is-danger {
+  background-color: var(--danger);
+}
+
+.uni-attendance-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* Status Pills */
+.uni-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background-color: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+.uni-status-pill.is-ok,
+.uni-status-pill.is-attended {
+  border-color: var(--ok);
+  color: var(--ok);
+  background-color: var(--surface);
+}
+
+.uni-status-pill.is-warn {
+  border-color: var(--warn);
+  color: var(--warn);
+  background-color: var(--surface);
+}
+
+.uni-status-pill.is-danger,
+.uni-status-pill.is-missed {
+  border-color: var(--danger);
+  color: var(--danger);
+  background-color: var(--surface);
+}
+
+.uni-status-pill.is-excused {
+  border-color: var(--border-strong);
+  color: var(--text-muted);
+  background-color: var(--surface-subtle);
+}
+
+/* Activity Items List */
+.uni-no-items {
+  padding-top: var(--space-1);
+}
+
+.uni-items-list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.uni-item-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.uni-item-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.uni-item-main {
+  flex: 1;
+  min-width: 210px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.uni-item-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.uni-item-theme {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.uni-theme-label {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.uni-item-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.uni-attendance-segment {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--surface-subtle);
+  overflow: hidden;
+}
+
+.uni-seg-btn {
+  border: none;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  padding: 5px 8px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-tactile),
+    color var(--duration-fast) var(--ease-tactile);
+}
+
+.uni-seg-btn:last-child {
+  border-right: none;
+}
+
+.uni-seg-btn:hover {
+  background-color: var(--surface-muted);
+  color: var(--text);
+}
+
+.uni-seg-btn.is-active {
+  font-weight: 600;
+  background-color: var(--surface-muted);
+  color: var(--text);
+}
+
+.uni-seg-btn.is-attended.is-active {
+  background-color: var(--ok);
+  color: var(--accent-fg);
+}
+
+.uni-seg-btn.is-missed.is-active {
+  background-color: var(--danger);
+  color: var(--accent-fg);
+}
+
+.uni-seg-btn.is-excused.is-active {
+  background-color: var(--border-strong);
+  color: var(--text);
+}
+
+.uni-item-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Dedicated University Calendar Card */
+.uni-calendar-filters {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: var(--space-3);
+}
+
+.uni-filter-select {
+  padding: 6px 8px;
+  font-size: 0.75rem;
+}
+
+.uni-day-dots {
+  position: absolute;
+  bottom: 3px;
+  display: inline-flex;
+  gap: 2px;
+}
+
+.uni-day-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+}
+
+.uni-calendar-sync-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.uni-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.8125rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.uni-calendar-agenda {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.uni-calendar-agenda-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.uni-agenda-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.uni-agenda-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.uni-agenda-course-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  text-align: left;
+}
+
+.uni-agenda-course-btn:hover {
+  color: var(--accent);
+}
+
+.uni-agenda-course-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 145px;
+}
+
+.uni-agenda-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.uni-agenda-theme {
+  font-style: italic;
+}
+
+.uni-modal-event-chip {
+  width: 100%;
+  font-size: 0.6875rem;
+  line-height: 1.25;
+  padding: 2px 5px;
+  border-radius: 4px;
+  border-left: 3px solid var(--accent);
+  background-color: var(--surface);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uni-modal-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* University Forms & Modals */
+.uni-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.uni-form-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.uni-form-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.uni-form-grid-title-seq {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  gap: var(--space-3);
+}
+
+.uni-color-swatches {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.uni-color-swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform var(--duration-fast) var(--ease-tactile);
+}
+
+.uni-color-swatch:hover {
+  transform: scale(1.08);
+}
+
+.uni-color-swatch.is-selected {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--surface) inset;
+}
+
+.uni-fieldset {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--surface-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.uni-schedule-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+.uni-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 767px) {
+  .topbar-nav-pill-label {
+    display: none;
+  }
+
+  .uni-form-grid-2,
+  .uni-form-grid-3,
+  .uni-form-grid-title-seq {
+    grid-template-columns: 1fr;
+  }
+
+  .uni-item-controls {
+    width: 100%;
+    align-items: flex-start;
+  }
+
+  .uni-attendance-segment {
+    width: 100%;
+  }
+
+  .uni-seg-btn {
+    flex: 1;
+    min-height: 36px;
+  }
+}
+
+
 

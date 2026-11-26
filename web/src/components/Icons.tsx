@@ -206,3 +206,14 @@ export function CopyIcon(props: IconProps) {
   );
 }
 
+export function GraduationCapIcon(props: IconProps) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path d="M1.75 6.25L8 3.25L14.25 6.25L8 9.25L1.75 6.25Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M4.25 7.5V11C4.25 12.1 5.95 13 8 13C10.05 13 11.75 12.1 11.75 11V7.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M14.25 6.25V10.25" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+
