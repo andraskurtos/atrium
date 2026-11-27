@@ -111,6 +111,9 @@ Write naturally with **bold text**, *italic emphasis*, and ***bold italic*** com
 - Toggle Reading mode: Cmd/Ctrl + E
 `;
 
+const INTERNAL_ATTACHMENT_IMAGE_RE =
+  /^\/api\/attachments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function sanitizeMarkdownUrl(
   rawUrl: string,
   kind: 'link' | 'image',
@@ -120,6 +123,10 @@ export function sanitizeMarkdownUrl(
     trimmed = trimmed.slice(1, -1).trim();
   }
   if (!trimmed) return null;
+
+  if (kind === 'image' && INTERNAL_ATTACHMENT_IMAGE_RE.test(trimmed)) {
+    return trimmed;
+  }
 
   try {
     const parsed = new URL(trimmed);
@@ -144,6 +151,46 @@ export function countWordsAndChars(markdown: string): {
   const trimmed = markdown.trim();
   const words = trimmed ? trimmed.split(/\s+/).length : 0;
   return { words, chars: markdown.length };
+}
+
+/**
+ * Normalizes triple-dollar block math fences (`$$$`) to standard `$$` fences
+ * outside fenced code blocks so remark-math + rehype-katex render both `$$` and `$$$`.
+ */
+export function normalizeBlockMathFences(markdown: string): string {
+  const lines = markdown.split('\n');
+  let inCodeFence = false;
+  let codeFenceChar = '';
+  let codeFenceLen = 0;
+
+  const out = lines.map((line) => {
+    const trimmed = line.trim();
+    const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const ch = fenceMatch[1][0];
+      const len = fenceMatch[1].length;
+      if (!inCodeFence) {
+        inCodeFence = true;
+        codeFenceChar = ch;
+        codeFenceLen = len;
+      } else if (ch === codeFenceChar && len >= codeFenceLen) {
+        inCodeFence = false;
+      }
+      return line;
+    }
+
+    if (inCodeFence) return line;
+
+    if (trimmed === '$$$') {
+      return line.replace('$$$', '$$');
+    }
+    if (trimmed.startsWith('$$$') && trimmed.endsWith('$$$') && trimmed.length > 6) {
+      return line.replace('$$$', '$$').replace(/\$\$\$(\s*)$/, '$$$$$1');
+    }
+    return line;
+  });
+
+  return out.join('\n');
 }
 
 export function loadNotesDraft(userId?: string): string {

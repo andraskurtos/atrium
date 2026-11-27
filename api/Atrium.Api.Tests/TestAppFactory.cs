@@ -15,12 +15,17 @@ public sealed class TestAppFactory : WebApplicationFactory<Program>
     public const string TestJwtSigningKey = "atrium-unit-test-signing-key-with-at-least-32-bytes-0123456789";
 
     private readonly SqliteConnection _sqliteConnection;
+    private readonly string _uploadsTempDir;
 
     public TestAppFactory()
     {
         _sqliteConnection = new SqliteConnection("DataSource=:memory:");
         _sqliteConnection.Open();
+        _uploadsTempDir = Path.Combine(Path.GetTempPath(), "atrium-test-uploads-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_uploadsTempDir);
     }
+
+    public string UploadsPath => _uploadsTempDir;
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -32,6 +37,7 @@ public sealed class TestAppFactory : WebApplicationFactory<Program>
             "Host=127.0.0.1;Port=5433;Database=atrium_test;Username=atrium;Password=test");
         builder.UseSetting("Atrium:Database:AutoMigrate", "false");
         builder.UseSetting("Atrium:Auth:JwtSigningKey", TestJwtSigningKey);
+        builder.UseSetting("Atrium:Storage:UploadsPath", _uploadsTempDir);
 
         builder.ConfigureServices(services =>
         {
@@ -56,6 +62,17 @@ public sealed class TestAppFactory : WebApplicationFactory<Program>
         if (disposing)
         {
             _sqliteConnection.Dispose();
+            try
+            {
+                if (Directory.Exists(_uploadsTempDir))
+                {
+                    Directory.Delete(_uploadsTempDir, recursive: true);
+                }
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup of test upload directory
+            }
         }
     }
 

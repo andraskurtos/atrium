@@ -1,6 +1,25 @@
-import { useMemo, useState, type DragEvent, type FormEvent } from 'react';
+import {
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type FormEvent,
+} from 'react';
+import {
+  downloadAttachment,
+  isPdfAttachment,
+  type UploadAttachmentOptions,
+} from '../lib/attachmentsClient';
 import type { NoteSearchMode } from '../lib/notesClient';
-import type { NoteFolder, NoteSummary, NoteTagCount } from '../types/atrium';
+import type {
+  AttachmentSummary,
+  EventNotesGroup,
+  NoteFolder,
+  NoteSummary,
+  NoteTagCount,
+  UniversitySemesterNotesTree,
+} from '../types/atrium';
 import {
   ChevronRightIcon,
   CloseIcon,
@@ -9,12 +28,40 @@ import {
   NoteIcon,
   PlusIcon,
   SearchIcon,
+  UploadIcon,
 } from './Icons';
+
+const SHOW_UNI_KEY = 'atrium.notes.sidebar.showUni';
+const SHOW_EVENTS_KEY = 'atrium.notes.sidebar.showEvents';
+const SHOW_DAILY_KEY = 'atrium.notes.sidebar.showDaily';
+
+function readBoolPref(key: string, fallback: boolean): boolean {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw === null ? fallback : raw === 'true';
+  } catch {
+    return fallback;
+  }
+}
+
+function formatShortOccurrenceDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
 
 interface NotesSidebarProps {
   isOpen: boolean;
   folders: NoteFolder[];
   notes: NoteSummary[];
+  university: UniversitySemesterNotesTree[];
+  events: EventNotesGroup[];
+  daily: NoteSummary[];
   tags: NoteTagCount[];
   searchQuery: string;
   searchMode: NoteSearchMode;
@@ -28,6 +75,14 @@ interface NotesSidebarProps {
   onSelectTag: (tag: string | null) => void;
   onSelectNote: (noteId: string) => void;
   onSelectSearchResult: (noteId: string) => void;
+  onOpenUniversityItemNote: (itemId: string) => Promise<void>;
+  onViewPdf: (artifact: AttachmentSummary) => void;
+  onOpenNoteSplit: (noteId: string) => void;
+  onCreateCourseNote: (courseId: string) => Promise<void>;
+  onUploadArtifact: (
+    file: File,
+    owner: Omit<UploadAttachmentOptions, 'kind'>,
+  ) => Promise<void>;
   onMoveNoteToFolder: (noteId: string, folderId: string | null) => Promise<void>;
   onCreateNote: (folderId: string | null) => Promise<void>;
   onCreateFolder: (name: string, parentFolderId: string | null) => Promise<void>;
@@ -40,6 +95,9 @@ export function NotesSidebar({
   isOpen,
   folders,
   notes,
+  university,
+  events,
+  daily,
   tags,
   searchQuery,
   searchMode,
@@ -53,6 +111,11 @@ export function NotesSidebar({
   onSelectTag,
   onSelectNote,
   onSelectSearchResult,
+  onOpenUniversityItemNote,
+  onViewPdf,
+  onOpenNoteSplit,
+  onCreateCourseNote,
+  onUploadArtifact,
   onMoveNoteToFolder,
   onCreateNote,
   onCreateFolder,
@@ -60,15 +123,91 @@ export function NotesSidebar({
   onToggleFolderAgent,
   onDeleteFolder,
 }: NotesSidebarProps) {
-  const [expandedFolders, setExpandedFolders] = useState<Record<string, boolean>>({});
-  const [creatingFolderParent, setCreatingFolderParent] = useState<string | null | undefined>(undefined);
+  const [showUni, setShowUni] = useState<boolean>(() =>
+    readBoolPref(SHOW_UNI_KEY, true),
+  );
+  const [showEvents, setShowEvents] = useState<boolean>(() =>
+    readBoolPref(SHOW_EVENTS_KEY, false),
+  );
+  const [showDaily, setShowDaily] = useState<boolean>(() =>
+    readBoolPref(SHOW_DAILY_KEY, true),
+  );
+  const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
+  const [creatingFolderParent, setCreatingFolderParent] = useState<
+    string | null | undefined
+  >(undefined);
   const [newFolderName, setNewFolderName] = useState('');
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
-  const [confirmDeleteFolderId, setConfirmDeleteFolderId] = useState<string | null>(null);
+  const [confirmDeleteFolderId, setConfirmDeleteFolderId] = useState<
+    string | null
+  >(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [draggingNoteId, setDraggingNoteId] = useState<string | null>(null);
-  const [dropTargetFolderId, setDropTargetFolderId] = useState<string | 'root' | null>(null);
+  const [dropTargetFolderId, setDropTargetFolderId] = useState<
+    string | 'root' | null
+  >(null);
+  const [fileDropTargetKey, setFileDropTargetKey] = useState<string | null>(
+    null,
+  );
+
+  const artifactUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingUploadOwnerRef = useRef<Omit<
+    UploadAttachmentOptions,
+    'kind'
+  > | null>(null);
+
+  const toggleShowUni = () => {
+    setShowUni((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(SHOW_UNI_KEY, String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const toggleShowEvents = () => {
+    setShowEvents((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(SHOW_EVENTS_KEY, String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const toggleShowDaily = () => {
+    setShowDaily((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(SHOW_DAILY_KEY, String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const triggerArtifactUpload = (
+    owner: Omit<UploadAttachmentOptions, 'kind'>,
+  ) => {
+    pendingUploadOwnerRef.current = owner;
+    artifactUploadInputRef.current?.click();
+  };
+
+  const handleArtifactFilePicked = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const owner = pendingUploadOwnerRef.current;
+    pendingUploadOwnerRef.current = null;
+    if (!file || !owner) return;
+    void onUploadArtifact(file, owner);
+  };
 
   const foldersByParent = useMemo(() => {
     const map = new Map<string | null, NoteFolder[]>();
@@ -92,10 +231,13 @@ export function NotesSidebar({
     return map;
   }, [notes]);
 
-  const toggleExpand = (folderId: string) => {
-    setExpandedFolders((prev) => ({
+  const isNodeExpanded = (key: string, defaultOpen = true): boolean =>
+    expandedNodes[key] ?? defaultOpen;
+
+  const toggleExpand = (key: string, defaultOpen = true) => {
+    setExpandedNodes((prev) => ({
       ...prev,
-      [folderId]: !(prev[folderId] ?? true),
+      [key]: !(prev[key] ?? defaultOpen),
     }));
   };
 
@@ -110,7 +252,7 @@ export function NotesSidebar({
       setNewFolderName('');
       setCreatingFolderParent(undefined);
       if (parentId) {
-        setExpandedFolders((prev) => ({ ...prev, [parentId]: true }));
+        setExpandedNodes((prev) => ({ ...prev, [parentId]: true }));
       }
     } finally {
       setBusyId(null);
@@ -133,11 +275,15 @@ export function NotesSidebar({
   const displayedSearchNotes = searchResults ?? [];
 
   const draggingNote = useMemo(
-    () => (draggingNoteId ? notes.find((n) => n.id === draggingNoteId) ?? null : null),
+    () =>
+      draggingNoteId ? notes.find((n) => n.id === draggingNoteId) ?? null : null,
     [draggingNoteId, notes],
   );
 
-  const handleNoteDragStart = (e: DragEvent<HTMLButtonElement>, noteId: string) => {
+  const handleNoteDragStart = (
+    e: DragEvent<HTMLButtonElement>,
+    noteId: string,
+  ) => {
     e.dataTransfer.setData('text/atrium-note-id', noteId);
     e.dataTransfer.effectAllowed = 'move';
     setDraggingNoteId(noteId);
@@ -152,7 +298,10 @@ export function NotesSidebar({
     e: DragEvent<HTMLElement>,
     targetId: string | 'root',
   ) => {
-    if (!e.dataTransfer.types.includes('text/atrium-note-id') && !draggingNoteId) {
+    if (
+      !e.dataTransfer.types.includes('text/atrium-note-id') &&
+      !draggingNoteId
+    ) {
       return;
     }
     e.preventDefault();
@@ -177,27 +326,127 @@ export function NotesSidebar({
     if (!note || note.folderId === targetFolderId) return;
 
     if (targetFolderId) {
-      setExpandedFolders((prev) => ({ ...prev, [targetFolderId]: true }));
+      setExpandedNodes((prev) => ({ ...prev, [targetFolderId]: true }));
     }
     void onMoveNoteToFolder(noteId, targetFolderId);
   };
 
-  const renderNoteButton = (note: NoteSummary, depth: number) => (
+  const ownerForNote = (
+    note: NoteSummary,
+  ): Omit<UploadAttachmentOptions, 'kind'> => {
+    if (note.universityActivityItemId) {
+      return { universityActivityItemId: note.universityActivityItemId };
+    }
+    if (note.calendarEventId) {
+      return {
+        calendarEventId: note.calendarEventId,
+        calendarOccurrenceStartAt: note.calendarOccurrenceStartAt ?? null,
+      };
+    }
+    return { noteId: note.id };
+  };
+
+  const fileDropProps = (
+    key: string,
+    owner: Omit<UploadAttachmentOptions, 'kind'>,
+  ) => ({
+    'data-file-drop': fileDropTargetKey === key ? 'true' : undefined,
+    onDragOver: (e: DragEvent<HTMLElement>) => {
+      if (!e.dataTransfer.types.includes('Files')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      if (fileDropTargetKey !== key) setFileDropTargetKey(key);
+    },
+    onDragLeave: () => {
+      if (fileDropTargetKey === key) setFileDropTargetKey(null);
+    },
+    onDrop: (e: DragEvent<HTMLElement>) => {
+      if (e.dataTransfer.files.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setFileDropTargetKey(null);
+      const files = Array.from(e.dataTransfer.files);
+      void (async () => {
+        for (const file of files) {
+          await onUploadArtifact(file, owner);
+        }
+      })();
+    },
+  });
+
+  const renderArtifactButton = (artifact: AttachmentSummary, depth: number) => {
+    const isPdf = isPdfAttachment(artifact);
+    return (
+      <div key={artifact.id} className="notes-tree-artifact-row">
+        <button
+          type="button"
+          className="notes-tree-note notes-tree-artifact"
+          style={{ paddingLeft: `${12 + depth * 12}px` }}
+          onClick={() =>
+            isPdf
+              ? onViewPdf(artifact)
+              : void downloadAttachment(artifact.id, artifact.fileName)
+          }
+          title={
+            isPdf
+              ? `View ${artifact.fileName} beside your note`
+              : `Download ${artifact.fileName}`
+          }
+        >
+          <span className="notes-tree-artifact-glyph" aria-hidden="true">
+            📎
+          </span>
+          <span className="notes-tree-note-title">{artifact.fileName}</span>
+        </button>
+        {isPdf && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon-sm notes-tree-artifact-download"
+            title={`Download ${artifact.fileName}`}
+            aria-label={`Download ${artifact.fileName}`}
+            onClick={() =>
+              void downloadAttachment(artifact.id, artifact.fileName)
+            }
+          >
+            ↓
+          </button>
+        )}
+      </div>
+    );
+  };
+
+  const renderNoteButton = (
+    note: NoteSummary,
+    depth: number,
+    allowDrag = true,
+  ) => (
     <button
       key={note.id}
       type="button"
-      draggable
-      onDragStart={(e) => handleNoteDragStart(e, note.id)}
-      onDragEnd={handleNoteDragEnd}
+      draggable={allowDrag}
+      onDragStart={
+        allowDrag ? (e) => handleNoteDragStart(e, note.id) : undefined
+      }
+      onDragEnd={allowDrag ? handleNoteDragEnd : undefined}
       className={`notes-tree-note ${selectedNoteId === note.id ? 'is-selected' : ''} ${
         draggingNoteId === note.id ? 'is-dragging' : ''
       }`}
-      style={{ paddingLeft: `${12 + depth * 14}px` }}
-      onClick={() => {
+      {...fileDropProps(`note:${note.id}`, ownerForNote(note))}
+      style={{ paddingLeft: `${12 + depth * 12}px` }}
+      onClick={(e) => {
+        if (e.shiftKey) {
+          onOpenNoteSplit(note.id);
+          return;
+        }
         onSelectNote(note.id);
         onCloseMobile();
       }}
-      title={`${note.title} (drag into a folder to move)`}
+      title={
+        allowDrag
+          ? `${note.title} (drag into a folder to move, Shift+click to open beside)`
+          : note.title
+      }
     >
       <NoteIcon className="notes-tree-icon" />
       <span className="notes-tree-note-title">{note.title}</span>
@@ -214,7 +463,7 @@ export function NotesSidebar({
   );
 
   const renderFolderBranch = (folder: NoteFolder, depth: number) => {
-    const isExpanded = expandedFolders[folder.id] ?? true;
+    const isExpanded = isNodeExpanded(folder.id, true);
     const childFolders = foldersByParent.get(folder.id) ?? [];
     const childNotes = notesByFolder.get(folder.id) ?? [];
     const isRenaming = renamingFolderId === folder.id;
@@ -225,7 +474,7 @@ export function NotesSidebar({
       <div key={folder.id} className="notes-tree-branch">
         <div
           className={`notes-tree-folder-row ${isDropTarget ? 'is-drop-target' : ''}`}
-          style={{ paddingLeft: `${8 + depth * 14}px` }}
+          style={{ paddingLeft: `${8 + depth * 12}px` }}
           onDragOver={(e) => handleFolderDragOver(e, folder.id)}
           onDragLeave={() => {
             if (dropTargetFolderId === folder.id) setDropTargetFolderId(null);
@@ -235,8 +484,10 @@ export function NotesSidebar({
           <button
             type="button"
             className={`notes-tree-chevron ${isExpanded ? 'is-expanded' : ''}`}
-            aria-label={isExpanded ? `Collapse ${folder.name}` : `Expand ${folder.name}`}
-            onClick={() => toggleExpand(folder.id)}
+            aria-label={
+              isExpanded ? `Collapse ${folder.name}` : `Expand ${folder.name}`
+            }
+            onClick={() => toggleExpand(folder.id, true)}
           >
             <ChevronRightIcon />
           </button>
@@ -265,7 +516,7 @@ export function NotesSidebar({
             <button
               type="button"
               className="notes-tree-folder-name"
-              onClick={() => toggleExpand(folder.id)}
+              onClick={() => toggleExpand(folder.id, true)}
               onDoubleClick={() => {
                 setRenamingFolderId(folder.id);
                 setRenameDraft(folder.name);
@@ -292,7 +543,7 @@ export function NotesSidebar({
               aria-label={`New note in ${folder.name}`}
               disabled={busyId === folder.id}
               onClick={() => {
-                setExpandedFolders((prev) => ({ ...prev, [folder.id]: true }));
+                setExpandedNodes((prev) => ({ ...prev, [folder.id]: true }));
                 void onCreateNote(folder.id);
               }}
             >
@@ -305,7 +556,7 @@ export function NotesSidebar({
               aria-label={`New subfolder in ${folder.name}`}
               disabled={busyId === folder.id}
               onClick={() => {
-                setExpandedFolders((prev) => ({ ...prev, [folder.id]: true }));
+                setExpandedNodes((prev) => ({ ...prev, [folder.id]: true }));
                 setCreatingFolderParent(folder.id);
                 setNewFolderName('');
               }}
@@ -375,7 +626,7 @@ export function NotesSidebar({
         {isExpanded && (
           <div className="notes-tree-children">
             {childFolders.map((sub) => renderFolderBranch(sub, depth + 1))}
-            {childNotes.map((note) => renderNoteButton(note, depth + 1))}
+            {childNotes.map((note) => renderNoteButton(note, depth + 1, true))}
           </div>
         )}
       </div>
@@ -395,6 +646,13 @@ export function NotesSidebar({
         aria-hidden="true"
       />
       <aside className="notes-sidebar" aria-label="Notes vault navigation">
+        <input
+          ref={artifactUploadInputRef}
+          type="file"
+          hidden
+          onChange={handleArtifactFilePicked}
+        />
+
         <div className="notes-sidebar-top">
           <div className="notes-sidebar-actions">
             <button
@@ -506,6 +764,37 @@ export function NotesSidebar({
             ))}
           </div>
 
+          <div
+            className="notes-section-toggles"
+            role="group"
+            aria-label="Sidebar sections"
+          >
+            <button
+              type="button"
+              aria-pressed={showUni}
+              className={`notes-section-toggle-chip ${showUni ? 'is-active' : ''}`}
+              onClick={toggleShowUni}
+            >
+              University
+            </button>
+            <button
+              type="button"
+              aria-pressed={showEvents}
+              className={`notes-section-toggle-chip ${showEvents ? 'is-active' : ''}`}
+              onClick={toggleShowEvents}
+            >
+              Events
+            </button>
+            <button
+              type="button"
+              aria-pressed={showDaily}
+              className={`notes-section-toggle-chip ${showDaily ? 'is-active' : ''}`}
+              onClick={toggleShowDaily}
+            >
+              Daily
+            </button>
+          </div>
+
           {tags.length > 0 && (
             <div className="notes-sidebar-tags" aria-label="Filter by tag">
               {tags.slice(0, 12).map((t) => (
@@ -565,6 +854,11 @@ export function NotesSidebar({
                     }}
                   >
                     <span className="notes-tree-note-title">{note.title}</span>
+                    {note.linkLabel && (
+                      <span className="meta-text notes-search-link-label">
+                        {note.linkLabel}
+                      </span>
+                    )}
                     {note.excerpt && (
                       <span className="meta-text notes-search-excerpt">
                         {note.excerpt}
@@ -574,27 +868,504 @@ export function NotesSidebar({
                 ))
               )}
             </div>
-          ) : folders.length === 0 && notes.length === 0 ? (
-            <p className="meta-text empty-state">
-              No notes yet. Create your first note above.
-            </p>
           ) : (
-            <div className="notes-tree-list">
-              {rootFolders.map((folder) => renderFolderBranch(folder, 0))}
-              {rootNotes.map((note) => renderNoteButton(note, 0))}
-              {draggingNote && draggingNote.folderId !== null && (
-                <div
-                  className={`notes-root-drop-zone ${
-                    dropTargetFolderId === 'root' ? 'is-drop-target' : ''
-                  }`}
-                  onDragOver={(e) => handleFolderDragOver(e, 'root')}
-                  onDragLeave={() => {
-                    if (dropTargetFolderId === 'root') setDropTargetFolderId(null);
-                  }}
-                  onDrop={(e) => handleFolderDrop(e, null)}
+            <div className="notes-sections-stack">
+              {/* General Section */}
+              <section className="notes-sidebar-section">
+                <button
+                  type="button"
+                  className="notes-sidebar-section-header"
+                  onClick={() => toggleExpand('section:general', true)}
+                  aria-expanded={isNodeExpanded('section:general', true)}
                 >
-                  Drop here to move to Unfiled
-                </div>
+                  <ChevronRightIcon
+                    className={`notes-tree-chevron ${
+                      isNodeExpanded('section:general', true)
+                        ? 'is-expanded'
+                        : ''
+                    }`}
+                  />
+                  <span>General</span>
+                </button>
+
+                {isNodeExpanded('section:general', true) && (
+                  <div className="notes-tree-list">
+                    {folders.length === 0 && notes.length === 0 ? (
+                      <p className="meta-text empty-state">
+                        No notes yet. Create your first note above.
+                      </p>
+                    ) : (
+                      <>
+                        {rootFolders.map((folder) =>
+                          renderFolderBranch(folder, 0),
+                        )}
+                        {rootNotes.map((note) =>
+                          renderNoteButton(note, 0, true),
+                        )}
+                        {draggingNote && draggingNote.folderId !== null && (
+                          <div
+                            className={`notes-root-drop-zone ${
+                              dropTargetFolderId === 'root'
+                                ? 'is-drop-target'
+                                : ''
+                            }`}
+                            onDragOver={(e) => handleFolderDragOver(e, 'root')}
+                            onDragLeave={() => {
+                              if (dropTargetFolderId === 'root') {
+                                setDropTargetFolderId(null);
+                              }
+                            }}
+                            onDrop={(e) => handleFolderDrop(e, null)}
+                          >
+                            Drop here to move to Unfiled
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </section>
+
+              {/* University Section */}
+              {showUni && (
+                <section className="notes-sidebar-section">
+                  <button
+                    type="button"
+                    className="notes-sidebar-section-header"
+                    onClick={() => toggleExpand('section:university', true)}
+                    aria-expanded={isNodeExpanded('section:university', true)}
+                  >
+                    <ChevronRightIcon
+                      className={`notes-tree-chevron ${
+                        isNodeExpanded('section:university', true)
+                          ? 'is-expanded'
+                          : ''
+                      }`}
+                    />
+                    <span>University</span>
+                  </button>
+
+                  {isNodeExpanded('section:university', true) && (
+                    <div className="notes-tree-list">
+                      {university.length === 0 ? (
+                        <p className="meta-text empty-state">
+                          No university courses yet.
+                        </p>
+                      ) : (
+                        university.map((sem) => {
+                          const semKey = `uni:sem:${sem.semester}`;
+                          const semOpen = isNodeExpanded(semKey, true);
+                          return (
+                            <div key={semKey} className="notes-tree-branch">
+                              <div
+                                className="notes-tree-folder-row"
+                                style={{ paddingLeft: '8px' }}
+                              >
+                                <button
+                                  type="button"
+                                  className={`notes-tree-chevron ${semOpen ? 'is-expanded' : ''}`}
+                                  onClick={() => toggleExpand(semKey, true)}
+                                  aria-label={`Toggle ${sem.semester}`}
+                                >
+                                  <ChevronRightIcon />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="notes-tree-folder-name"
+                                  onClick={() => toggleExpand(semKey, true)}
+                                >
+                                  <span>{sem.semester}</span>
+                                </button>
+                              </div>
+
+                              {semOpen &&
+                                sem.courses.map((course) => {
+                                  const cKey = `uni:course:${course.id}`;
+                                  const cOpen = isNodeExpanded(cKey, false);
+                                  return (
+                                    <div key={cKey} className="notes-tree-branch">
+                                      <div
+                                        className="notes-tree-folder-row"
+                                        style={{ paddingLeft: '20px' }}
+                                        {...fileDropProps(`course:${course.id}`, { universityCourseId: course.id })}
+                                      >
+                                        <button
+                                          type="button"
+                                          className={`notes-tree-chevron ${cOpen ? 'is-expanded' : ''}`}
+                                          onClick={() =>
+                                            toggleExpand(cKey, false)
+                                          }
+                                          aria-label={`Toggle ${course.name}`}
+                                        >
+                                          <ChevronRightIcon />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="notes-tree-folder-name"
+                                          onClick={() =>
+                                            toggleExpand(cKey, false)
+                                          }
+                                          title={course.name}
+                                        >
+                                          <span
+                                            className="notes-course-dot"
+                                            style={{
+                                              backgroundColor: course.color,
+                                            }}
+                                            aria-hidden="true"
+                                          />
+                                          <span>
+                                            {course.code
+                                              ? `${course.code} · ${course.name}`
+                                              : course.name}
+                                          </span>
+                                        </button>
+                                        <div className="notes-tree-folder-actions">
+                                          <button
+                                            type="button"
+                                            className="btn btn-ghost btn-icon-sm"
+                                            title={`New course note in ${course.name}`}
+                                            aria-label={`New course note in ${course.name}`}
+                                            onClick={() => {
+                                              setExpandedNodes((prev) => ({
+                                                ...prev,
+                                                [cKey]: true,
+                                              }));
+                                              void onCreateCourseNote(
+                                                course.id,
+                                              );
+                                            }}
+                                          >
+                                            <PlusIcon />
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="btn btn-ghost btn-icon-sm"
+                                            title={`Upload course artifact to ${course.name}`}
+                                            aria-label={`Upload course artifact to ${course.name}`}
+                                            onClick={() => {
+                                              setExpandedNodes((prev) => ({
+                                                ...prev,
+                                                [cKey]: true,
+                                              }));
+                                              triggerArtifactUpload({
+                                                universityCourseId: course.id,
+                                              });
+                                            }}
+                                          >
+                                            <UploadIcon />
+                                          </button>
+                                        </div>
+                                      </div>
+
+                                      {cOpen && (
+                                        <div className="notes-tree-children">
+                                          {course.notes.map((n) =>
+                                            renderNoteButton(n, 2, false),
+                                          )}
+                                          {course.artifacts.map((a) =>
+                                            renderArtifactButton(a, 2),
+                                          )}
+                                          {course.activities.map((act) => {
+                                            const aKey = `uni:act:${act.id}`;
+                                            const aOpen = isNodeExpanded(
+                                              aKey,
+                                              false,
+                                            );
+                                            return (
+                                              <div
+                                                key={aKey}
+                                                className="notes-tree-branch"
+                                              >
+                                                <div
+                                                  className="notes-tree-folder-row"
+                                                  style={{
+                                                    paddingLeft: '32px',
+                                                  }}
+                                                >
+                                                  <button
+                                                    type="button"
+                                                    className={`notes-tree-chevron ${aOpen ? 'is-expanded' : ''}`}
+                                                    onClick={() =>
+                                                      toggleExpand(aKey, false)
+                                                    }
+                                                    aria-label={`Toggle ${act.title}`}
+                                                  >
+                                                    <ChevronRightIcon />
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    className="notes-tree-folder-name"
+                                                    onClick={() =>
+                                                      toggleExpand(aKey, false)
+                                                    }
+                                                  >
+                                                    <span>{act.title}</span>
+                                                  </button>
+                                                </div>
+
+                                                {aOpen &&
+                                                  act.items.map((item) => {
+                                                    const iKey = `uni:item:${item.id}`;
+                                                    const hasArtifacts =
+                                                      item.artifacts.length > 0;
+                                                    const iOpen =
+                                                      isNodeExpanded(
+                                                        iKey,
+                                                        hasArtifacts,
+                                                      );
+                                                    const isSelected =
+                                                      item.note !== null &&
+                                                      selectedNoteId ===
+                                                        item.note.id;
+                                                    return (
+                                                      <div
+                                                        key={iKey}
+                                                        className="notes-tree-branch"
+                                                      >
+                                                        <div
+                                                          className={`notes-tree-folder-row notes-tree-item-row ${
+                                                            isSelected
+                                                              ? 'is-selected'
+                                                              : ''
+                                                          }`}
+                                                          style={{
+                                                            paddingLeft: '44px',
+                                                          }}
+                                                          {...fileDropProps(`item:${item.id}`, { universityActivityItemId: item.id })}
+                                                        >
+                                                          {hasArtifacts ? (
+                                                            <button
+                                                              type="button"
+                                                              className={`notes-tree-chevron ${iOpen ? 'is-expanded' : ''}`}
+                                                              onClick={() =>
+                                                                toggleExpand(
+                                                                  iKey,
+                                                                  true,
+                                                                )
+                                                              }
+                                                              aria-label={`Toggle ${item.title} artifacts`}
+                                                            >
+                                                              <ChevronRightIcon />
+                                                            </button>
+                                                          ) : (
+                                                            <span
+                                                              className="notes-tree-chevron-spacer"
+                                                              aria-hidden="true"
+                                                            />
+                                                          )}
+                                                          <button
+                                                            type="button"
+                                                            className="notes-tree-folder-name notes-tree-item-note-btn"
+                                                            onClick={() => {
+                                                              if (item.note) {
+                                                                onSelectNote(
+                                                                  item.note.id,
+                                                                );
+                                                              } else {
+                                                                void onOpenUniversityItemNote(
+                                                                  item.id,
+                                                                );
+                                                              }
+                                                              onCloseMobile();
+                                                            }}
+                                                            title={
+                                                              item.note
+                                                                ? `Open note: ${item.title}`
+                                                                : `Create & open note for ${item.title}`
+                                                            }
+                                                          >
+                                                            <NoteIcon className="notes-tree-icon" />
+                                                            <span>
+                                                              {item.title}
+                                                            </span>
+                                                          </button>
+                                                          <div className="notes-tree-folder-actions">
+                                                            <button
+                                                              type="button"
+                                                              className="btn btn-ghost btn-icon-sm"
+                                                              title={`Upload artifact to ${item.title}`}
+                                                              aria-label={`Upload artifact to ${item.title}`}
+                                                              onClick={() => {
+                                                                setExpandedNodes(
+                                                                  (prev) => ({
+                                                                    ...prev,
+                                                                    [iKey]: true,
+                                                                  }),
+                                                                );
+                                                                triggerArtifactUpload(
+                                                                  {
+                                                                    universityActivityItemId:
+                                                                      item.id,
+                                                                  },
+                                                                );
+                                                              }}
+                                                            >
+                                                              <UploadIcon />
+                                                            </button>
+                                                          </div>
+                                                        </div>
+                                                        {hasArtifacts &&
+                                                          iOpen &&
+                                                          item.artifacts.map(
+                                                            (art) =>
+                                                              renderArtifactButton(
+                                                                art,
+                                                                4,
+                                                              ),
+                                                          )}
+                                                      </div>
+                                                    );
+                                                  })}
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {/* Events Section */}
+              {showEvents && (
+                <section className="notes-sidebar-section">
+                  <button
+                    type="button"
+                    className="notes-sidebar-section-header"
+                    onClick={() => toggleExpand('section:events', true)}
+                    aria-expanded={isNodeExpanded('section:events', true)}
+                  >
+                    <ChevronRightIcon
+                      className={`notes-tree-chevron ${
+                        isNodeExpanded('section:events', true)
+                          ? 'is-expanded'
+                          : ''
+                      }`}
+                    />
+                    <span>Events</span>
+                  </button>
+
+                  {isNodeExpanded('section:events', true) && (
+                    <div className="notes-tree-list">
+                      {events.length === 0 ? (
+                        <p className="meta-text empty-state">
+                          No event notes yet. Open a note from any calendar
+                          event to see it here.
+                        </p>
+                      ) : (
+                        events.map((evt) => {
+                          const eKey = `evt:${evt.calendarEventId}`;
+                          const eOpen = isNodeExpanded(eKey, true);
+                          if (
+                            !evt.isRecurring &&
+                            evt.occurrences.length === 0 &&
+                            evt.sharedNote &&
+                            evt.sharedArtifacts.length === 0
+                          ) {
+                            return renderNoteButton(evt.sharedNote, 0, false);
+                          }
+                          return (
+                            <div key={eKey} className="notes-tree-branch">
+                              <div
+                                className="notes-tree-folder-row"
+                                style={{ paddingLeft: '8px' }}
+                              >
+                                <button
+                                  type="button"
+                                  className={`notes-tree-chevron ${eOpen ? 'is-expanded' : ''}`}
+                                  onClick={() => toggleExpand(eKey, true)}
+                                  aria-label={`Toggle ${evt.title}`}
+                                >
+                                  <ChevronRightIcon />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="notes-tree-folder-name"
+                                  onClick={() => toggleExpand(eKey, true)}
+                                >
+                                  <span>{evt.title}</span>
+                                </button>
+                              </div>
+
+                              {eOpen && (
+                                <div className="notes-tree-children">
+                                  {evt.sharedNote &&
+                                    renderNoteButton(evt.sharedNote, 1, false)}
+                                  {evt.sharedArtifacts.map((a) =>
+                                    renderArtifactButton(a, 1),
+                                  )}
+                                  {evt.occurrences.map((occ) => (
+                                    <div
+                                      key={occ.occurrenceStartAt}
+                                      className="notes-tree-branch"
+                                    >
+                                      {occ.note ? (
+                                        renderNoteButton(occ.note, 1, false)
+                                      ) : (
+                                        <div
+                                          className="meta-text notes-tree-occ-label"
+                                          style={{ paddingLeft: '24px' }}
+                                        >
+                                          {formatShortOccurrenceDate(
+                                            occ.occurrenceStartAt,
+                                          )}
+                                        </div>
+                                      )}
+                                      {occ.artifacts.map((a) =>
+                                        renderArtifactButton(a, 2),
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {/* Daily Section */}
+              {showDaily && (
+                <section className="notes-sidebar-section">
+                  <button
+                    type="button"
+                    className="notes-sidebar-section-header"
+                    onClick={() => toggleExpand('section:daily', true)}
+                    aria-expanded={isNodeExpanded('section:daily', true)}
+                  >
+                    <ChevronRightIcon
+                      className={`notes-tree-chevron ${
+                        isNodeExpanded('section:daily', true)
+                          ? 'is-expanded'
+                          : ''
+                      }`}
+                    />
+                    <span>Daily</span>
+                  </button>
+
+                  {isNodeExpanded('section:daily', true) && (
+                    <div className="notes-tree-list">
+                      {daily.length === 0 ? (
+                        <p className="meta-text empty-state">
+                          No daily notes yet.
+                        </p>
+                      ) : (
+                        daily.map((note) => renderNoteButton(note, 0, false))
+                      )}
+                    </div>
+                  )}
+                </section>
               )}
             </div>
           )}
@@ -603,4 +1374,3 @@ export function NotesSidebar({
     </>
   );
 }
-

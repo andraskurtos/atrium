@@ -4,8 +4,20 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
+  type DragEvent,
 } from 'react';
 import ReactMarkdown from 'react-markdown';
+import {
+  deleteAttachment,
+  downloadAttachment,
+  formatFileSize,
+  isPdfAttachment,
+  listAttachments,
+  uploadAttachment,
+  type AttachmentFilter,
+  type UploadAttachmentOptions,
+} from '../lib/attachmentsClient';
 import {
   parseFrontmatter,
   stripFrontmatterForReading,
@@ -14,19 +26,26 @@ import {
 } from '../lib/frontmatter';
 import {
   insertCallout,
+  insertCodeBlock,
   insertHorizontalRule,
   insertImage,
   insertLink,
+  insertMathBlock,
   setHeading,
   toggleBlockquote,
   toggleBold,
   toggleItalic,
 } from '../lib/markdownCommands';
-import { readingMarkdownComponents } from '../lib/markdownReading';
+import {
+  readingMarkdownComponents,
+  readingRehypePlugins,
+  readingRemarkPlugins,
+} from '../lib/markdownReading';
 import {
   countWordsAndChars,
   DEFAULT_SAMPLE_NOTE,
   loadNotesDraft,
+  normalizeBlockMathFences,
 } from '../lib/markdownUtils';
 import {
   createNote,
@@ -36,16 +55,21 @@ import {
   getNote,
   getNotesTree,
   NoteConflictError,
+  openLinkedNote,
   searchNotes,
   updateNote,
   updateNoteFolder,
   type NoteSearchMode,
 } from '../lib/notesClient';
 import type {
+  AttachmentSummary,
+  EventNotesGroup,
   NoteDetail,
   NoteFolder,
   NoteSummary,
   NoteTagCount,
+  PendingNoteTarget,
+  UniversitySemesterNotesTree,
 } from '../types/atrium';
 import {
   MarkdownEditor,
@@ -53,6 +77,12 @@ import {
 } from './MarkdownEditor';
 import { NotePropertiesBar } from './NotePropertiesBar';
 import { NotesSidebar } from './NotesSidebar';
+import { NoteReadPane, PdfViewerPane } from './SplitPanes';
+
+type SplitPaneState =
+  | { kind: 'note'; noteId: string }
+  | { kind: 'pdf'; attachment: AttachmentSummary }
+  | null;
 
 export type NotesViewMode = 'live' | 'reading' | 'source';
 
@@ -63,7 +93,37 @@ const AUTOSAVE_DELAY_MS = 700;
 
 interface NotesPageProps {
   userId: string;
+  initialTarget?: PendingNoteTarget | null;
+  onConsumeInitialTarget?: () => void;
+  onJumpToUniversityCourse?: (courseId: string) => void;
   onAnnounce: (message: string) => void;
+}
+
+function getArtifactOwnerForNote(
+  note: NoteDetail,
+): { filter: AttachmentFilter; upload: Omit<UploadAttachmentOptions, 'kind'> } {
+  if (note.universityActivityItemId) {
+    return {
+      filter: { universityActivityItemId: note.universityActivityItemId },
+      upload: { universityActivityItemId: note.universityActivityItemId },
+    };
+  }
+  if (note.calendarEventId) {
+    return {
+      filter: {
+        calendarEventId: note.calendarEventId,
+        occurrenceStartAt: note.calendarOccurrenceStartAt ?? null,
+      },
+      upload: {
+        calendarEventId: note.calendarEventId,
+        calendarOccurrenceStartAt: note.calendarOccurrenceStartAt ?? null,
+      },
+    };
+  }
+  return {
+    filter: { noteId: note.id },
+    upload: { noteId: note.id },
+  };
 }
 
 function readInitialSidebarOpen(): boolean {
@@ -77,12 +137,30 @@ function readInitialSidebarOpen(): boolean {
   }
 }
 
-export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
+export function NotesPage({
+  userId,
+  initialTarget = null,
+  onConsumeInitialTarget,
+  onJumpToUniversityCourse,
+  onAnnounce,
+}: NotesPageProps) {
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(readInitialSidebarOpen);
   const [folders, setFolders] = useState<NoteFolder[]>([]);
   const [notes, setNotes] = useState<NoteSummary[]>([]);
+  const [universityTree, setUniversityTree] = useState<
+    UniversitySemesterNotesTree[]
+  >([]);
+  const [eventsTree, setEventsTree] = useState<EventNotesGroup[]>([]);
+  const [dailyNotes, setDailyNotes] = useState<NoteSummary[]>([]);
   const [tags, setTags] = useState<NoteTagCount[]>([]);
   const [treeLoading, setTreeLoading] = useState(true);
+  const [noteArtifacts, setNoteArtifacts] = useState<AttachmentSummary[]>([]);
+  const [uploadingArtifact, setUploadingArtifact] = useState(false);
+  const [canvasFileDrag, setCanvasFileDrag] = useState(false);
+  const [splitPane, setSplitPane] = useState<SplitPaneState>(null);
+  const [splitSide, setSplitSide] = useState<'left' | 'right'>('right');
+  const inlineImageInputRef = useRef<HTMLInputElement | null>(null);
+  const noteArtifactInputRef = useRef<HTMLInputElement | null>(null);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<NoteSearchMode>('titles');
@@ -152,6 +230,9 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
     const data = await getNotesTree();
     setFolders(data.folders);
     setNotes(data.notes);
+    setUniversityTree(data.university ?? []);
+    setEventsTree(data.events ?? []);
+    setDailyNotes(data.daily ?? []);
     setTags(data.tags);
     setSearchRefreshTick((t) => t + 1);
     return data;
@@ -323,7 +404,11 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
     void refreshTree()
       .then((data) => {
         if (!active) return;
-        if (data.notes.length > 0 && !selectedNoteIdRef.current) {
+        if (
+          !initialTarget &&
+          data.notes.length > 0 &&
+          !selectedNoteIdRef.current
+        ) {
           void openNote(data.notes[0].id);
         }
       })
@@ -337,7 +422,106 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
     return () => {
       active = false;
     };
-  }, [onAnnounce, openNote, refreshTree]);
+  }, [initialTarget, onAnnounce, openNote, refreshTree]);
+
+  // Handle cross-view navigation targets from University or Calendar
+  useEffect(() => {
+    if (!initialTarget) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        if (initialTarget.kind === 'note_id') {
+          await openNote(initialTarget.noteId);
+        } else if (initialTarget.kind === 'new_course_note') {
+          flushCurrentNote(false);
+          const created = await createNote({
+            title: 'Untitled',
+            universityCourseId: initialTarget.universityCourseId,
+            content: '',
+          });
+          if (cancelled) return;
+          latestVersionByNoteRef.current.set(created.id, created.version);
+          await refreshTree();
+          await openNote(created.id);
+        } else if (initialTarget.kind === 'university_item') {
+          flushCurrentNote(false);
+          const detail = await openLinkedNote({
+            kind: 'university_item',
+            universityActivityItemId: initialTarget.universityActivityItemId,
+          });
+          if (cancelled) return;
+          latestVersionByNoteRef.current.set(detail.id, detail.version);
+          await refreshTree();
+          await openNote(detail.id);
+        } else if (initialTarget.kind === 'calendar_event') {
+          flushCurrentNote(false);
+          const detail = await openLinkedNote({
+            kind: 'calendar_event',
+            calendarEventId: initialTarget.calendarEventId,
+            occurrenceStartAt: initialTarget.occurrenceStartAt ?? null,
+          });
+          if (cancelled) return;
+          latestVersionByNoteRef.current.set(detail.id, detail.version);
+          await refreshTree();
+          await openNote(detail.id);
+        } else if (initialTarget.kind === 'daily') {
+          flushCurrentNote(false);
+          const detail = await openLinkedNote({
+            kind: 'daily',
+            dailyDate: initialTarget.dailyDate,
+          });
+          if (cancelled) return;
+          latestVersionByNoteRef.current.set(detail.id, detail.version);
+          await refreshTree();
+          await openNote(detail.id);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          onAnnounce(
+            err instanceof Error ? err.message : 'Could not open linked note',
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          onConsumeInitialTarget?.();
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    flushCurrentNote,
+    initialTarget,
+    onAnnounce,
+    onConsumeInitialTarget,
+    openNote,
+    refreshTree,
+  ]);
+
+  // Load visible artifacts for the active note (or its linked uni item / event)
+  const refreshActiveArtifacts = useCallback(async (note: NoteDetail | null) => {
+    if (!note) {
+      setNoteArtifacts([]);
+      return;
+    }
+    try {
+      const { filter } = getArtifactOwnerForNote(note);
+      const list = await listAttachments(filter);
+      if (activeNoteRef.current?.id === note.id) {
+        setNoteArtifacts(list);
+      }
+    } catch {
+      if (activeNoteRef.current?.id === note.id) {
+        setNoteArtifacts([]);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshActiveArtifacts(activeNote);
+  }, [activeNote, refreshActiveArtifacts]);
 
   // Flush pending edits on unmount
   useEffect(() => {
@@ -565,6 +749,133 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
       parsedFm.tags.filter((t) => t !== tag),
     );
     handleContentChange(nextContent);
+  };
+
+  const handleCreateCourseNote = async (universityCourseId: string) => {
+    flushCurrentNote(false);
+    try {
+      const created = await createNote({
+        title: 'Untitled',
+        universityCourseId,
+        content: '',
+      });
+      latestVersionByNoteRef.current.set(created.id, created.version);
+      await refreshTree();
+      await openNote(created.id);
+      if (modeRef.current === 'reading') {
+        switchMode('live');
+      }
+      onAnnounce('Created course note');
+    } catch (err) {
+      onAnnounce(
+        err instanceof Error ? err.message : 'Could not create course note',
+      );
+    }
+  };
+
+  const handleOpenUniversityItemNote = async (itemId: string) => {
+    flushCurrentNote(false);
+    try {
+      const detail = await openLinkedNote({
+        kind: 'university_item',
+        universityActivityItemId: itemId,
+      });
+      latestVersionByNoteRef.current.set(detail.id, detail.version);
+      await refreshTree();
+      await openNote(detail.id);
+      if (modeRef.current === 'reading') {
+        switchMode('live');
+      }
+    } catch (err) {
+      onAnnounce(
+        err instanceof Error ? err.message : 'Could not open university note',
+      );
+    }
+  };
+
+  const handleUploadSidebarArtifact = async (
+    file: File,
+    owner: Omit<UploadAttachmentOptions, 'kind'>,
+  ) => {
+    try {
+      await uploadAttachment(file, { kind: 'artifact', ...owner });
+      await refreshTree();
+      if (activeNoteRef.current) {
+        await refreshActiveArtifacts(activeNoteRef.current);
+      }
+      onAnnounce(`Uploaded "${file.name}"`);
+    } catch (err) {
+      onAnnounce(
+        err instanceof Error ? err.message : 'Could not upload artifact',
+      );
+    }
+  };
+
+  const handleUploadInlineImage = useCallback(
+    async (file: File): Promise<{ url: string; alt: string } | null> => {
+      const note = activeNoteRef.current;
+      if (!note) return null;
+      try {
+        const uploaded = await uploadAttachment(file, {
+          kind: 'inline_image',
+          noteId: note.id,
+        });
+        const alt =
+          file.name.replace(/\.[^.]+$/, '').trim() || 'pasted-image';
+        onAnnounce(`Inserted image "${uploaded.fileName}"`);
+        return { url: uploaded.url, alt };
+      } catch (err) {
+        onAnnounce(
+          err instanceof Error ? err.message : 'Could not upload image',
+        );
+        return null;
+      }
+    },
+    [onAnnounce],
+  );
+
+  const handleToolbarImagePicked = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const uploaded = await handleUploadInlineImage(file);
+    if (uploaded) {
+      editorRef.current?.insertImageMarkdown(uploaded.alt, uploaded.url);
+    }
+  };
+
+  const handleNoteArtifactPicked = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const note = activeNoteRef.current;
+    if (!file || !note) return;
+    setUploadingArtifact(true);
+    try {
+      const { upload } = getArtifactOwnerForNote(note);
+      await uploadAttachment(file, { kind: 'artifact', ...upload });
+      await refreshActiveArtifacts(note);
+      await refreshTree();
+      onAnnounce(`Attached "${file.name}"`);
+    } catch (err) {
+      onAnnounce(
+        err instanceof Error ? err.message : 'Could not attach file',
+      );
+    } finally {
+      setUploadingArtifact(false);
+    }
+  };
+
+  const handleDeleteNoteArtifact = async (artifact: AttachmentSummary) => {
+    try {
+      await deleteAttachment(artifact.id);
+      setNoteArtifacts((prev) => prev.filter((a) => a.id !== artifact.id));
+      await refreshTree();
+      onAnnounce(`Removed "${artifact.fileName}"`);
+    } catch (err) {
+      onAnnounce(
+        err instanceof Error ? err.message : 'Could not delete attachment',
+      );
+    }
   };
 
   const handleCreateNote = async (
@@ -873,6 +1184,148 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
     );
   };
 
+  const handleCanvasDragOver = (e: DragEvent<HTMLElement>) => {
+    if (!e.dataTransfer.types.includes('Files') || !activeNoteRef.current) {
+      return;
+    }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setCanvasFileDrag(true);
+  };
+
+  const handleCanvasDragLeave = (e: DragEvent<HTMLElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      setCanvasFileDrag(false);
+    }
+  };
+
+  const handleCanvasDrop = (e: DragEvent<HTMLElement>) => {
+    setCanvasFileDrag(false);
+    const note = activeNoteRef.current;
+    if (!note || e.dataTransfer.files.length === 0) return;
+    e.preventDefault();
+    // In edit modes the editor already embeds dropped images inline.
+    const files = Array.from(e.dataTransfer.files).filter(
+      (f) =>
+        modeRef.current === 'reading' ||
+        !/^image\/(png|jpeg|webp|gif)$/i.test(f.type),
+    );
+    if (files.length === 0) return;
+    void (async () => {
+      setUploadingArtifact(true);
+      try {
+        const { upload } = getArtifactOwnerForNote(note);
+        for (const file of files) {
+          await uploadAttachment(file, { kind: 'artifact', ...upload });
+        }
+        await refreshActiveArtifacts(note);
+        await refreshTree();
+        onAnnounce(
+          files.length === 1
+            ? `Attached "${files[0].name}"`
+            : `Attached ${files.length} files`,
+        );
+      } catch (err) {
+        onAnnounce(
+          err instanceof Error ? err.message : 'Could not attach file',
+        );
+      } finally {
+        setUploadingArtifact(false);
+      }
+    })();
+  };
+
+  const splitOptions = useMemo(() => {
+    const noteOpts: Array<{ id: string; label: string }> = [];
+    const pdfMap = new Map<string, { att: AttachmentSummary; label: string }>();
+    const addPdf = (att: AttachmentSummary, label: string) => {
+      if (isPdfAttachment(att) && !pdfMap.has(att.id)) {
+        pdfMap.set(att.id, { att, label: `${label} · ${att.fileName}` });
+      }
+    };
+    for (const n of notes) noteOpts.push({ id: n.id, label: n.title });
+    for (const sem of universityTree) {
+      for (const c of sem.courses) {
+        const cl = c.code ?? c.name;
+        for (const n of c.notes) noteOpts.push({ id: n.id, label: `${cl} · ${n.title}` });
+        for (const a of c.artifacts) addPdf(a, cl);
+        for (const act of c.activities) {
+          for (const item of act.items) {
+            if (item.note) {
+              noteOpts.push({ id: item.note.id, label: `${cl} › ${item.title}` });
+            }
+            for (const a of item.artifacts) addPdf(a, `${cl} › ${item.title}`);
+          }
+        }
+      }
+    }
+    for (const evt of eventsTree) {
+      if (evt.sharedNote) {
+        noteOpts.push({ id: evt.sharedNote.id, label: evt.sharedNote.title });
+      }
+      for (const a of evt.sharedArtifacts) addPdf(a, evt.title);
+      for (const occ of evt.occurrences) {
+        if (occ.note) noteOpts.push({ id: occ.note.id, label: occ.note.title });
+        for (const a of occ.artifacts) addPdf(a, evt.title);
+      }
+    }
+    for (const n of dailyNotes) {
+      noteOpts.push({ id: n.id, label: `Daily · ${n.dailyDate ?? n.title}` });
+    }
+    for (const a of noteArtifacts) addPdf(a, 'This note');
+    return {
+      notes: noteOpts,
+      pdfs: Array.from(pdfMap.values()),
+    };
+  }, [dailyNotes, eventsTree, noteArtifacts, notes, universityTree]);
+
+  const handleSplitSelect = (value: string) => {
+    if (value.startsWith('note:')) {
+      setSplitPane({ kind: 'note', noteId: value.slice(5) });
+    } else if (value.startsWith('pdf:')) {
+      const found = splitOptions.pdfs.find((p) => p.att.id === value.slice(4));
+      if (found) setSplitPane({ kind: 'pdf', attachment: found.att });
+    }
+  };
+
+  const handleViewPdf = (artifact: AttachmentSummary) => {
+    setSplitPane({ kind: 'pdf', attachment: artifact });
+  };
+
+  const handleOpenNoteSplit = (noteId: string) => {
+    if (noteId === selectedNoteIdRef.current) return;
+    setSplitPane({ kind: 'note', noteId });
+  };
+
+  const handleSplitOpenInEditor = async (noteId: string) => {
+    const previous = selectedNoteIdRef.current;
+    await openNote(noteId);
+    setSplitPane(previous && previous !== noteId ? { kind: 'note', noteId: previous } : null);
+  };
+
+  const toggleSplitSide = () =>
+    setSplitSide((prev) => (prev === 'right' ? 'left' : 'right'));
+
+  const closeSplit = () => setSplitPane(null);
+
+  const splitPaneNode = splitPane ? (
+    splitPane.kind === 'pdf' ? (
+      <PdfViewerPane
+        attachment={splitPane.attachment}
+        onSwap={toggleSplitSide}
+        onClose={closeSplit}
+      />
+    ) : (
+      <NoteReadPane
+        noteId={splitPane.noteId}
+        refreshKey={notes.length + (activeNote?.version ?? 0)}
+        onOpenInEditor={(id) => void handleSplitOpenInEditor(id)}
+        onSwap={toggleSplitSide}
+        onClose={closeSplit}
+      />
+    )
+  ) : null;
+
   const readingBody = useMemo(
     () => stripFrontmatterForReading(draftContent),
     [draftContent],
@@ -986,6 +1439,26 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
                   >
                     Callout
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs notes-fmt-btn"
+                    title="Insert code block (```lang)"
+                    onClick={() =>
+                      editorRef.current?.runCommand(insertCodeBlock)
+                    }
+                  >
+                    Code
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs notes-fmt-btn"
+                    title="Insert LaTeX math ($...$ or $$...$$)"
+                    onClick={() =>
+                      editorRef.current?.runCommand(insertMathBlock)
+                    }
+                  >
+                    Math
+                  </button>
                   <span className="notes-toolbar-sep" aria-hidden="true" />
                   <button
                     type="button"
@@ -998,11 +1471,24 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs notes-fmt-btn"
-                    title="Insert image URL"
-                    onClick={() => editorRef.current?.runCommand(insertImage)}
+                    title="Upload & insert image (Shift+Click for image URL)"
+                    onClick={(e) => {
+                      if (e.shiftKey) {
+                        editorRef.current?.runCommand(insertImage);
+                      } else {
+                        inlineImageInputRef.current?.click();
+                      }
+                    }}
                   >
                     Image
                   </button>
+                  <input
+                    ref={inlineImageInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif"
+                    hidden
+                    onChange={(e) => void handleToolbarImagePicked(e)}
+                  />
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs notes-fmt-btn"
@@ -1017,6 +1503,54 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
               )}
 
               <div className="notes-toolbar-right">
+                <div className="notes-split-controls">
+                  <select
+                    className="input notes-split-select"
+                    aria-label="Open beside the current note"
+                    value=""
+                    onChange={(e) => handleSplitSelect(e.target.value)}
+                  >
+                    <option value="">Split view…</option>
+                    <optgroup label="Notes">
+                      {splitOptions.notes
+                        .filter((o) => o.id !== activeNote.id)
+                        .map((o) => (
+                          <option key={o.id} value={`note:${o.id}`}>
+                            {o.label}
+                          </option>
+                        ))}
+                    </optgroup>
+                    <optgroup label="PDFs">
+                      {splitOptions.pdfs.map((p) => (
+                        <option key={p.att.id} value={`pdf:${p.att.id}`}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                  {splitPane && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={toggleSplitSide}
+                        title="Swap sides"
+                        aria-label="Swap sides"
+                      >
+                        ⇄
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={closeSplit}
+                        title="Close split view"
+                        aria-label="Close split view"
+                      >
+                        ×
+                      </button>
+                    </>
+                  )}
+                </div>
                 {saveState === 'saving' && (
                   <span className="pill-neutral daily-note-status">Saving…</span>
                 )}
@@ -1070,6 +1604,9 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
           isOpen={sidebarOpen}
           folders={folders}
           notes={notes}
+          university={universityTree}
+          events={eventsTree}
+          daily={dailyNotes}
           tags={tags}
           searchQuery={searchQuery}
           searchMode={searchMode}
@@ -1085,6 +1622,11 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
           onSelectTag={setActiveTag}
           onSelectNote={(id) => void openNote(id)}
           onSelectSearchResult={handleSelectSearchResult}
+          onOpenUniversityItemNote={handleOpenUniversityItemNote}
+          onViewPdf={handleViewPdf}
+          onOpenNoteSplit={handleOpenNoteSplit}
+          onCreateCourseNote={handleCreateCourseNote}
+          onUploadArtifact={handleUploadSidebarArtifact}
           onMoveNoteToFolder={handleMoveAnyNoteToFolder}
           onCreateNote={(folderId) => handleCreateNote(folderId)}
           onCreateFolder={handleCreateFolder}
@@ -1093,7 +1635,15 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
           onDeleteFolder={handleDeleteFolder}
         />
 
-        <div className="notes-canvas-scroll">
+        <div className={`notes-main-area ${splitPane ? 'is-split' : ''}`}>
+
+        {splitPane && splitSide === 'left' && splitPaneNode}
+
+        <div className={`notes-canvas-scroll ${canvasFileDrag ? 'is-file-drag' : ''}`}
+          onDragOver={handleCanvasDragOver}
+          onDragLeave={handleCanvasDragLeave}
+          onDrop={handleCanvasDrop}
+        >
           <div className="notes-canvas">
             {saveState === 'conflict' && conflictNote && (
               <div className="notes-conflict-banner" role="alert">
@@ -1322,6 +1872,9 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
                   tags={parsedFm.tags}
                   folderId={activeNote.folderId}
                   folders={folders}
+                  linkKind={activeNote.linkKind}
+                  linkLabel={activeNote.linkLabel}
+                  universityCourseId={activeNote.universityCourseId}
                   allowAgentRead={activeNote.allowAgentRead}
                   effectiveAllowAgentRead={activeNote.effectiveAllowAgentRead}
                   readOnly={mode === 'reading'}
@@ -1330,7 +1883,67 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
                   onRemoveTag={handleRemoveTag}
                   onFolderChange={(fid) => void handleMoveNoteFolder(fid)}
                   onToggleAgentRead={() => void handleToggleNoteAgentRead()}
+                  onJumpToUniversityCourse={onJumpToUniversityCourse}
                 />
+
+                <div className="notes-artifacts-strip" aria-label="Attached files">
+                  <input
+                    ref={noteArtifactInputRef}
+                    type="file"
+                    hidden
+                    onChange={(e) => void handleNoteArtifactPicked(e)}
+                  />
+                  {noteArtifacts.map((art) => (
+                    <span key={art.id} className="notes-artifact-chip">
+                      <button
+                        type="button"
+                        className="notes-artifact-download"
+                        onClick={() =>
+                          void downloadAttachment(art.id, art.fileName)
+                        }
+                        title={`Download ${art.fileName} (${formatFileSize(art.sizeBytes)})`}
+                      >
+                        <span>📎</span>
+                        <span className="notes-artifact-name">
+                          {art.fileName}
+                        </span>
+                        <span className="meta-text mono-num">
+                          {formatFileSize(art.sizeBytes)}
+                        </span>
+                      </button>
+                      {isPdfAttachment(art) && (
+                        <button
+                          type="button"
+                          className="notes-artifact-view"
+                          onClick={() => handleViewPdf(art)}
+                          title={`View ${art.fileName} beside this note`}
+                        >
+                          View
+                        </button>
+                      )}
+                      {mode !== 'reading' && (
+                        <button
+                          type="button"
+                          className="notes-artifact-remove"
+                          aria-label={`Delete ${art.fileName}`}
+                          onClick={() => void handleDeleteNoteArtifact(art)}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </span>
+                  ))}
+                  {mode !== 'reading' && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs notes-artifact-add-btn"
+                      disabled={uploadingArtifact}
+                      onClick={() => noteArtifactInputRef.current?.click()}
+                    >
+                      {uploadingArtifact ? 'Uploading…' : '+ Attach file'}
+                    </button>
+                  )}
+                </div>
 
                 {mode === 'reading' && (
                   <article
@@ -1343,8 +1956,12 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
                         to start writing.
                       </p>
                     ) : (
-                      <ReactMarkdown components={readingMarkdownComponents}>
-                        {readingBody}
+                      <ReactMarkdown
+                        remarkPlugins={readingRemarkPlugins}
+                        rehypePlugins={readingRehypePlugins}
+                        components={readingMarkdownComponents}
+                      >
+                        {normalizeBlockMathFences(readingBody)}
                       </ReactMarkdown>
                     )}
                   </article>
@@ -1364,6 +1981,7 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
                     caseSensitive={findCaseSensitive}
                     activeMatchIndex={findMatchIndex}
                     onMatchCountChange={setFindMatchCount}
+                    onUploadInlineImage={handleUploadInlineImage}
                     onChange={handleContentChange}
                   />
                 </div>
@@ -1371,6 +1989,8 @@ export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
             )}
           </div>
         </div>
+        {splitPane && splitSide === 'right' && splitPaneNode}
+      </div>
       </div>
 
       <footer className="notes-statusbar">

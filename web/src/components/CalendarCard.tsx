@@ -35,8 +35,17 @@ import {
   type UpdateEventInput,
   type WeekdayCode,
 } from '../lib/calendarClient';
+import {
+  deleteAttachment,
+  downloadAttachment,
+  formatFileSize,
+  listAttachments,
+  uploadAttachment,
+} from '../lib/attachmentsClient';
 import type {
+  AttachmentSummary,
   CalendarEvent,
+  PendingNoteTarget,
   RecurrenceScope,
   UserCalendar,
 } from '../types/atrium';
@@ -49,6 +58,7 @@ import {
   PlusIcon,
   UploadIcon,
 } from './Icons';
+import { TimeInput } from './TimeInput';
 
 interface CalendarCardProps {
   todayKey: string;
@@ -73,6 +83,7 @@ interface CalendarCardProps {
   onImportIcs: (file: File, targetCalendarId: string | 'new') => Promise<void>;
   onExportIcs: (calendar: UserCalendar) => Promise<void>;
   onToggleExpanded: (open: boolean) => void;
+  onOpenLinkedNote?: (target: PendingNoteTarget) => void;
 }
 
 const WEEKDAYS_MON = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
@@ -152,10 +163,18 @@ export function CalendarCard({
   onImportIcs,
   onExportIcs,
   onToggleExpanded,
+  onOpenLinkedNote,
 }: CalendarCardProps) {
   const selectedDate = parseDateKey(selectedDateKey);
   const [viewYear, setViewYear] = useState(selectedDate.getFullYear());
   const [viewMonth, setViewMonth] = useState(selectedDate.getMonth());
+  const [editingEventRefObj, setEditingEventRefObj] =
+    useState<CalendarEvent | null>(null);
+  const [editingEventArtifacts, setEditingEventArtifacts] = useState<
+    AttachmentSummary[]
+  >([]);
+  const [uploadingEventArtifact, setUploadingEventArtifact] = useState(false);
+  const eventArtifactInputRef = useRef<HTMLInputElement | null>(null);
 
   // Event form state (shared between create and edit)
   const [showEventForm, setShowEventForm] = useState(false);
@@ -329,6 +348,7 @@ export function CalendarCard({
 
   const openEditEventForm = (evt: CalendarEvent) => {
     const fields = eventToFormFields(evt);
+    setEditingEventRefObj(evt);
     setEditingEventId(evt.id);
     setEditingIsRecurring(evt.isRecurring);
     setEditingOccurrenceStartAt(evt.occurrenceStartAt ?? evt.startAt);
@@ -346,14 +366,66 @@ export function CalendarCard({
     setRecurrence(parseRRuleString(evt.recurrenceRule, fields.startDate));
     setEventError(null);
     setShowEventForm(true);
+
+    const cal = calendars.find((c) => c.id === evt.calendarId);
+    const isUni = cal?.module === 'university' || Boolean(evt.universityActivityItemId);
+    if (!isUni) {
+      const targetEventId = evt.seriesMasterId ?? evt.id;
+      const targetOcc = evt.isRecurring ? (evt.occurrenceStartAt ?? evt.startAt) : null;
+      void listAttachments({
+        calendarEventId: targetEventId,
+        occurrenceStartAt: targetOcc,
+      })
+        .then(setEditingEventArtifacts)
+        .catch(() => setEditingEventArtifacts([]));
+    } else {
+      setEditingEventArtifacts([]);
+    }
   };
 
   const closeEventForm = () => {
     setShowEventForm(false);
+    setEditingEventRefObj(null);
+    setEditingEventArtifacts([]);
     setEditingEventId(null);
     setEditingIsRecurring(false);
     setEditingOccurrenceStartAt(null);
     setEventError(null);
+  };
+
+  const handleUploadEventArtifact = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const evt = editingEventRefObj;
+    if (!file || !evt) return;
+    setUploadingEventArtifact(true);
+    try {
+      const targetEventId = evt.seriesMasterId ?? evt.id;
+      const targetOcc = evt.isRecurring ? (evt.occurrenceStartAt ?? evt.startAt) : null;
+      const created = await uploadAttachment(file, {
+        kind: 'artifact',
+        calendarEventId: targetEventId,
+        calendarOccurrenceStartAt: targetOcc,
+      });
+      setEditingEventArtifacts((prev) => [...prev, created]);
+    } catch (err) {
+      setEventError(
+        err instanceof Error ? err.message : 'Could not upload artifact.',
+      );
+    } finally {
+      setUploadingEventArtifact(false);
+    }
+  };
+
+  const handleDeleteEventArtifact = async (art: AttachmentSummary) => {
+    try {
+      await deleteAttachment(art.id);
+      setEditingEventArtifacts((prev) => prev.filter((a) => a.id !== art.id));
+    } catch (err) {
+      setEventError(
+        err instanceof Error ? err.message : 'Could not delete artifact.',
+      );
+    }
   };
 
   const toggleWeekday = (code: WeekdayCode) => {
@@ -601,13 +673,14 @@ export function CalendarCard({
                 required
               />
               {!eventIsAllDay && (
-                <input
+                <TimeInput
                   id={`${prefix}-event-start-time`}
-                  type="time"
                   className="input mono-num"
+                  timeFormat={timeFormat}
                   value={eventStartTime}
-                  onChange={(e) => setEventStartTime(e.target.value)}
+                  onChange={setEventStartTime}
                   required
+                  ariaLabel="Event start time"
                 />
               )}
             </div>
@@ -626,13 +699,14 @@ export function CalendarCard({
                 required
               />
               {!eventIsAllDay && (
-                <input
+                <TimeInput
                   id={`${prefix}-event-end-time`}
-                  type="time"
                   className="input mono-num"
+                  timeFormat={timeFormat}
                   value={eventEndTime}
-                  onChange={(e) => setEventEndTime(e.target.value)}
+                  onChange={setEventEndTime}
                   required
+                  ariaLabel="Event end time"
                 />
               )}
             </div>
@@ -788,6 +862,136 @@ export function CalendarCard({
           value={eventDescription}
           onChange={(e) => setEventDescription(e.target.value)}
         />
+
+        {editingEventRefObj && onOpenLinkedNote && (() => {
+          const cal = calendars.find((c) => c.id === editingEventRefObj.calendarId);
+          const isUni =
+            cal?.module === 'university' ||
+            Boolean(editingEventRefObj.universityActivityItemId);
+
+          if (isUni) {
+            return editingEventRefObj.universityActivityItemId ? (
+              <div className="cal-event-notes-section">
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-xs"
+                  onClick={() => {
+                    closeEventForm();
+                    onOpenLinkedNote({
+                      kind: 'university_item',
+                      universityActivityItemId:
+                        editingEventRefObj.universityActivityItemId!,
+                    });
+                  }}
+                >
+                  Open University Item Note
+                </button>
+              </div>
+            ) : null;
+          }
+
+          const masterId =
+            editingEventRefObj.seriesMasterId ?? editingEventRefObj.id;
+          const occStart =
+            editingEventRefObj.occurrenceStartAt ?? editingEventRefObj.startAt;
+
+          return (
+            <div className="cal-event-notes-section">
+              <div className="cal-event-notes-actions">
+                {editingEventRefObj.isRecurring ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-xs"
+                      onClick={() => {
+                        closeEventForm();
+                        onOpenLinkedNote({
+                          kind: 'calendar_event',
+                          calendarEventId: masterId,
+                          occurrenceStartAt: occStart,
+                        });
+                      }}
+                    >
+                      Open Note for this Date
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => {
+                        closeEventForm();
+                        onOpenLinkedNote({
+                          kind: 'calendar_event',
+                          calendarEventId: masterId,
+                          occurrenceStartAt: null,
+                        });
+                      }}
+                    >
+                      Open Shared Series Note
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-xs"
+                    onClick={() => {
+                      closeEventForm();
+                      onOpenLinkedNote({
+                        kind: 'calendar_event',
+                        calendarEventId: masterId,
+                        occurrenceStartAt: null,
+                      });
+                    }}
+                  >
+                    {editingEventRefObj.hasNote ? 'Open Note' : 'Create Note'}
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-xs"
+                  disabled={uploadingEventArtifact}
+                  onClick={() => eventArtifactInputRef.current?.click()}
+                >
+                  {uploadingEventArtifact ? 'Uploading…' : '+ Attach file'}
+                </button>
+                <input
+                  ref={eventArtifactInputRef}
+                  type="file"
+                  hidden
+                  onChange={(e) => void handleUploadEventArtifact(e)}
+                />
+              </div>
+
+              {editingEventArtifacts.length > 0 && (
+                <div className="uni-course-notes-list">
+                  {editingEventArtifacts.map((art) => (
+                    <span key={art.id} className="notes-artifact-chip">
+                      <button
+                        type="button"
+                        className="notes-artifact-download"
+                        onClick={() =>
+                          void downloadAttachment(art.id, art.fileName)
+                        }
+                        title={`Download ${art.fileName} (${formatFileSize(art.sizeBytes)})`}
+                      >
+                        <span>📎</span>
+                        <span className="notes-artifact-name">{art.fileName}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="notes-artifact-remove"
+                        aria-label={`Delete ${art.fileName}`}
+                        onClick={() => void handleDeleteEventArtifact(art)}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {eventError && <p className="calendar-inline-error">{eventError}</p>}
 

@@ -98,7 +98,9 @@ public sealed record UniversityActivityItemDto(
     string? Location,
     string? MetadataJson,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    Guid? LinkedNoteId = null,
+    int ArtifactCount = 0);
 
 public sealed record UniversityCourseActivityDto(
     Guid Id,
@@ -130,7 +132,9 @@ public sealed record UniversityCourseDto(
     string? MetadataJson,
     IReadOnlyList<UniversityCourseActivityDto> Activities,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    int NoteCount = 0,
+    int ArtifactCount = 0);
 
 public sealed record UniversityWorkspaceResponse(
     CalendarDto Calendar,

@@ -1,9 +1,11 @@
 import { useState, type FormEvent, type RefObject } from 'react';
 import type { CaptureKind } from '../types/atrium';
+import { TimeInput } from './TimeInput';
 
 interface QuickCaptureProps {
   inputRef: RefObject<HTMLInputElement | null>;
   selectedDateLabel: string;
+  timeFormat?: '24h' | '12h';
   onCapture: (payload: {
     kind: CaptureKind;
     text: string;
@@ -14,6 +16,7 @@ interface QuickCaptureProps {
 export function QuickCapture({
   inputRef,
   selectedDateLabel,
+  timeFormat = '24h',
   onCapture,
 }: QuickCaptureProps) {
   const [kind, setKind] = useState<CaptureKind>('task');
@@ -75,12 +78,13 @@ export function QuickCapture({
           {kind === 'event' && (
             <label className="sr-only-wrapper">
               <span className="sr-only">Event start time</span>
-              <input
+              <TimeInput
                 id="quick-capture-time"
-                type="time"
                 className="input composer-time mono-num"
+                timeFormat={timeFormat}
                 value={eventTime}
-                onChange={(e) => setEventTime(e.target.value)}
+                onChange={setEventTime}
+                ariaLabel="Event start time"
               />
             </label>
           )}

@@ -1,11 +1,25 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from 'react';
 import { formatShortDate, parseDateKey, toDateKey } from '../data/mockData';
+import {
+  deleteAttachment,
+  downloadAttachment,
+  formatFileSize,
+  uploadAttachment,
+} from '../lib/attachmentsClient';
 import {
   allDayDatesToIsoRange,
   CALENDAR_COLOR_PALETTE,
   dateToKey,
   localDateTimeToIso,
 } from '../lib/calendarClient';
+import { getNotesTree } from '../lib/notesClient';
 import {
   formatAttendanceCompact,
   formatScheduledTimeLabel,
@@ -22,7 +36,10 @@ import {
   type UpdateCourseInput,
 } from '../lib/universityClient';
 import type {
+  AttachmentSummary,
   AttendanceSummary,
+  NoteSummary,
+  PendingNoteTarget,
   UniversityActivityItem,
   UniversityActivityType,
   UniversityAttendanceStatus,
@@ -32,6 +49,7 @@ import type {
   UserCalendar,
 } from '../types/atrium';
 import { ArrowLeftIcon, CloseIcon, GraduationCapIcon, PlusIcon } from './Icons';
+import { TimeInput } from './TimeInput';
 import { UniversityCalendarCard } from './UniversityCalendarCard';
 
 interface UniversityPageProps {
@@ -80,6 +98,8 @@ interface UniversityPageProps {
   ) => Promise<void>;
   onToggleCalendarVisibility: (calendar: UserCalendar) => Promise<void>;
   onExportIcs: (calendar: UserCalendar) => Promise<void>;
+  onOpenLinkedNote?: (target: PendingNoteTarget) => void;
+  onAnnounce?: (message: string) => void;
 }
 
 const ATTENDANCE_STATUSES: readonly UniversityAttendanceStatus[] = [
@@ -329,10 +349,140 @@ export function UniversityPage({
   onGenerateSeries,
   onToggleCalendarVisibility,
   onExportIcs,
+  onOpenLinkedNote,
+  onAnnounce,
 }: UniversityPageProps) {
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(
     initialCourseId,
   );
+  const [courseNotes, setCourseNotes] = useState<NoteSummary[]>([]);
+  const [courseArtifacts, setCourseArtifacts] = useState<AttachmentSummary[]>(
+    [],
+  );
+  const [itemArtifactsMap, setItemArtifactsMap] = useState<
+    Record<string, AttachmentSummary[]>
+  >({});
+  const [uploadingTargetId, setUploadingTargetId] = useState<string | null>(
+    null,
+  );
+  const courseArtifactInputRef = useRef<HTMLInputElement | null>(null);
+  const itemArtifactInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingItemUploadIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedCourseId) {
+      setCourseNotes([]);
+      setCourseArtifacts([]);
+      setItemArtifactsMap({});
+      return;
+    }
+    let cancelled = false;
+    void getNotesTree()
+      .then((tree) => {
+        if (cancelled) return;
+        for (const sem of tree.university ?? []) {
+          const found = sem.courses.find((c) => c.id === selectedCourseId);
+          if (found) {
+            setCourseNotes(found.notes);
+            setCourseArtifacts(found.artifacts);
+            const map: Record<string, AttachmentSummary[]> = {};
+            for (const act of found.activities) {
+              for (const item of act.items) {
+                map[item.id] = item.artifacts;
+              }
+            }
+            setItemArtifactsMap(map);
+            return;
+          }
+        }
+        setCourseNotes([]);
+        setCourseArtifacts([]);
+        setItemArtifactsMap({});
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [courses, selectedCourseId]);
+
+  const handleUploadCourseArtifact = async (
+    e: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !selectedCourseId) return;
+    setUploadingTargetId(selectedCourseId);
+    try {
+      const created = await uploadAttachment(file, {
+        kind: 'artifact',
+        universityCourseId: selectedCourseId,
+      });
+      setCourseArtifacts((prev) => [...prev, created]);
+      onAnnounce?.(`Uploaded "${file.name}"`);
+    } catch (err) {
+      onAnnounce?.(
+        err instanceof Error ? err.message : 'Could not upload course file',
+      );
+    } finally {
+      setUploadingTargetId(null);
+    }
+  };
+
+  const handleDeleteCourseArtifact = async (art: AttachmentSummary) => {
+    try {
+      await deleteAttachment(art.id);
+      setCourseArtifacts((prev) => prev.filter((a) => a.id !== art.id));
+      onAnnounce?.(`Removed "${art.fileName}"`);
+    } catch (err) {
+      onAnnounce?.(
+        err instanceof Error ? err.message : 'Could not delete artifact',
+      );
+    }
+  };
+
+  const handleUploadItemArtifact = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const itemId = pendingItemUploadIdRef.current;
+    pendingItemUploadIdRef.current = null;
+    if (!file || !itemId) return;
+    setUploadingTargetId(itemId);
+    try {
+      const created = await uploadAttachment(file, {
+        kind: 'artifact',
+        universityActivityItemId: itemId,
+      });
+      setItemArtifactsMap((prev) => ({
+        ...prev,
+        [itemId]: [...(prev[itemId] ?? []), created],
+      }));
+      onAnnounce?.(`Uploaded "${file.name}"`);
+    } catch (err) {
+      onAnnounce?.(
+        err instanceof Error ? err.message : 'Could not upload file',
+      );
+    } finally {
+      setUploadingTargetId(null);
+    }
+  };
+
+  const handleDeleteItemArtifact = async (
+    itemId: string,
+    art: AttachmentSummary,
+  ) => {
+    try {
+      await deleteAttachment(art.id);
+      setItemArtifactsMap((prev) => ({
+        ...prev,
+        [itemId]: (prev[itemId] ?? []).filter((a) => a.id !== art.id),
+      }));
+      onAnnounce?.(`Removed "${art.fileName}"`);
+    } catch (err) {
+      onAnnounce?.(
+        err instanceof Error ? err.message : 'Could not delete artifact',
+      );
+    }
+  };
   const [semesterFilter, setSemesterFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('active');
   const [pendingDeleteCourseId, setPendingDeleteCourseId] = useState<
@@ -1261,6 +1411,97 @@ export function UniversityPage({
                   {selectedCourse.description}
                 </p>
               )}
+
+              <div className="uni-course-notes-panel">
+                <input
+                  ref={courseArtifactInputRef}
+                  type="file"
+                  hidden
+                  onChange={(e) => void handleUploadCourseArtifact(e)}
+                />
+                <input
+                  ref={itemArtifactInputRef}
+                  type="file"
+                  hidden
+                  onChange={(e) => void handleUploadItemArtifact(e)}
+                />
+                <div className="uni-course-notes-header">
+                  <span className="meta-text">
+                    <strong>Course Notes &amp; Artifacts</strong>
+                  </span>
+                  <div className="uni-detail-actions">
+                    {onOpenLinkedNote && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-xs"
+                        onClick={() =>
+                          onOpenLinkedNote({
+                            kind: 'new_course_note',
+                            universityCourseId: selectedCourse.id,
+                          })
+                        }
+                      >
+                        + Course note
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      disabled={uploadingTargetId === selectedCourse.id}
+                      onClick={() => courseArtifactInputRef.current?.click()}
+                    >
+                      {uploadingTargetId === selectedCourse.id
+                        ? 'Uploading…'
+                        : '+ Upload file'}
+                    </button>
+                  </div>
+                </div>
+
+                {(courseNotes.length > 0 || courseArtifacts.length > 0) && (
+                  <div className="uni-course-notes-list">
+                    {courseNotes.map((note) => (
+                      <button
+                        key={note.id}
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() =>
+                          onOpenLinkedNote?.({
+                            kind: 'note_id',
+                            noteId: note.id,
+                          })
+                        }
+                      >
+                        📝 {note.title}
+                      </button>
+                    ))}
+                    {courseArtifacts.map((art) => (
+                      <span key={art.id} className="notes-artifact-chip">
+                        <button
+                          type="button"
+                          className="notes-artifact-download"
+                          onClick={() =>
+                            void downloadAttachment(art.id, art.fileName)
+                          }
+                          title={`Download ${art.fileName} (${formatFileSize(art.sizeBytes)})`}
+                        >
+                          <span>📎</span>
+                          <span className="notes-artifact-name">
+                            {art.fileName}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="notes-artifact-remove"
+                          aria-label={`Delete ${art.fileName}`}
+                          onClick={() => void handleDeleteCourseArtifact(art)}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             </section>
 
             <section className="uni-activities-section">
@@ -1484,6 +1725,47 @@ export function UniversityPage({
                                     {item.notes && (
                                       <p className="meta-text">{item.notes}</p>
                                     )}
+
+                                    {(itemArtifactsMap[item.id]?.length ?? 0) > 0 && (
+                                      <div className="uni-course-notes-list">
+                                        {itemArtifactsMap[item.id].map((art) => (
+                                          <span
+                                            key={art.id}
+                                            className="notes-artifact-chip"
+                                          >
+                                            <button
+                                              type="button"
+                                              className="notes-artifact-download"
+                                              onClick={() =>
+                                                void downloadAttachment(
+                                                  art.id,
+                                                  art.fileName,
+                                                )
+                                              }
+                                              title={`Download ${art.fileName} (${formatFileSize(art.sizeBytes)})`}
+                                            >
+                                              <span>📎</span>
+                                              <span className="notes-artifact-name">
+                                                {art.fileName}
+                                              </span>
+                                            </button>
+                                            <button
+                                              type="button"
+                                              className="notes-artifact-remove"
+                                              aria-label={`Delete ${art.fileName}`}
+                                              onClick={() =>
+                                                void handleDeleteItemArtifact(
+                                                  item.id,
+                                                  art,
+                                                )
+                                              }
+                                            >
+                                              ×
+                                            </button>
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
 
                                   <div className="uni-item-controls">
@@ -1534,6 +1816,38 @@ export function UniversityPage({
                                     </div>
 
                                     <div className="uni-item-row-actions">
+                                      {onOpenLinkedNote && (
+                                        <button
+                                          type="button"
+                                          className={`btn btn-compact ${
+                                            item.linkedNoteId
+                                              ? 'btn-secondary'
+                                              : 'btn-ghost'
+                                          }`}
+                                          onClick={() =>
+                                            onOpenLinkedNote({
+                                              kind: 'university_item',
+                                              universityActivityItemId: item.id,
+                                            })
+                                          }
+                                        >
+                                          {item.linkedNoteId ? 'Note' : '+ Note'}
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        className="btn btn-ghost btn-compact"
+                                        disabled={uploadingTargetId === item.id}
+                                        onClick={() => {
+                                          pendingItemUploadIdRef.current =
+                                            item.id;
+                                          itemArtifactInputRef.current?.click();
+                                        }}
+                                      >
+                                        {uploadingTargetId === item.id
+                                          ? 'Uploading…'
+                                          : '+ File'}
+                                      </button>
                                       <button
                                         type="button"
                                         className="btn btn-ghost btn-compact"
@@ -2107,11 +2421,11 @@ export function UniversityPage({
                   {!itemIsAllDay && (
                     <label className="field-group">
                       <span className="field-label">Start time</span>
-                      <input
-                        type="time"
+                      <TimeInput
                         className="input-control mono-num"
+                        timeFormat={timeFormat}
                         value={itemStartTime}
-                        onChange={(e) => setItemStartTime(e.target.value)}
+                        onChange={setItemStartTime}
                         required
                       />
                     </label>
@@ -2133,11 +2447,11 @@ export function UniversityPage({
                   {!itemIsAllDay && (
                     <label className="field-group">
                       <span className="field-label">End time</span>
-                      <input
-                        type="time"
+                      <TimeInput
                         className="input-control mono-num"
+                        timeFormat={timeFormat}
                         value={itemEndTime}
-                        onChange={(e) => setItemEndTime(e.target.value)}
+                        onChange={setItemEndTime}
                         required
                       />
                     </label>
@@ -2297,22 +2611,22 @@ export function UniversityPage({
               <>
                 <label className="field-group">
                   <span className="field-label">Start time</span>
-                  <input
-                    type="time"
+                  <TimeInput
                     className="input-control mono-num"
+                    timeFormat={timeFormat}
                     value={seriesStartTime}
-                    onChange={(e) => setSeriesStartTime(e.target.value)}
+                    onChange={setSeriesStartTime}
                     required
                   />
                 </label>
 
                 <label className="field-group">
                   <span className="field-label">End time</span>
-                  <input
-                    type="time"
+                  <TimeInput
                     className="input-control mono-num"
+                    timeFormat={timeFormat}
                     value={seriesEndTime}
-                    onChange={(e) => setSeriesEndTime(e.target.value)}
+                    onChange={setSeriesEndTime}
                     required
                   />
                 </label>

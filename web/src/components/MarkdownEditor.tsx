@@ -1,5 +1,6 @@
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
+import { languages } from '@codemirror/language-data';
 import {
   Annotation,
   Compartment,
@@ -36,6 +37,7 @@ export interface MarkdownEditorHandle {
   scrollToMatch: (index: number) => void;
   replaceCurrentMatch: (replacement: string, index: number) => boolean;
   replaceAllMatches: (replacement: string) => number;
+  insertImageMarkdown: (alt: string, url: string) => void;
 }
 
 interface MarkdownEditorProps {
@@ -45,6 +47,9 @@ interface MarkdownEditorProps {
   caseSensitive?: boolean;
   activeMatchIndex?: number;
   onMatchCountChange?: (count: number) => void;
+  onUploadInlineImage?: (
+    file: File,
+  ) => Promise<{ url: string; alt: string } | null>;
   onChange: (nextValue: string) => void;
 }
 
@@ -107,6 +112,7 @@ export const MarkdownEditor = forwardRef<
     caseSensitive = false,
     activeMatchIndex = 0,
     onMatchCountChange,
+    onUploadInlineImage,
     onChange,
   },
   ref,
@@ -118,6 +124,7 @@ export const MarkdownEditor = forwardRef<
   const matchesRef = useRef<Array<{ from: number; to: number }>>([]);
   const onChangeRef = useRef(onChange);
   const onMatchCountChangeRef = useRef(onMatchCountChange);
+  const onUploadInlineImageRef = useRef(onUploadInlineImage);
   const initialValueRef = useRef(value);
   const initialModeRef = useRef(mode);
   const modeRef = useRef(mode);
@@ -126,6 +133,7 @@ export const MarkdownEditor = forwardRef<
 
   onChangeRef.current = onChange;
   onMatchCountChangeRef.current = onMatchCountChange;
+  onUploadInlineImageRef.current = onUploadInlineImage;
   modeRef.current = mode;
   highlightQueryRef.current = highlightQuery;
   caseSensitiveRef.current = caseSensitive;
@@ -192,6 +200,19 @@ export const MarkdownEditor = forwardRef<
         });
         return allMatches.length;
       },
+      insertImageMarkdown(alt: string, url: string) {
+        const view = viewRef.current;
+        if (!view) return;
+        const safeAlt = alt.replace(/[\[\]\r\n]/g, '').trim() || 'image';
+        const snippet = `![${safeAlt}](${url})`;
+        const { from, to } = view.state.selection.main;
+        view.dispatch({
+          changes: { from, to, insert: snippet },
+          selection: EditorSelection.cursor(from + snippet.length),
+          scrollIntoView: true,
+        });
+        view.focus();
+      },
     }),
     [],
   );
@@ -215,7 +236,7 @@ export const MarkdownEditor = forwardRef<
         history(),
         markdownFormattingKeymap,
         keymap.of([...defaultKeymap, ...historyKeymap]),
-        markdown(),
+        markdown({ codeLanguages: languages }),
         EditorView.lineWrapping,
         atriumEditorTheme,
         atriumMarkdownHighlight,
@@ -224,6 +245,70 @@ export const MarkdownEditor = forwardRef<
           initialModeRef.current === 'live' ? markdownLivePreviewExtension : [],
         ),
         findCompartment.of([]),
+        EditorView.domEventHandlers({
+          paste(event, view) {
+            const uploader = onUploadInlineImageRef.current;
+            if (!uploader) return false;
+            const files = Array.from(event.clipboardData?.files ?? []).filter(
+              (f) => /^image\/(png|jpeg|webp|gif)$/i.test(f.type),
+            );
+            if (files.length === 0) return false;
+            event.preventDefault();
+            const insertAt = view.state.selection.main.from;
+            void (async () => {
+              let offset = insertAt;
+              for (const file of files) {
+                const uploaded = await uploader(file);
+                if (!uploaded) continue;
+                const safeAlt =
+                  uploaded.alt.replace(/[\[\]\r\n]/g, '').trim() || 'image';
+                const snippet = `![${safeAlt}](${uploaded.url})\n`;
+                const docLen = view.state.doc.length;
+                const pos = Math.min(offset, docLen);
+                view.dispatch({
+                  changes: { from: pos, to: pos, insert: snippet },
+                  selection: EditorSelection.cursor(pos + snippet.length),
+                  scrollIntoView: true,
+                });
+                offset = pos + snippet.length;
+              }
+            })();
+            return true;
+          },
+          drop(event, view) {
+            const uploader = onUploadInlineImageRef.current;
+            if (!uploader) return false;
+            const files = Array.from(event.dataTransfer?.files ?? []).filter(
+              (f) => /^image\/(png|jpeg|webp|gif)$/i.test(f.type),
+            );
+            if (files.length === 0) return false;
+            event.preventDefault();
+            const coords = view.posAtCoords({
+              x: event.clientX,
+              y: event.clientY,
+            });
+            const insertAt = coords ?? view.state.selection.main.from;
+            void (async () => {
+              let offset = insertAt;
+              for (const file of files) {
+                const uploaded = await uploader(file);
+                if (!uploaded) continue;
+                const safeAlt =
+                  uploaded.alt.replace(/[\[\]\r\n]/g, '').trim() || 'image';
+                const snippet = `![${safeAlt}](${uploaded.url})\n`;
+                const docLen = view.state.doc.length;
+                const pos = Math.min(offset, docLen);
+                view.dispatch({
+                  changes: { from: pos, to: pos, insert: snippet },
+                  selection: EditorSelection.cursor(pos + snippet.length),
+                  scrollIntoView: true,
+                });
+                offset = pos + snippet.length;
+              }
+            })();
+            return true;
+          },
+        }),
         EditorView.updateListener.of((update) => {
           if (
             update.docChanged &&
