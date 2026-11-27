@@ -346,6 +346,64 @@ export const insertCallout: Command = (view) => {
   return true;
 };
 
+export const insertCodeBlock: Command = (view) => {
+  const { state } = view;
+  const range = state.selection.main;
+  const selected = state.sliceDoc(range.from, range.to);
+  const startLine = state.doc.lineAt(range.from);
+  const needsLeadingNewline =
+    range.empty && startLine.text.trim().length > 0;
+  const prefix = needsLeadingNewline ? '\n\n' : '';
+  const langPlaceholder = 'java';
+  const body = selected || '';
+  const insert = `${prefix}\`\`\`${langPlaceholder}\n${body}\n\`\`\`\n`;
+  const langStart = range.from + prefix.length + 3;
+
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert },
+    selection: EditorSelection.range(
+      langStart,
+      langStart + langPlaceholder.length,
+    ),
+  });
+  view.focus();
+  return true;
+};
+
+export const insertMathBlock: Command = (view) => {
+  const { state } = view;
+  const range = state.selection.main;
+  const selected = state.sliceDoc(range.from, range.to);
+
+  if (!range.empty && !selected.includes('\n')) {
+    const insert = `$${selected}$`;
+    view.dispatch({
+      changes: { from: range.from, to: range.to, insert },
+      selection: EditorSelection.range(
+        range.from + 1,
+        range.from + 1 + selected.length,
+      ),
+    });
+    view.focus();
+    return true;
+  }
+
+  const startLine = state.doc.lineAt(range.from);
+  const needsLeadingNewline =
+    range.empty && startLine.text.trim().length > 0;
+  const prefix = needsLeadingNewline ? '\n\n' : '';
+  const body = selected || 'x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}';
+  const insert = `${prefix}$$\n${body}\n$$\n`;
+  const bodyStart = range.from + prefix.length + 3;
+
+  view.dispatch({
+    changes: { from: range.from, to: range.to, insert },
+    selection: EditorSelection.range(bodyStart, bodyStart + body.length),
+  });
+  view.focus();
+  return true;
+};
+
 export const markdownFormattingKeymap: Extension = keymap.of([
   { key: 'Mod-b', run: toggleBold },
   { key: 'Mod-i', run: toggleItalic },

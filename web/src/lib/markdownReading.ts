@@ -6,7 +6,11 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import hljs from 'highlight.js/lib/common';
+import 'katex/dist/katex.min.css';
 import type { Components, ExtraProps } from 'react-markdown';
+import rehypeKatex from 'rehype-katex';
+import remarkMath from 'remark-math';
 import {
   isInternalAttachmentUrl,
   resolveAttachmentImageUrl,
@@ -17,6 +21,90 @@ import {
   resolveCalloutTone,
   sanitizeMarkdownUrl,
 } from './markdownUtils.ts';
+
+export const readingRemarkPlugins = [remarkMath];
+export const readingRehypePlugins = [rehypeKatex];
+
+function extractCodeText(children: ReactNode): string {
+  if (typeof children === 'string') return children;
+  if (typeof children === 'number') return String(children);
+  if (Array.isArray(children)) return children.map(extractCodeText).join('');
+  if (isValidElement<{ children?: ReactNode }>(children)) {
+    return extractCodeText(children.props.children);
+  }
+  return '';
+}
+
+function ReadingCodeBlock({ children }: { children?: ReactNode }) {
+  const [copied, setCopied] = useState(false);
+
+  const childArr = Children.toArray(children);
+  const codeEl =
+    childArr.length === 1 &&
+    isValidElement<{ className?: string; children?: ReactNode }>(childArr[0])
+      ? childArr[0]
+      : null;
+
+  const className = codeEl?.props.className ?? '';
+  const langMatch = className.match(/language-([a-zA-Z0-9_+#-]+)/);
+  const rawLang = langMatch ? langMatch[1].toLowerCase() : '';
+  const rawCode = extractCodeText(codeEl ? codeEl.props.children : children).replace(
+    /\n$/,
+    '',
+  );
+
+  let highlightedHtml: string | null = null;
+  if (rawLang && hljs.getLanguage(rawLang)) {
+    try {
+      highlightedHtml = hljs.highlight(rawCode, {
+        language: rawLang,
+        ignoreIllegals: true,
+      }).value;
+    } catch {
+      highlightedHtml = null;
+    }
+  }
+
+  const handleCopy = () => {
+    void navigator.clipboard?.writeText(rawCode).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    });
+  };
+
+  return createElement(
+    'div',
+    { className: 'notes-codeblock' },
+    createElement(
+      'div',
+      { className: 'notes-codeblock-header' },
+      createElement(
+        'span',
+        { className: 'notes-codeblock-lang' },
+        rawLang || 'code',
+      ),
+      createElement(
+        'button',
+        {
+          type: 'button',
+          className: 'btn btn-ghost btn-xs notes-codeblock-copy',
+          onClick: handleCopy,
+        },
+        copied ? 'Copied' : 'Copy',
+      ),
+    ),
+    createElement(
+      'pre',
+      { className: 'notes-codeblock-pre' },
+      highlightedHtml !== null
+        ? createElement('code', {
+            className: `hljs language-${rawLang}`,
+            dangerouslySetInnerHTML: { __html: highlightedHtml },
+          })
+        : createElement('code', { className: 'hljs' }, rawCode),
+    ),
+  );
+}
 
 const CALLOUT_PREFIX_RE =
   /^\[!([a-zA-Z0-9_-]+)\][+-]?(?:$|([ \t]+)([\s\S]*)$)/;
@@ -275,6 +363,9 @@ export function renderReadingBlockquote(children: ReactNode) {
 
 export const readingMarkdownComponents: Components = {
   p: ReadingParagraph,
+  pre({ children }) {
+    return createElement(ReadingCodeBlock, null, children);
+  },
   blockquote({ children }) {
     return renderReadingBlockquote(children);
   },

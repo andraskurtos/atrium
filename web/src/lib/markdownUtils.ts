@@ -153,6 +153,46 @@ export function countWordsAndChars(markdown: string): {
   return { words, chars: markdown.length };
 }
 
+/**
+ * Normalizes triple-dollar block math fences (`$$$`) to standard `$$` fences
+ * outside fenced code blocks so remark-math + rehype-katex render both `$$` and `$$$`.
+ */
+export function normalizeBlockMathFences(markdown: string): string {
+  const lines = markdown.split('\n');
+  let inCodeFence = false;
+  let codeFenceChar = '';
+  let codeFenceLen = 0;
+
+  const out = lines.map((line) => {
+    const trimmed = line.trim();
+    const fenceMatch = trimmed.match(/^(`{3,}|~{3,})/);
+    if (fenceMatch) {
+      const ch = fenceMatch[1][0];
+      const len = fenceMatch[1].length;
+      if (!inCodeFence) {
+        inCodeFence = true;
+        codeFenceChar = ch;
+        codeFenceLen = len;
+      } else if (ch === codeFenceChar && len >= codeFenceLen) {
+        inCodeFence = false;
+      }
+      return line;
+    }
+
+    if (inCodeFence) return line;
+
+    if (trimmed === '$$$') {
+      return line.replace('$$$', '$$');
+    }
+    if (trimmed.startsWith('$$$') && trimmed.endsWith('$$$') && trimmed.length > 6) {
+      return line.replace('$$$', '$$').replace(/\$\$\$(\s*)$/, '$$$$$1');
+    }
+    return line;
+  });
+
+  return out.join('\n');
+}
+
 export function loadNotesDraft(userId?: string): string {
   if (typeof window === 'undefined') return DEFAULT_SAMPLE_NOTE;
   try {

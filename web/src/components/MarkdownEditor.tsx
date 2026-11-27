@@ -1,5 +1,6 @@
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
+import { languages } from '@codemirror/language-data';
 import {
   Annotation,
   Compartment,
@@ -235,7 +236,7 @@ export const MarkdownEditor = forwardRef<
         history(),
         markdownFormattingKeymap,
         keymap.of([...defaultKeymap, ...historyKeymap]),
-        markdown(),
+        markdown({ codeLanguages: languages }),
         EditorView.lineWrapping,
         atriumEditorTheme,
         atriumMarkdownHighlight,

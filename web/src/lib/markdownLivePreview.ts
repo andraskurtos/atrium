@@ -16,6 +16,8 @@ import {
   type DecorationSet,
 } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
+import katex from 'katex';
+import 'katex/dist/katex.min.css';
 import {
   isInternalAttachmentUrl,
   resolveAttachmentImageUrl,
@@ -57,6 +59,68 @@ class CalloutHeaderWidget extends WidgetType {
     header.appendChild(icon);
     header.appendChild(label);
     return header;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+class CodeBlockLangWidget extends WidgetType {
+  readonly language: string;
+
+  constructor(language: string) {
+    super();
+    this.language = language;
+  }
+
+  override eq(other: CodeBlockLangWidget): boolean {
+    return other.language === this.language;
+  }
+
+  override toDOM(): HTMLElement {
+    const header = document.createElement('span');
+    header.className = 'cm-md-code-lang-bar';
+    const badge = document.createElement('span');
+    badge.className = 'cm-md-code-lang';
+    badge.textContent = this.language || 'code';
+    header.appendChild(badge);
+    return header;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+class KatexWidget extends WidgetType {
+  readonly expr: string;
+  readonly displayMode: boolean;
+
+  constructor(expr: string, displayMode: boolean) {
+    super();
+    this.expr = expr;
+    this.displayMode = displayMode;
+  }
+
+  override eq(other: KatexWidget): boolean {
+    return other.expr === this.expr && other.displayMode === this.displayMode;
+  }
+
+  override toDOM(): HTMLElement {
+    const el = document.createElement(this.displayMode ? 'div' : 'span');
+    el.className = this.displayMode ? 'cm-md-math-block' : 'cm-md-math-inline';
+    try {
+      el.innerHTML = katex.renderToString(this.expr, {
+        displayMode: this.displayMode,
+        throwOnError: false,
+        strict: false,
+        trust: false,
+      });
+    } catch {
+      el.textContent = this.expr;
+    }
+    return el;
   }
 
   override ignoreEvent(): boolean {
@@ -465,8 +529,103 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         }
         return;
       }
+
+      // 8. Fenced code blocks: ```lang ... ```
+      if (name === 'FencedCode') {
+        if (overlapsHidden(from, to)) return;
+        const firstLine = doc.lineAt(from);
+        const lastLine = doc.lineAt(Math.max(from, to - 1));
+        const infoNode = node.getChild('CodeInfo');
+        const lang = infoNode
+          ? doc.sliceString(infoNode.from, infoNode.to).trim().split(/\s+/)[0] ?? ''
+          : '';
+
+        for (let ln = firstLine.number; ln <= lastLine.number; ln += 1) {
+          const line = doc.line(ln);
+          const classes = ['cm-md-codeblock'];
+          if (ln === firstLine.number) classes.push('cm-md-codeblock-first');
+          if (ln === lastLine.number) classes.push('cm-md-codeblock-last');
+          decorations.push(
+            Decoration.line({ class: classes.join(' ') }).range(line.from),
+          );
+        }
+
+        if (!isRangeActive(state, firstLine.from, firstLine.to)) {
+          decorations.push(
+            Decoration.replace({
+              widget: new CodeBlockLangWidget(lang),
+            }).range(firstLine.from, firstLine.to),
+          );
+        }
+
+        if (
+          lastLine.number > firstLine.number &&
+          /^\s*(`{3,}|~{3,})\s*$/.test(lastLine.text) &&
+          !isRangeActive(state, lastLine.from, lastLine.to)
+        ) {
+          pushReplace(lastLine.from, lastLine.to);
+        }
+        return;
+      }
     },
   });
+
+  // 9. LaTeX math: block ($$$...$$$ or $$...$$) and inline ($...$), skipping code & frontmatter
+  const codeSkipRanges: Array<{ from: number; to: number }> = [];
+  if (fmRange) {
+    codeSkipRanges.push({ from: fmRange.from, to: fmRange.bodyStart });
+  }
+  syntaxTree(state).iterate({
+    enter({ name, from, to }) {
+      if (name === 'FencedCode' || name === 'InlineCode' || name === 'CodeBlock') {
+        codeSkipRanges.push({ from, to });
+      }
+    },
+  });
+
+  const overlapsCode = (from: number, to: number): boolean =>
+    codeSkipRanges.some((r) => from < r.to && to > r.from);
+
+  const mathBlockRanges: Array<{ from: number; to: number }> = [];
+  const fullText = doc.toString();
+
+  // Block math: $$$...$$$ or $$...$$
+  const blockMathRe = /(\$\$\$|\$\$)([\s\S]+?)\1/g;
+  let bm: RegExpExecArray | null;
+  while ((bm = blockMathRe.exec(fullText)) !== null) {
+    const mFrom = bm.index;
+    const mTo = mFrom + bm[0].length;
+    const expr = bm[2].trim();
+    if (!expr || overlapsCode(mFrom, mTo)) continue;
+    mathBlockRanges.push({ from: mFrom, to: mTo });
+    if (!isRangeActive(state, mFrom, mTo)) {
+      const spansLines = fullText.slice(mFrom, mTo).includes('\n');
+      decorations.push(
+        Decoration.replace({
+          widget: new KatexWidget(expr, true),
+          block: spansLines,
+        }).range(mFrom, mTo),
+      );
+    }
+  }
+
+  // Inline math: $...$ (single line, not preceded/followed by $, not escaped)
+  const inlineMathRe = /(?<!\\)(?<!\$)\$(?!\$)([^$\n]+?)(?<!\\)\$(?!\$)/g;
+  let im: RegExpExecArray | null;
+  while ((im = inlineMathRe.exec(fullText)) !== null) {
+    const mFrom = im.index;
+    const mTo = mFrom + im[0].length;
+    const expr = im[1].trim();
+    if (!expr || overlapsCode(mFrom, mTo)) continue;
+    if (mathBlockRanges.some((r) => mFrom < r.to && mTo > r.from)) continue;
+    if (!isRangeActive(state, mFrom, mTo)) {
+      decorations.push(
+        Decoration.replace({
+          widget: new KatexWidget(expr, false),
+        }).range(mFrom, mTo),
+      );
+    }
+  }
 
   return Decoration.set(decorations, true);
 }
@@ -568,6 +727,14 @@ const highlightStyle = HighlightStyle.define([
   { tag: tags.heading6, fontWeight: '600', color: 'var(--text-muted)' },
   { tag: tags.strong, fontWeight: '700' },
   { tag: tags.emphasis, fontStyle: 'italic' },
+  { tag: tags.keyword, color: 'var(--syn-keyword)' },
+  { tag: [tags.string, tags.special(tags.string)], color: 'var(--syn-string)' },
+  { tag: tags.comment, color: 'var(--syn-comment)', fontStyle: 'italic' },
+  { tag: [tags.number, tags.bool, tags.null, tags.atom], color: 'var(--syn-number)' },
+  { tag: [tags.typeName, tags.className, tags.namespace], color: 'var(--syn-type)' },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: 'var(--syn-func)' },
+  { tag: [tags.propertyName, tags.attributeName], color: 'var(--syn-prop)' },
+  { tag: [tags.operator, tags.punctuation], color: 'var(--syn-operator)' },
   {
     tag: tags.monospace,
     fontFamily: 'var(--font-mono)',

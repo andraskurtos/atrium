@@ -4781,3 +4781,163 @@ select {
 .notes-split-select {
   max-width: 120px;
 }
+
+/* Syntax highlighting tokens (light & dark themes) */
+:root {
+  --syn-keyword: #9a3412;
+  --syn-string: #15803d;
+  --syn-comment: #6b7280;
+  --syn-number: #b45309;
+  --syn-type: #1d4ed8;
+  --syn-func: #6d28d9;
+  --syn-prop: #0f766e;
+  --syn-operator: #52525b;
+}
+
+[data-theme='dark'] {
+  --syn-keyword: #f28b66;
+  --syn-string: #86efac;
+  --syn-comment: #8c857d;
+  --syn-number: #fbbf24;
+  --syn-type: #93c5fd;
+  --syn-func: #c4b5fd;
+  --syn-prop: #5eead4;
+  --syn-operator: #a8a29e;
+}
+
+/* Live Preview fenced code blocks */
+.cm-md-codeblock {
+  font-family: var(--font-mono) !important;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  background-color: var(--surface-muted);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  padding-left: 14px !important;
+  padding-right: 14px !important;
+}
+
+.cm-md-codeblock-first {
+  border-top: 1px solid var(--border);
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
+  padding-top: 6px !important;
+  padding-bottom: 4px !important;
+}
+
+.cm-md-codeblock-last {
+  border-bottom: 1px solid var(--border);
+  border-bottom-left-radius: var(--radius-md);
+  border-bottom-right-radius: var(--radius-md);
+  padding-bottom: 8px !important;
+}
+
+.cm-md-code-lang-bar {
+  display: inline-flex;
+  align-items: center;
+}
+
+.cm-md-code-lang,
+.notes-codeblock-lang {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+/* Reading mode code blocks */
+.notes-codeblock {
+  margin: 1.1em 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--surface-muted);
+  overflow: hidden;
+}
+
+.notes-codeblock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  background-color: var(--surface);
+}
+
+.notes-codeblock-pre {
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  line-height: 1.55;
+  background: transparent;
+}
+
+.notes-codeblock-pre code {
+  font-family: inherit;
+  background: transparent;
+  padding: 0;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-meta .hljs-keyword {
+  color: var(--syn-keyword);
+  font-weight: 600;
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition {
+  color: var(--syn-string);
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-variable.constant_ {
+  color: var(--syn-number);
+}
+
+.hljs-type,
+.hljs-title.class_,
+.hljs-built_in {
+  color: var(--syn-type);
+}
+
+.hljs-title.function_,
+.hljs-section {
+  color: var(--syn-func);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-property {
+  color: var(--syn-prop);
+}
+
+/* LaTeX math (Live Preview & Reading) */
+.cm-md-math-block {
+  display: block;
+  padding: 10px 4px;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.cm-md-math-inline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.notes-reading-prose .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 0;
+}

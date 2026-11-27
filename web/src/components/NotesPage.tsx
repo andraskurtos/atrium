@@ -26,19 +26,26 @@ import {
 } from '../lib/frontmatter';
 import {
   insertCallout,
+  insertCodeBlock,
   insertHorizontalRule,
   insertImage,
   insertLink,
+  insertMathBlock,
   setHeading,
   toggleBlockquote,
   toggleBold,
   toggleItalic,
 } from '../lib/markdownCommands';
-import { readingMarkdownComponents } from '../lib/markdownReading';
+import {
+  readingMarkdownComponents,
+  readingRehypePlugins,
+  readingRemarkPlugins,
+} from '../lib/markdownReading';
 import {
   countWordsAndChars,
   DEFAULT_SAMPLE_NOTE,
   loadNotesDraft,
+  normalizeBlockMathFences,
 } from '../lib/markdownUtils';
 import {
   createNote,
@@ -1432,6 +1439,26 @@ export function NotesPage({
                   >
                     Callout
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs notes-fmt-btn"
+                    title="Insert code block (```lang)"
+                    onClick={() =>
+                      editorRef.current?.runCommand(insertCodeBlock)
+                    }
+                  >
+                    Code
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs notes-fmt-btn"
+                    title="Insert LaTeX math ($...$ or $$...$$)"
+                    onClick={() =>
+                      editorRef.current?.runCommand(insertMathBlock)
+                    }
+                  >
+                    Math
+                  </button>
                   <span className="notes-toolbar-sep" aria-hidden="true" />
                   <button
                     type="button"
@@ -1929,8 +1956,12 @@ export function NotesPage({
                         to start writing.
                       </p>
                     ) : (
-                      <ReactMarkdown components={readingMarkdownComponents}>
-                        {readingBody}
+                      <ReactMarkdown
+                        remarkPlugins={readingRemarkPlugins}
+                        rehypePlugins={readingRehypePlugins}
+                        components={readingMarkdownComponents}
+                      >
+                        {normalizeBlockMathFences(readingBody)}
                       </ReactMarkdown>
                     )}
                   </article>

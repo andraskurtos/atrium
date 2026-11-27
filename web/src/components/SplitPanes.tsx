@@ -6,7 +6,12 @@ import {
   resolveAttachmentImageUrl,
 } from '../lib/attachmentsClient';
 import { stripFrontmatterForReading } from '../lib/frontmatter';
-import { readingMarkdownComponents } from '../lib/markdownReading';
+import {
+  readingMarkdownComponents,
+  readingRehypePlugins,
+  readingRemarkPlugins,
+} from '../lib/markdownReading';
+import { normalizeBlockMathFences } from '../lib/markdownUtils';
 import { getNote } from '../lib/notesClient';
 import type { AttachmentSummary, NoteDetail } from '../types/atrium';
 
@@ -185,8 +190,12 @@ export function NoteReadPane({
         <p className="meta-text empty-state">This note is empty.</p>
       ) : (
         <article className="notes-reading-prose">
-          <ReactMarkdown components={readingMarkdownComponents}>
-            {body}
+          <ReactMarkdown
+            remarkPlugins={readingRemarkPlugins}
+            rehypePlugins={readingRehypePlugins}
+            components={readingMarkdownComponents}
+          >
+            {normalizeBlockMathFences(body)}
           </ReactMarkdown>
         </article>
       )}
