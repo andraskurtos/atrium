@@ -24,24 +24,60 @@ function runStep(cmd, args, label, color, stepEnv = env) {
   });
 }
 
+function signalChildGroup(child, signal) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // Child already exited
+    }
+  }
+}
+
 function shutdown(exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   logLine('dev', COLORS.yellow, 'Shutting down dev services...');
-  for (const child of children) {
-    if (!child.killed && child.exitCode === null) {
-      try {
-        process.kill(-child.pid, 'SIGTERM');
-      } catch {
-        child.kill('SIGTERM');
-      }
-    }
+
+  const alive = children.filter(
+    (child) => child.exitCode === null && child.signalCode === null,
+  );
+  if (alive.length === 0) {
+    process.exit(exitCode);
+    return;
   }
-  setTimeout(() => process.exit(exitCode), 500).unref();
+
+  let remaining = alive.length;
+  const finish = () => {
+    clearTimeout(forceKillTimer);
+    process.exit(exitCode);
+  };
+
+  for (const child of alive) {
+    child.once('exit', () => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        finish();
+      }
+    });
+    signalChildGroup(child, 'SIGTERM');
+  }
+
+  const forceKillTimer = setTimeout(() => {
+    for (const child of alive) {
+      signalChildGroup(child, 'SIGKILL');
+    }
+    setTimeout(() => process.exit(exitCode), 150).unref();
+  }, 2500);
+  forceKillTimer.unref();
 }
 
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
+process.on('SIGHUP', () => shutdown(0));
 
 async function main() {
   logLine('dev', COLORS.yellow, 'Starting Atrium development environment...');
