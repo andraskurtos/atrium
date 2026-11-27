@@ -8,6 +8,7 @@ import { DailyNoteCard } from './components/DailyNoteCard';
 import { ChevronLeftIcon, ChevronRightIcon } from './components/Icons';
 import { LocalStatusCard } from './components/LocalStatusCard';
 import { MobileTabBar } from './components/MobileTabBar';
+import { NotesPage } from './components/NotesPage';
 import { QuickCapture } from './components/QuickCapture';
 import { TopBar } from './components/TopBar';
 import { UniversityPage } from './components/UniversityPage';
@@ -123,6 +124,7 @@ function readInitialView(): AppView {
   if (typeof window === 'undefined') return 'dashboard';
   if (window.location.hash === '#account') return 'account';
   if (window.location.hash === '#university') return 'university';
+  if (window.location.hash === '#notes') return 'notes';
   return 'dashboard';
 }
 
@@ -467,6 +469,8 @@ export function App() {
         setActiveView('account');
       } else if (hash === '#university') {
         setActiveView('university');
+      } else if (hash === '#notes') {
+        setActiveView('notes');
       } else {
         setActiveView('dashboard');
         const hashDate = readDateKeyFromHash();
@@ -479,7 +483,12 @@ export function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === 'k'
+      ) {
         event.preventDefault();
         if (profile) {
           setIsCommandOpen((prev) => !prev);
@@ -574,9 +583,11 @@ export function App() {
           ? '#account'
           : view === 'university'
             ? '#university'
-            : selectedDateKeyRef.current === todayKey
-              ? ''
-              : `#day/${selectedDateKeyRef.current}`;
+            : view === 'notes'
+              ? '#notes'
+              : selectedDateKeyRef.current === todayKey
+                ? ''
+                : `#day/${selectedDateKeyRef.current}`;
       window.history.replaceState(
         null,
         '',
@@ -594,6 +605,10 @@ export function App() {
   const handleSelectMobileTab = (tab: MobileTab) => {
     if (tab === 'university') {
       openUniversityView();
+      return;
+    }
+    if (tab === 'notes') {
+      navigateTo('notes');
       return;
     }
     setMobileTab(tab);
@@ -1207,6 +1222,13 @@ export function App() {
       onSelect: () => openUniversityView(),
     },
     {
+      id: 'cmd-notes',
+      label: 'Open Markdown Notes Editor',
+      hint: 'Notes',
+      group: 'Navigation',
+      onSelect: () => navigateTo('notes'),
+    },
+    {
       id: 'cmd-account',
       label: 'Open Account & Settings',
       hint: 'Profile & Security',
@@ -1354,6 +1376,15 @@ export function App() {
 
           <MobileTabBar
             activeTab="university"
+            onSelectTab={handleSelectMobileTab}
+          />
+        </>
+      ) : activeView === 'notes' ? (
+        <>
+          <NotesPage onAnnounce={announce} />
+
+          <MobileTabBar
+            activeTab="notes"
             onSelectTab={handleSelectMobileTab}
           />
         </>

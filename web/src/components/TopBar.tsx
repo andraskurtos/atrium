@@ -3,6 +3,7 @@ import type { AppView, ThemePreference, UserProfile } from '../types/atrium';
 import {
   GraduationCapIcon,
   MoonIcon,
+  NoteIcon,
   SearchIcon,
   SunIcon,
   SystemThemeIcon,
@@ -38,7 +39,9 @@ export function TopBar({
       ? 'Account'
       : activeView === 'university'
         ? 'University'
-        : 'Today';
+        : activeView === 'notes'
+          ? 'Notes'
+          : 'Today';
 
   return (
     <header className="topbar">
@@ -81,6 +84,22 @@ export function TopBar({
           >
             <GraduationCapIcon />
             <span className="topbar-nav-pill-label">University</span>
+          </button>
+
+          <button
+            id="topbar-notes-btn"
+            type="button"
+            className={`btn btn-compact topbar-nav-pill ${
+              activeView === 'notes' ? 'is-active' : 'btn-ghost'
+            }`}
+            onClick={() =>
+              onNavigate(activeView === 'notes' ? 'dashboard' : 'notes')
+            }
+            aria-current={activeView === 'notes' ? 'page' : undefined}
+            title="Markdown Notes Editor"
+          >
+            <NoteIcon />
+            <span className="topbar-nav-pill-label">Notes</span>
           </button>
 
           <button

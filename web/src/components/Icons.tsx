@@ -216,4 +216,14 @@ export function GraduationCapIcon(props: IconProps) {
   );
 }
 
+export function NoteIcon(props: IconProps) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" {...props}>
+      <path d="M3.5 2.25H10L12.5 4.75V13.75H3.5V2.25Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M9.75 2.25V5H12.5" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M5.75 7.75H10.25M5.75 10.5H9.25" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 
