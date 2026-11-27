@@ -1,3 +1,67 @@
+export type CalloutTone = 'note' | 'tip' | 'warning' | 'danger' | 'quote';
+
+export interface ParsedCalloutHeader {
+  rawType: string;
+  tone: CalloutTone;
+  title: string;
+}
+
+const CALLOUT_TONE_MAP: Record<string, CalloutTone> = {
+  note: 'note',
+  info: 'note',
+  abstract: 'note',
+  summary: 'note',
+  tldr: 'note',
+  todo: 'note',
+  tip: 'tip',
+  hint: 'tip',
+  important: 'tip',
+  success: 'tip',
+  check: 'tip',
+  done: 'tip',
+  warning: 'warning',
+  caution: 'warning',
+  attention: 'warning',
+  question: 'warning',
+  help: 'warning',
+  faq: 'warning',
+  danger: 'danger',
+  error: 'danger',
+  bug: 'danger',
+  failure: 'danger',
+  fail: 'danger',
+  missing: 'danger',
+  quote: 'quote',
+  cite: 'quote',
+  example: 'quote',
+};
+
+export function resolveCalloutTone(rawType: string): CalloutTone {
+  return CALLOUT_TONE_MAP[rawType.trim().toLowerCase()] ?? 'note';
+}
+
+export function formatCalloutDefaultTitle(rawType: string): string {
+  const cleaned = rawType.trim();
+  if (!cleaned) return 'Note';
+  return cleaned.charAt(0).toUpperCase() + cleaned.slice(1).toLowerCase();
+}
+
+export function parseCalloutHeaderLine(
+  lineText: string,
+): ParsedCalloutHeader | null {
+  const match = lineText.match(
+    /^\s*>\s*\[!([a-zA-Z0-9_-]+)\][+-]?(?:\s+(.*))?$/,
+  );
+  if (!match) return null;
+  const rawType = match[1];
+  const customTitle = (match[2] ?? '').trim();
+  return {
+    rawType,
+    tone: resolveCalloutTone(rawType),
+    title: customTitle || formatCalloutDefaultTitle(rawType),
+  };
+}
+
 export const NOTES_DRAFT_STORAGE_KEY = 'atrium.notes.pr1.draft';
 
 export const DEFAULT_SAMPLE_NOTE = `# Atrium Notes
@@ -7,6 +71,9 @@ Welcome to your **Obsidian-style Live Preview** Markdown workspace. Click any fo
 ## What Works Right Now
 
 Write naturally with **bold text**, *italic emphasis*, and ***bold italic*** combinations. You can switch between **Live Preview**, **Reading**, and **Source** modes in the top bar (or press \`Cmd/Ctrl + E\` to toggle Reading mode).
+
+> [!tip] Callouts supported
+> Use \`> [!note]\`, \`> [!tip]\`, \`> [!warning]\`, or \`> [!danger]\` with an optional custom title. Click the header line to edit the callout type or title directly.
 
 > "Your knowledge base is just plain Markdown files — clean, portable, and ready for future local-first desktop sync and AI agent access."
 

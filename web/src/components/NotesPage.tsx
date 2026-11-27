@@ -1,6 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import ReactMarkdown from 'react-markdown';
 import {
+  insertCallout,
   insertHorizontalRule,
   insertImage,
   insertLink,
@@ -12,9 +23,12 @@ import {
 import {
   countWordsAndChars,
   DEFAULT_SAMPLE_NOTE,
+  formatCalloutDefaultTitle,
   loadNotesDraft,
+  resolveCalloutTone,
   sanitizeMarkdownUrl,
   saveNotesDraft,
+  type CalloutTone,
 } from '../lib/markdownUtils';
 import {
   MarkdownEditor,
@@ -25,6 +39,69 @@ export type NotesViewMode = 'live' | 'reading' | 'source';
 
 interface NotesPageProps {
   onAnnounce: (message: string) => void;
+}
+
+const CALLOUT_GLYPHS: Record<CalloutTone, string> = {
+  note: 'ℹ',
+  tip: '✦',
+  warning: '⚠',
+  danger: '✕',
+  quote: '❝',
+};
+
+function renderReadingBlockquote(children: ReactNode) {
+  const childArray = Children.toArray(children).filter(
+    (c) => !(typeof c === 'string' && c.trim() === ''),
+  );
+  const first = childArray[0];
+
+  if (isValidElement<{ children?: ReactNode }>(first)) {
+    const firstChildren = Children.toArray(first.props.children);
+    const firstText = firstChildren[0];
+    if (typeof firstText === 'string') {
+      const match = firstText.match(
+        /^\[!([a-zA-Z0-9_-]+)\][+-]?(?:[ \t]+([^\n]*))?(?:\n([\s\S]*))?$/,
+      );
+      if (match) {
+        const rawType = match[1];
+        const tone = resolveCalloutTone(rawType);
+        const title =
+          (match[2] ?? '').trim() || formatCalloutDefaultTitle(rawType);
+        const remainderFirstLine = match[3] ?? '';
+        const restOfFirstParagraph = firstChildren.slice(1);
+        const bodyNodes: ReactNode[] = [];
+
+        if (remainderFirstLine || restOfFirstParagraph.length > 0) {
+          bodyNodes.push(
+            cloneElement(first as ReactElement<{ children?: ReactNode }>, {
+              key: 'callout-first-body',
+              children: [
+                ...(remainderFirstLine ? [remainderFirstLine] : []),
+                ...restOfFirstParagraph,
+              ],
+            }),
+          );
+        }
+        bodyNodes.push(...childArray.slice(1));
+
+        return (
+          <div className={`notes-callout is-${tone}`}>
+            <div className={`notes-callout-header is-${tone}`}>
+              <span className="cm-md-callout-icon" aria-hidden="true">
+                {CALLOUT_GLYPHS[tone]}
+              </span>
+              <span>{title}</span>
+            </div>
+            {bodyNodes.length > 0 && (
+              <div className="notes-callout-body">{bodyNodes}</div>
+            )}
+          </div>
+        );
+      }
+    }
+  }
+
+  return <blockquote>{children}</blockquote>;
 }
 
 function SafeReadingImage({
@@ -208,6 +285,14 @@ export function NotesPage({ onAnnounce }: NotesPageProps) {
               >
                 Quote
               </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs notes-fmt-btn"
+                title="Insert callout (> [!note])"
+                onClick={() => editorRef.current?.runCommand(insertCallout)}
+              >
+                Callout
+              </button>
               <span className="notes-toolbar-sep" aria-hidden="true" />
               <button
                 type="button"
@@ -286,6 +371,9 @@ export function NotesPage({ onAnnounce }: NotesPageProps) {
               ) : (
                 <ReactMarkdown
                   components={{
+                    blockquote({ children }) {
+                      return renderReadingBlockquote(children);
+                    },
                     a({ href, children }) {
                       const safeHref = href
                         ? sanitizeMarkdownUrl(href, 'link')

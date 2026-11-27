@@ -220,6 +220,35 @@ export const insertHorizontalRule: Command = (view) => {
   return true;
 };
 
+export const insertCallout: Command = (view) => {
+  const { state } = view;
+  const range = state.selection.main;
+  const selected = state.sliceDoc(range.from, range.to);
+  const body = selected
+    ? selected
+        .split('\n')
+        .map((line) => `> ${line}`)
+        .join('\n')
+    : '> ';
+
+  const line = state.doc.lineAt(range.from);
+  const needsLeadingNewline =
+    range.empty && line.text.trim().length > 0;
+  const prefix = needsLeadingNewline ? '\n\n' : '';
+  const header = '> [!note] Note\n';
+  const insert = `${prefix}${header}${body}`;
+  const insertFrom = needsLeadingNewline ? line.to : range.from;
+  const insertTo = needsLeadingNewline ? line.to : range.to;
+  const titleStart = insertFrom + prefix.length + '> [!note] '.length;
+
+  view.dispatch({
+    changes: { from: insertFrom, to: insertTo, insert },
+    selection: EditorSelection.range(titleStart, titleStart + 'Note'.length),
+  });
+  view.focus();
+  return true;
+};
+
 export const markdownFormattingKeymap: Extension = keymap.of([
   { key: 'Mod-b', run: toggleBold },
   { key: 'Mod-i', run: toggleItalic },

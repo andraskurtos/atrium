@@ -16,7 +16,55 @@ import {
   type DecorationSet,
 } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
-import { sanitizeMarkdownUrl } from './markdownUtils';
+import {
+  parseCalloutHeaderLine,
+  sanitizeMarkdownUrl,
+  type CalloutTone,
+} from './markdownUtils';
+
+const CALLOUT_GLYPHS: Record<CalloutTone, string> = {
+  note: 'ℹ',
+  tip: '✦',
+  warning: '⚠',
+  danger: '✕',
+  quote: '❝',
+};
+
+class CalloutHeaderWidget extends WidgetType {
+  readonly tone: CalloutTone;
+  readonly title: string;
+
+  constructor(tone: CalloutTone, title: string) {
+    super();
+    this.tone = tone;
+    this.title = title;
+  }
+
+  override eq(other: CalloutHeaderWidget): boolean {
+    return other.tone === this.tone && other.title === this.title;
+  }
+
+  override toDOM(): HTMLElement {
+    const header = document.createElement('span');
+    header.className = `cm-md-callout-title is-${this.tone}`;
+
+    const icon = document.createElement('span');
+    icon.className = 'cm-md-callout-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = CALLOUT_GLYPHS[this.tone];
+
+    const label = document.createElement('span');
+    label.textContent = this.title;
+
+    header.appendChild(icon);
+    header.appendChild(label);
+    return header;
+  }
+
+  override ignoreEvent(): boolean {
+    return false;
+  }
+}
 
 class HorizontalRuleWidget extends WidgetType {
   override toDOM(): HTMLElement {
@@ -209,11 +257,41 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         return;
       }
 
-      // 4. Blockquotes
+      // 4. Blockquotes & Callouts (> [!type] Title)
       if (name === 'Blockquote') {
-        const startLine = doc.lineAt(from).number;
-        const endLine = doc.lineAt(to).number;
-        for (let lineNo = startLine; lineNo <= endLine; lineNo += 1) {
+        const startLineNo = doc.lineAt(from).number;
+        const endLineNo = doc.lineAt(to).number;
+        const firstLine = doc.line(startLineNo);
+        const callout = parseCalloutHeaderLine(firstLine.text);
+
+        if (callout) {
+          for (let lineNo = startLineNo; lineNo <= endLineNo; lineNo += 1) {
+            const line = doc.line(lineNo);
+            const classes = [
+              'cm-md-callout',
+              `cm-md-callout-${callout.tone}`,
+            ];
+            if (lineNo === startLineNo) classes.push('cm-md-callout-first');
+            if (lineNo === endLineNo) classes.push('cm-md-callout-last');
+            decorations.push(
+              Decoration.line({
+                attributes: { class: classes.join(' ') },
+              }).range(line.from),
+            );
+          }
+
+          if (!isRangeActive(state, firstLine.from, firstLine.to)) {
+            hiddenRanges.push({ from: firstLine.from, to: firstLine.to });
+            decorations.push(
+              Decoration.replace({
+                widget: new CalloutHeaderWidget(callout.tone, callout.title),
+              }).range(firstLine.from, firstLine.to),
+            );
+          }
+          return;
+        }
+
+        for (let lineNo = startLineNo; lineNo <= endLineNo; lineNo += 1) {
           const line = doc.line(lineNo);
           decorations.push(
             Decoration.line({
