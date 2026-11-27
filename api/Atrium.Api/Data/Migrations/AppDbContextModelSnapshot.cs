@@ -265,6 +265,56 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.ToTable("daily_notes", (string?)null);
         });
 
+        modelBuilder.Entity("Atrium.Api.Data.Entities.Note", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<bool>("AllowAgentRead").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(true).HasColumnName("allow_agent_read");
+            b.Property<string>("Content").IsRequired().HasColumnType("text").HasColumnName("content");
+            b.Property<string>("ContentHash").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)").HasColumnName("content_hash");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<DateTimeOffset?>("DeletedAt").HasColumnType("timestamp with time zone").HasColumnName("deleted_at");
+            b.Property<Guid?>("FolderId").HasColumnType("uuid").HasColumnName("folder_id");
+            b.Property<string>("Title").IsRequired().HasMaxLength(200).HasColumnType("character varying(200)").HasColumnName("title");
+            b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone").HasColumnName("updated_at");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+            b.Property<int>("Version").IsConcurrencyToken().ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(1).HasColumnName("version");
+
+            b.HasKey("Id");
+            b.HasIndex("FolderId");
+            b.HasIndex("UserId", "UpdatedAt").HasDatabaseName("ix_notes_user_updated");
+            b.HasIndex("UserId", "FolderId", "DeletedAt").HasDatabaseName("ix_notes_user_folder_deleted");
+            b.ToTable("notes", (string?)null);
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.NoteFolder", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<bool>("AllowAgentRead").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(true).HasColumnName("allow_agent_read");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<DateTimeOffset?>("DeletedAt").HasColumnType("timestamp with time zone").HasColumnName("deleted_at");
+            b.Property<string>("Name").IsRequired().HasMaxLength(120).HasColumnType("character varying(120)").HasColumnName("name");
+            b.Property<Guid?>("ParentFolderId").HasColumnType("uuid").HasColumnName("parent_folder_id");
+            b.Property<int>("SortOrder").ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(0).HasColumnName("sort_order");
+            b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone").HasColumnName("updated_at");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("ParentFolderId");
+            b.HasIndex("UserId", "ParentFolderId", "DeletedAt").HasDatabaseName("ix_note_folders_user_parent");
+            b.ToTable("note_folders", (string?)null);
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.NoteTag", b =>
+        {
+            b.Property<Guid>("NoteId").HasColumnType("uuid").HasColumnName("note_id");
+            b.Property<string>("Tag").HasMaxLength(40).HasColumnType("character varying(40)").HasColumnName("tag");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("NoteId", "Tag");
+            b.HasIndex("UserId", "Tag").HasDatabaseName("ix_note_tags_user_tag");
+            b.ToTable("note_tags", (string?)null);
+        });
+
         modelBuilder.Entity("Atrium.Api.Data.Entities.AgentToken", b =>
         {
             b.HasOne("Atrium.Api.Data.Entities.User", "User")
@@ -313,6 +363,52 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .HasForeignKey("UserId")
                 .OnDelete(DeleteBehavior.Cascade)
                 .IsRequired();
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.Note", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.NoteFolder", "Folder")
+                .WithMany("Notes")
+                .HasForeignKey("FolderId")
+                .OnDelete(DeleteBehavior.SetNull);
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("Folder");
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.NoteFolder", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.NoteFolder", "ParentFolder")
+                .WithMany("ChildFolders")
+                .HasForeignKey("ParentFolderId")
+                .OnDelete(DeleteBehavior.Restrict);
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("ParentFolder");
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.NoteTag", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.Note", "Note")
+                .WithMany("Tags")
+                .HasForeignKey("NoteId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("Note");
             b.Navigation("User");
         });
 
@@ -417,6 +513,17 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
         modelBuilder.Entity("Atrium.Api.Data.Entities.CalendarEvent", b =>
         {
             b.Navigation("RecurrenceOverrides");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.Note", b =>
+        {
+            b.Navigation("Tags");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.NoteFolder", b =>
+        {
+            b.Navigation("ChildFolders");
+            b.Navigation("Notes");
         });
 
         modelBuilder.Entity("Atrium.Api.Data.Entities.UniversityCourse", b =>

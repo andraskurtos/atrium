@@ -1,13 +1,26 @@
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
-import { Compartment, EditorState } from '@codemirror/state';
-import { EditorView, keymap, placeholder as cmPlaceholder, type Command } from '@codemirror/view';
+import {
+  Annotation,
+  Compartment,
+  EditorSelection,
+  EditorState,
+  type Range,
+} from '@codemirror/state';
+import {
+  Decoration,
+  EditorView,
+  keymap,
+  placeholder as cmPlaceholder,
+  type Command,
+} from '@codemirror/view';
 import {
   forwardRef,
   useEffect,
   useImperativeHandle,
   useRef,
 } from 'react';
+import { findFrontmatterRange } from '../lib/frontmatter';
 import { markdownFormattingKeymap } from '../lib/markdownCommands';
 import {
   atriumEditorTheme,
@@ -20,26 +33,114 @@ export type EditorDisplayMode = 'live' | 'source';
 export interface MarkdownEditorHandle {
   runCommand: (command: Command) => void;
   focus: () => void;
+  scrollToMatch: (index: number) => void;
+  replaceCurrentMatch: (replacement: string, index: number) => boolean;
+  replaceAllMatches: (replacement: string) => number;
 }
 
 interface MarkdownEditorProps {
   value: string;
   mode: EditorDisplayMode;
+  highlightQuery?: string;
+  caseSensitive?: boolean;
+  activeMatchIndex?: number;
+  onMatchCountChange?: (count: number) => void;
   onChange: (nextValue: string) => void;
+}
+
+const externalSyncAnnotation = Annotation.define<boolean>();
+
+function clampInitialCursorForMode(doc: string, mode: EditorDisplayMode): number {
+  if (mode !== 'live') return 0;
+  const fm = findFrontmatterRange(doc);
+  return fm ? Math.min(fm.bodyStart, doc.length) : 0;
+}
+
+function findMatchRanges(
+  doc: string,
+  query: string,
+  mode: EditorDisplayMode,
+  caseSensitive: boolean,
+  maxMatches = 500,
+): Array<{ from: number; to: number }> {
+  if (!query) return [];
+
+  const needle = caseSensitive ? query : query.toLowerCase();
+  const startOffset =
+    mode === 'live' ? (findFrontmatterRange(doc)?.bodyStart ?? 0) : 0;
+  const haystack = caseSensitive ? doc : doc.toLowerCase();
+  const matches: Array<{ from: number; to: number }> = [];
+  let pos = startOffset;
+
+  while (pos <= haystack.length - needle.length) {
+    const found = haystack.indexOf(needle, pos);
+    if (found === -1) break;
+    matches.push({ from: found, to: found + needle.length });
+    pos = found + needle.length;
+    if (matches.length >= maxMatches) break;
+  }
+
+  return matches;
+}
+
+function buildFindHighlightExtension(
+  matches: Array<{ from: number; to: number }>,
+  activeIndex: number,
+) {
+  if (matches.length === 0) return [];
+  const marks: Range<Decoration>[] = matches.map((m, idx) =>
+    Decoration.mark({
+      class: idx === activeIndex ? 'cm-find-match-active' : 'cm-find-match',
+    }).range(m.from, m.to),
+  );
+  return EditorView.decorations.of(Decoration.set(marks, true));
 }
 
 export const MarkdownEditor = forwardRef<
   MarkdownEditorHandle,
   MarkdownEditorProps
->(function MarkdownEditor({ value, mode, onChange }, ref) {
+>(function MarkdownEditor(
+  {
+    value,
+    mode,
+    highlightQuery = '',
+    caseSensitive = false,
+    activeMatchIndex = 0,
+    onMatchCountChange,
+    onChange,
+  },
+  ref,
+) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
   const liveCompartmentRef = useRef(new Compartment());
+  const findCompartmentRef = useRef(new Compartment());
+  const matchesRef = useRef<Array<{ from: number; to: number }>>([]);
   const onChangeRef = useRef(onChange);
+  const onMatchCountChangeRef = useRef(onMatchCountChange);
   const initialValueRef = useRef(value);
   const initialModeRef = useRef(mode);
+  const modeRef = useRef(mode);
+  const highlightQueryRef = useRef(highlightQuery);
+  const caseSensitiveRef = useRef(caseSensitive);
 
   onChangeRef.current = onChange;
+  onMatchCountChangeRef.current = onMatchCountChange;
+  modeRef.current = mode;
+  highlightQueryRef.current = highlightQuery;
+  caseSensitiveRef.current = caseSensitive;
+
+  const scrollToMatchAt = (index: number) => {
+    const view = viewRef.current;
+    const matches = matchesRef.current;
+    if (!view || matches.length === 0) return;
+    const clamped =
+      ((index % matches.length) + matches.length) % matches.length;
+    const target = matches[clamped];
+    view.dispatch({
+      effects: EditorView.scrollIntoView(target.from, { y: 'center' }),
+    });
+  };
 
   useImperativeHandle(
     ref,
@@ -52,6 +153,45 @@ export const MarkdownEditor = forwardRef<
       focus() {
         viewRef.current?.focus();
       },
+      scrollToMatch(index: number) {
+        scrollToMatchAt(index);
+      },
+      replaceCurrentMatch(replacement: string, index: number): boolean {
+        const view = viewRef.current;
+        const matches = matchesRef.current;
+        if (!view || matches.length === 0) return false;
+        const clamped =
+          ((index % matches.length) + matches.length) % matches.length;
+        const target = matches[clamped];
+        view.dispatch({
+          changes: { from: target.from, to: target.to, insert: replacement },
+          selection: EditorSelection.cursor(target.from + replacement.length),
+          effects: EditorView.scrollIntoView(target.from, { y: 'center' }),
+        });
+        return true;
+      },
+      replaceAllMatches(replacement: string): number {
+        const view = viewRef.current;
+        const query = highlightQueryRef.current;
+        if (!view || !query) return 0;
+        const doc = view.state.doc.toString();
+        const allMatches = findMatchRanges(
+          doc,
+          query,
+          modeRef.current,
+          caseSensitiveRef.current,
+          Number.POSITIVE_INFINITY,
+        );
+        if (allMatches.length === 0) return 0;
+        view.dispatch({
+          changes: allMatches.map((m) => ({
+            from: m.from,
+            to: m.to,
+            insert: replacement,
+          })),
+        });
+        return allMatches.length;
+      },
     }),
     [],
   );
@@ -62,9 +202,15 @@ export const MarkdownEditor = forwardRef<
     if (!host) return;
 
     const liveCompartment = liveCompartmentRef.current;
+    const findCompartment = findCompartmentRef.current;
+    const initialCursor = clampInitialCursorForMode(
+      initialValueRef.current,
+      initialModeRef.current,
+    );
 
     const state = EditorState.create({
       doc: initialValueRef.current,
+      selection: EditorSelection.cursor(initialCursor),
       extensions: [
         history(),
         markdownFormattingKeymap,
@@ -77,8 +223,14 @@ export const MarkdownEditor = forwardRef<
         liveCompartment.of(
           initialModeRef.current === 'live' ? markdownLivePreviewExtension : [],
         ),
+        findCompartment.of([]),
         EditorView.updateListener.of((update) => {
-          if (update.docChanged) {
+          if (
+            update.docChanged &&
+            !update.transactions.every((tr) =>
+              Boolean(tr.annotation(externalSyncAnnotation)),
+            )
+          ) {
             onChangeRef.current(update.state.doc.toString());
           }
         }),
@@ -98,24 +250,72 @@ export const MarkdownEditor = forwardRef<
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
+    const doc = view.state.doc.toString();
+    const minCursor = clampInitialCursorForMode(doc, mode);
+    const currentHead = view.state.selection.main.head;
+    const needsCursorClamp = mode === 'live' && currentHead < minCursor;
+
     view.dispatch({
       effects: liveCompartmentRef.current.reconfigure(
         mode === 'live' ? markdownLivePreviewExtension : [],
       ),
+      selection: needsCursorClamp
+        ? EditorSelection.cursor(minCursor)
+        : undefined,
     });
   }, [mode]);
 
-  // Sync external document replacements (e.g. Reset sample) without clobbering user typing
+  // Sync external document replacements (e.g. Properties tag/title update, conflict reload)
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     const current = view.state.doc.toString();
     if (value !== current) {
+      const oldFm = findFrontmatterRange(current);
+      const newFm = findFrontmatterRange(value);
+      const oldBodyStart = oldFm ? oldFm.bodyStart : 0;
+      const newBodyStart = newFm ? newFm.bodyStart : 0;
+      const oldHead = view.state.selection.main.head;
+      const relativeInBody = Math.max(0, oldHead - oldBodyStart);
+      const nextCursor =
+        modeRef.current === 'live'
+          ? Math.min(value.length, newBodyStart + relativeInBody)
+          : Math.min(value.length, oldHead);
+
       view.dispatch({
         changes: { from: 0, to: current.length, insert: value },
+        selection: EditorSelection.cursor(nextCursor),
+        annotations: externalSyncAnnotation.of(true),
       });
     }
   }, [value]);
+
+  // Recompute search highlights and scroll active match into view
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+
+    const doc = view.state.doc.toString();
+    const matches = findMatchRanges(doc, highlightQuery, mode, caseSensitive);
+    matchesRef.current = matches;
+    onMatchCountChangeRef.current?.(matches.length);
+
+    const clampedIndex =
+      matches.length > 0
+        ? ((activeMatchIndex % matches.length) + matches.length) % matches.length
+        : 0;
+
+    view.dispatch({
+      effects: [
+        findCompartmentRef.current.reconfigure(
+          buildFindHighlightExtension(matches, clampedIndex),
+        ),
+        ...(matches.length > 0
+          ? [EditorView.scrollIntoView(matches[clampedIndex].from, { y: 'center' })]
+          : []),
+      ],
+    });
+  }, [activeMatchIndex, caseSensitive, highlightQuery, mode, value]);
 
   return (
     <div
@@ -125,4 +325,3 @@ export const MarkdownEditor = forwardRef<
     />
   );
 });
-

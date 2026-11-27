@@ -83,6 +83,7 @@ const AVAILABLE_SCOPES = [
   'tasks:read',
   'tasks:propose',
   'vault:read',
+  'notes:read',
   'university:read',
   'university:propose',
 ];

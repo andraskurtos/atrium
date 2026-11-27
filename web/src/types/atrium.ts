@@ -36,6 +36,55 @@ export interface DailyTrackerData {
   note: DailyNote | null;
 }
 
+export interface NoteFolder {
+  id: string;
+  parentFolderId: string | null;
+  name: string;
+  allowAgentRead: boolean;
+  effectiveAllowAgentRead: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NoteTagCount {
+  tag: string;
+  count: number;
+}
+
+export interface NoteSummary {
+  id: string;
+  folderId: string | null;
+  title: string;
+  tags: string[];
+  excerpt: string;
+  allowAgentRead: boolean;
+  effectiveAllowAgentRead: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NoteDetail {
+  id: string;
+  folderId: string | null;
+  title: string;
+  content: string;
+  tags: string[];
+  contentHash: string;
+  version: number;
+  allowAgentRead: boolean;
+  effectiveAllowAgentRead: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NotesTreeResponse {
+  folders: NoteFolder[];
+  notes: NoteSummary[];
+  tags: NoteTagCount[];
+}
+
 export type UniversityActivityType =
   | 'lecture'
   | 'practice'

@@ -9,11 +9,13 @@ import type {
 
 export class ApiError extends Error {
   readonly status: number;
+  readonly body?: unknown;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.body = body;
   }
 }
 
@@ -51,17 +53,6 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
 
 export function clearAccessToken(): void {
   memoryAccessToken = null;
-}
-
-async function parseErrorMessage(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { error?: string; title?: string };
-    if (body.error) return body.error;
-    if (body.title) return body.title;
-  } catch {
-    // Fall back to HTTP status text
-  }
-  return `Request failed (${response.status})`;
 }
 
 export async function refreshAccessToken(): Promise<boolean> {
@@ -122,7 +113,22 @@ export async function authenticatedRawFetch(
   }
 
   if (!response.ok) {
-    throw new ApiError(response.status, await parseErrorMessage(response));
+    let body: unknown;
+    let message = `Request failed (${response.status})`;
+    try {
+      body = (await response.json()) as unknown;
+      if (body && typeof body === 'object') {
+        const record = body as { error?: unknown; title?: unknown };
+        if (typeof record.error === 'string' && record.error) {
+          message = record.error;
+        } else if (typeof record.title === 'string' && record.title) {
+          message = record.title;
+        }
+      }
+    } catch {
+      // Non-JSON error response
+    }
+    throw new ApiError(response.status, message, body);
   }
 
   return response;

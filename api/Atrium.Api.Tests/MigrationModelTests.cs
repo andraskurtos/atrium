@@ -43,6 +43,7 @@ public sealed class MigrationModelTests
         Assert.Contains("20261126150000_AddRecurrenceOverrides", sql, StringComparison.Ordinal);
         Assert.Contains("20261126180000_AddUniversityModule", sql, StringComparison.Ordinal);
         Assert.Contains("20261126230000_AddDailyTracker", sql, StringComparison.Ordinal);
+        Assert.Contains("20261127120000_AddNotesVault", sql, StringComparison.Ordinal);
         Assert.Contains("CREATE TABLE calendars", sql, StringComparison.Ordinal);
         Assert.Contains("CREATE TABLE calendar_events", sql, StringComparison.Ordinal);
         Assert.Contains("CREATE TABLE university_courses", sql, StringComparison.Ordinal);
@@ -50,11 +51,18 @@ public sealed class MigrationModelTests
         Assert.Contains("CREATE TABLE university_activity_items", sql, StringComparison.Ordinal);
         Assert.Contains("CREATE TABLE daily_check_items", sql, StringComparison.Ordinal);
         Assert.Contains("CREATE TABLE daily_notes", sql, StringComparison.Ordinal);
+        Assert.Contains("CREATE TABLE note_folders", sql, StringComparison.Ordinal);
+        Assert.Contains("CREATE TABLE notes", sql, StringComparison.Ordinal);
+        Assert.Contains("CREATE TABLE note_tags", sql, StringComparison.Ordinal);
         Assert.Contains("ix_calendar_events_calendar_external_uid", sql, StringComparison.Ordinal);
         Assert.Contains("ix_calendar_events_master_original_start", sql, StringComparison.Ordinal);
         Assert.Contains("ix_calendars_user_module", sql, StringComparison.Ordinal);
         Assert.Contains("ix_university_activity_items_calendar_event", sql, StringComparison.Ordinal);
         Assert.Contains("ix_daily_check_items_user_date_sort", sql, StringComparison.Ordinal);
         Assert.Contains("ix_daily_notes_user_date", sql, StringComparison.Ordinal);
+        Assert.Contains("ix_note_folders_user_parent", sql, StringComparison.Ordinal);
+        Assert.Contains("ix_notes_user_folder_deleted", sql, StringComparison.Ordinal);
+        Assert.Contains("ix_notes_user_updated", sql, StringComparison.Ordinal);
+        Assert.Contains("ix_note_tags_user_tag", sql, StringComparison.Ordinal);
     }
 }
