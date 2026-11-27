@@ -3315,6 +3315,63 @@ select {
   font-weight: 500;
 }
 
+.today-live-suggestion {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--space-2);
+  padding: 3px 6px 3px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  background-color: var(--accent-soft);
+  max-width: 100%;
+}
+
+.today-live-suggestion-btn {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 2px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.today-live-suggestion-btn:hover {
+  text-decoration: underline;
+}
+
+.today-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.today-live-dot.is-live {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.today-live-suggestion-dismiss {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  opacity: 0.7;
+  cursor: pointer;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+.today-live-suggestion-dismiss:hover {
+  opacity: 1;
+}
+
 .checklist-title-btn {
   border: none;
   background: transparent;
@@ -4940,4 +4997,21 @@ select {
   overflow-x: auto;
   overflow-y: hidden;
   padding: 6px 0;
+}
+
+/* Custom 24h / 12h TimeInput */
+.atrium-time-field {
+  min-width: 84px;
+}
+
+.atrium-time-12h {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.atrium-time-period-btn {
+  flex-shrink: 0;
+  min-width: 40px;
+  justify-content: center;
 }

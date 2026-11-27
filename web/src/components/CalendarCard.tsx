@@ -58,6 +58,7 @@ import {
   PlusIcon,
   UploadIcon,
 } from './Icons';
+import { TimeInput } from './TimeInput';
 
 interface CalendarCardProps {
   todayKey: string;
@@ -672,13 +673,14 @@ export function CalendarCard({
                 required
               />
               {!eventIsAllDay && (
-                <input
+                <TimeInput
                   id={`${prefix}-event-start-time`}
-                  type="time"
                   className="input mono-num"
+                  timeFormat={timeFormat}
                   value={eventStartTime}
-                  onChange={(e) => setEventStartTime(e.target.value)}
+                  onChange={setEventStartTime}
                   required
+                  ariaLabel="Event start time"
                 />
               )}
             </div>
@@ -697,13 +699,14 @@ export function CalendarCard({
                 required
               />
               {!eventIsAllDay && (
-                <input
+                <TimeInput
                   id={`${prefix}-event-end-time`}
-                  type="time"
                   className="input mono-num"
+                  timeFormat={timeFormat}
                   value={eventEndTime}
-                  onChange={(e) => setEventEndTime(e.target.value)}
+                  onChange={setEventEndTime}
                   required
+                  ariaLabel="Event end time"
                 />
               )}
             </div>

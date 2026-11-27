@@ -49,6 +49,7 @@ import type {
   UserCalendar,
 } from '../types/atrium';
 import { ArrowLeftIcon, CloseIcon, GraduationCapIcon, PlusIcon } from './Icons';
+import { TimeInput } from './TimeInput';
 import { UniversityCalendarCard } from './UniversityCalendarCard';
 
 interface UniversityPageProps {
@@ -2420,11 +2421,11 @@ export function UniversityPage({
                   {!itemIsAllDay && (
                     <label className="field-group">
                       <span className="field-label">Start time</span>
-                      <input
-                        type="time"
+                      <TimeInput
                         className="input-control mono-num"
+                        timeFormat={timeFormat}
                         value={itemStartTime}
-                        onChange={(e) => setItemStartTime(e.target.value)}
+                        onChange={setItemStartTime}
                         required
                       />
                     </label>
@@ -2446,11 +2447,11 @@ export function UniversityPage({
                   {!itemIsAllDay && (
                     <label className="field-group">
                       <span className="field-label">End time</span>
-                      <input
-                        type="time"
+                      <TimeInput
                         className="input-control mono-num"
+                        timeFormat={timeFormat}
                         value={itemEndTime}
-                        onChange={(e) => setItemEndTime(e.target.value)}
+                        onChange={setItemEndTime}
                         required
                       />
                     </label>
@@ -2610,22 +2611,22 @@ export function UniversityPage({
               <>
                 <label className="field-group">
                   <span className="field-label">Start time</span>
-                  <input
-                    type="time"
+                  <TimeInput
                     className="input-control mono-num"
+                    timeFormat={timeFormat}
                     value={seriesStartTime}
-                    onChange={(e) => setSeriesStartTime(e.target.value)}
+                    onChange={setSeriesStartTime}
                     required
                   />
                 </label>
 
                 <label className="field-group">
                   <span className="field-label">End time</span>
-                  <input
-                    type="time"
+                  <TimeInput
                     className="input-control mono-num"
+                    timeFormat={timeFormat}
                     value={seriesEndTime}
-                    onChange={(e) => setSeriesEndTime(e.target.value)}
+                    onChange={setSeriesEndTime}
                     required
                   />
                 </label>

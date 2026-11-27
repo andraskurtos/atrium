@@ -227,6 +227,13 @@ export function App() {
   const [universityLoading, setUniversityLoading] = useState(false);
   const [focusedUniversityCourseId, setFocusedUniversityCourseId] = useState<string | null>(null);
   const [pendingNoteTarget, setPendingNoteTarget] = useState<PendingNoteTarget | null>(null);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const [dismissedSuggestionKey, setDismissedSuggestionKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const [mobileTab, setMobileTab] = useState<MobileTab>('stream');
   const [isCommandOpen, setIsCommandOpen] = useState(false);
@@ -1509,12 +1516,148 @@ export function App() {
                     {selectedDayEventCount === 1 ? 'event' : 'events'}
                   </p>
                 )}
+
+                {isViewingToday && (() => {
+                  const SOON_WINDOW_MS = 10 * 60_000;
+                  type LiveSuggestion = {
+                    key: string;
+                    status: 'live' | 'soon';
+                    label: string;
+                    priority: number;
+                    target: PendingNoteTarget;
+                  };
+
+                  const candidates: LiveSuggestion[] = [];
+
+                  for (const course of universityCourses) {
+                    const courseLabel = course.code || course.name;
+                    for (const act of course.activities) {
+                      for (const item of act.items) {
+                        if (!item.startAt || !item.endAt || item.isAllDay) continue;
+                        const s = Date.parse(item.startAt);
+                        const e = Date.parse(item.endAt);
+                        if (Number.isNaN(s) || Number.isNaN(e)) continue;
+                        if (s <= nowMs && nowMs < e) {
+                          candidates.push({
+                            key: `uni:${item.id}`,
+                            status: 'live',
+                            label: `${courseLabel} · ${item.title}`,
+                            priority: 0,
+                            target: {
+                              kind: 'university_item',
+                              universityActivityItemId: item.id,
+                            },
+                          });
+                        } else if (s > nowMs && s - nowMs <= SOON_WINDOW_MS) {
+                          candidates.push({
+                            key: `uni:${item.id}`,
+                            status: 'soon',
+                            label: `${courseLabel} · ${item.title}`,
+                            priority: 2,
+                            target: {
+                              kind: 'university_item',
+                              universityActivityItemId: item.id,
+                            },
+                          });
+                        }
+                      }
+                    }
+                  }
+
+                  const uniCalIds = new Set(
+                    calendars
+                      .filter((c) => c.module === 'university')
+                      .map((c) => c.id),
+                  );
+
+                  for (const evt of todayEvents) {
+                    if (
+                      evt.isAllDay ||
+                      evt.status === 'cancelled' ||
+                      uniCalIds.has(evt.calendarId) ||
+                      evt.universityActivityItemId
+                    ) {
+                      continue;
+                    }
+                    const s = Date.parse(evt.startAt);
+                    const e = Date.parse(evt.endAt);
+                    if (Number.isNaN(s) || Number.isNaN(e)) continue;
+                    const masterId = evt.seriesMasterId ?? evt.id;
+                    const occStart = evt.isRecurring
+                      ? evt.occurrenceStartAt ?? evt.startAt
+                      : null;
+                    if (s <= nowMs && nowMs < e) {
+                      candidates.push({
+                        key: `evt:${masterId}:${occStart ?? 'single'}`,
+                        status: 'live',
+                        label: evt.title,
+                        priority: 1,
+                        target: {
+                          kind: 'calendar_event',
+                          calendarEventId: masterId,
+                          occurrenceStartAt: occStart,
+                        },
+                      });
+                    } else if (s > nowMs && s - nowMs <= SOON_WINDOW_MS) {
+                      candidates.push({
+                        key: `evt:${masterId}:${occStart ?? 'single'}`,
+                        status: 'soon',
+                        label: evt.title,
+                        priority: 3,
+                        target: {
+                          kind: 'calendar_event',
+                          calendarEventId: masterId,
+                          occurrenceStartAt: occStart,
+                        },
+                      });
+                    }
+                  }
+
+                  candidates.sort((a, b) => a.priority - b.priority);
+                  const best = candidates.find(
+                    (c) => c.key !== dismissedSuggestionKey,
+                  );
+                  if (!best) return null;
+
+                  return (
+                    <div className="today-live-suggestion" role="status">
+                      <button
+                        type="button"
+                        className="today-live-suggestion-btn"
+                        onClick={() => {
+                          setPendingNoteTarget(best.target);
+                          navigateTo('notes');
+                        }}
+                      >
+                        <span
+                          className={`today-live-dot ${best.status === 'live' ? 'is-live' : ''}`}
+                          aria-hidden="true"
+                        />
+                        <span>
+                          {best.status === 'live'
+                            ? `Open notes for ${best.label}?`
+                            : `Starting soon: Open notes for ${best.label}?`}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="today-live-suggestion-dismiss"
+                        aria-label="Dismiss suggestion"
+                        title="Dismiss"
+                        onClick={() => setDismissedSuggestionKey(best.key)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  );
+                })()}
               </header>
 
               <div data-mobile-section="stream">
                 <QuickCapture
                   inputRef={quickCaptureRef}
                   selectedDateLabel={selectedDateLabel}
+                  timeFormat={preferences.timeFormat}
                   onCapture={handleCapture}
                 />
               </div>
