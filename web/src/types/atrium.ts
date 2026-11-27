@@ -2,13 +2,13 @@ export type ApiState = 'checking' | 'ok' | 'degraded' | 'offline';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
-export type AppView = 'dashboard' | 'university' | 'account';
+export type AppView = 'dashboard' | 'university' | 'notes' | 'account';
 
 export type UserRole = 'Owner' | 'Member';
 
 export type CaptureKind = 'task' | 'event';
 
-export type MobileTab = 'stream' | 'calendar' | 'university';
+export type MobileTab = 'stream' | 'calendar' | 'university' | 'notes';
 
 export interface DailyCheckItem {
   id: string;

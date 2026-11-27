@@ -2,6 +2,7 @@ import type { MobileTab } from '../types/atrium';
 import {
   CalendarIcon,
   GraduationCapIcon,
+  NoteIcon,
   StreamIcon,
 } from './Icons';
 
@@ -18,6 +19,7 @@ export function MobileTabBar({
     { id: 'stream', label: 'Day', icon: StreamIcon },
     { id: 'calendar', label: 'Calendar', icon: CalendarIcon },
     { id: 'university', label: 'University', icon: GraduationCapIcon },
+    { id: 'notes', label: 'Notes', icon: NoteIcon },
   ];
 
   return (

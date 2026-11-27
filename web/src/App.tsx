@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { AccountPage } from './components/AccountPage';
 import { AuthScreen } from './components/AuthScreen';
 import { CalendarCard } from './components/CalendarCard';
@@ -94,6 +102,7 @@ import {
   type UpdateActivityItemInput,
   type UpdateCourseInput,
 } from './lib/universityClient';
+import { clearNotesDraft } from './lib/markdownUtils';
 import type {
   AccountPreferences,
   AgentToken,
@@ -113,6 +122,10 @@ import type {
   UserProfile,
 } from './types/atrium';
 
+const NotesPage = lazy(() =>
+  import('./components/NotesPage').then((m) => ({ default: m.NotesPage })),
+);
+
 function readInviteCodeFromHash(): string {
   if (typeof window === 'undefined') return '';
   const match = window.location.hash.match(/^#invite=([^&]+)/);
@@ -123,6 +136,7 @@ function readInitialView(): AppView {
   if (typeof window === 'undefined') return 'dashboard';
   if (window.location.hash === '#account') return 'account';
   if (window.location.hash === '#university') return 'university';
+  if (window.location.hash === '#notes') return 'notes';
   return 'dashboard';
 }
 
@@ -467,6 +481,8 @@ export function App() {
         setActiveView('account');
       } else if (hash === '#university') {
         setActiveView('university');
+      } else if (hash === '#notes') {
+        setActiveView('notes');
       } else {
         setActiveView('dashboard');
         const hashDate = readDateKeyFromHash();
@@ -479,7 +495,12 @@ export function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === 'k'
+      ) {
         event.preventDefault();
         if (profile) {
           setIsCommandOpen((prev) => !prev);
@@ -554,8 +575,20 @@ export function App() {
     announce(`Signed in as ${session.user.displayName || session.user.username}`);
   };
 
+  const signedOutNotesUserIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!profile && signedOutNotesUserIdRef.current !== null) {
+      clearNotesDraft(signedOutNotesUserIdRef.current);
+      signedOutNotesUserIdRef.current = null;
+    }
+  }, [profile]);
+
   const handleSignOut = async () => {
+    const signingOutUserId = profile?.id ?? '';
+    signedOutNotesUserIdRef.current = signingOutUserId;
     await logout();
+    clearNotesDraft(signingOutUserId);
     clearAuthState();
     announce('Signed out');
   };
@@ -574,9 +607,11 @@ export function App() {
           ? '#account'
           : view === 'university'
             ? '#university'
-            : selectedDateKeyRef.current === todayKey
-              ? ''
-              : `#day/${selectedDateKeyRef.current}`;
+            : view === 'notes'
+              ? '#notes'
+              : selectedDateKeyRef.current === todayKey
+                ? ''
+                : `#day/${selectedDateKeyRef.current}`;
       window.history.replaceState(
         null,
         '',
@@ -594,6 +629,10 @@ export function App() {
   const handleSelectMobileTab = (tab: MobileTab) => {
     if (tab === 'university') {
       openUniversityView();
+      return;
+    }
+    if (tab === 'notes') {
+      navigateTo('notes');
       return;
     }
     setMobileTab(tab);
@@ -1207,6 +1246,13 @@ export function App() {
       onSelect: () => openUniversityView(),
     },
     {
+      id: 'cmd-notes',
+      label: 'Open Markdown Notes Editor',
+      hint: 'Notes',
+      group: 'Navigation',
+      onSelect: () => navigateTo('notes'),
+    },
+    {
       id: 'cmd-account',
       label: 'Open Account & Settings',
       hint: 'Profile & Security',
@@ -1354,6 +1400,33 @@ export function App() {
 
           <MobileTabBar
             activeTab="university"
+            onSelectTab={handleSelectMobileTab}
+          />
+        </>
+      ) : activeView === 'notes' ? (
+        <>
+          <Suspense
+            fallback={
+              <main
+                className="notes-page-shell"
+                role="status"
+                aria-live="polite"
+              >
+                <div className="notes-canvas">
+                  <p className="meta-text">Loading Markdown editor…</p>
+                </div>
+              </main>
+            }
+          >
+            <NotesPage
+              key={profile.id}
+              userId={profile.id}
+              onAnnounce={announce}
+            />
+          </Suspense>
+
+          <MobileTabBar
+            activeTab="notes"
             onSelectTab={handleSelectMobileTab}
           />
         </>
