@@ -111,6 +111,9 @@ Write naturally with **bold text**, *italic emphasis*, and ***bold italic*** com
 - Toggle Reading mode: Cmd/Ctrl + E
 `;
 
+const INTERNAL_ATTACHMENT_IMAGE_RE =
+  /^\/api\/attachments\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function sanitizeMarkdownUrl(
   rawUrl: string,
   kind: 'link' | 'image',
@@ -120,6 +123,10 @@ export function sanitizeMarkdownUrl(
     trimmed = trimmed.slice(1, -1).trim();
   }
   if (!trimmed) return null;
+
+  if (kind === 'image' && INTERNAL_ATTACHMENT_IMAGE_RE.test(trimmed)) {
+    return trimmed;
+  }
 
   try {
     const parsed = new URL(trimmed);

@@ -5,6 +5,7 @@ using Atrium.Api.Data;
 using Atrium.Api.Data.Entities;
 using Atrium.Api.Endpoints;
 using Atrium.Api.Health;
+using Atrium.Api.Storage;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -29,6 +30,7 @@ var authOptions = new AuthOptions();
 builder.Configuration.GetSection(AuthOptions.SectionName).Bind(authOptions);
 authOptions.ValidateForEnvironment(builder.Environment.IsDevelopment());
 builder.Services.Configure<AuthOptions>(builder.Configuration.GetSection(AuthOptions.SectionName));
+builder.Services.Configure<StorageOptions>(builder.Configuration.GetSection(StorageOptions.SectionName));
 
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseNpgsql(connectionString));
@@ -36,6 +38,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<IDatabaseHealthCheck, EfDatabaseHealthCheck>();
 builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddSingleton<JwtTokenService>();
+builder.Services.AddSingleton<IAttachmentStorage, LocalDiskAttachmentStorage>();
 
 builder.Services
     .AddAuthentication(options =>
@@ -213,6 +216,7 @@ app.MapCalendarEndpoints();
 app.MapUniversityEndpoints();
 app.MapDayEndpoints();
 app.MapNoteEndpoints();
+app.MapAttachmentEndpoints();
 
 var configuredDistPath = builder.Configuration["Atrium:WebDistPath"];
 var resolvedDistPath = !string.IsNullOrWhiteSpace(configuredDistPath)

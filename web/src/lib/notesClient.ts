@@ -84,6 +84,7 @@ export async function deleteNoteFolder(id: string): Promise<void> {
 export async function createNote(input: {
   title?: string;
   folderId?: string | null;
+  universityCourseId?: string | null;
   content?: string;
   allowAgentRead?: boolean;
 }): Promise<NoteDetail> {
@@ -92,9 +93,25 @@ export async function createNote(input: {
     body: JSON.stringify({
       title: input.title ?? null,
       folderId: input.folderId ?? null,
+      universityCourseId: input.universityCourseId ?? null,
       content: input.content ?? '',
       allowAgentRead: input.allowAgentRead ?? true,
     }),
+  });
+}
+
+export async function openLinkedNote(
+  input:
+    | { kind: 'university_item'; universityActivityItemId: string }
+    | {
+        kind: 'calendar_event';
+        calendarEventId: string;
+        occurrenceStartAt?: string | null;
+      },
+): Promise<NoteDetail> {
+  return apiFetch<NoteDetail>('/api/notes/linked', {
+    method: 'POST',
+    body: JSON.stringify(input),
   });
 }
 

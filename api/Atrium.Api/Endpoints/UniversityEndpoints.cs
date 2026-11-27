@@ -44,8 +44,10 @@ public static partial class UniversityEndpoints
                 .OrderByDescending(s => s, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var filtered = FilterCourses(allCourses, semester, status)
-                .Select(ToCourseDto)
+            var filteredCourses = FilterCourses(allCourses, semester, status).ToList();
+            var counts = await LoadUniversityNoteAndArtifactCountsAsync(db, userId, ct);
+            var filtered = filteredCourses
+                .Select(c => ToCourseDto(c, counts))
                 .ToList();
 
             return Results.Ok(new UniversityWorkspaceResponse(
@@ -1206,12 +1208,68 @@ public static partial class UniversityEndpoints
         return value.Trim();
     }
 
-    private static UniversityCourseDto ToCourseDto(UniversityCourse c)
+    private sealed record UniversityLinkCounts(
+        Dictionary<Guid, int> CourseNoteCounts,
+        Dictionary<Guid, int> CourseArtifactCounts,
+        Dictionary<Guid, Guid> ItemLinkedNoteIds,
+        Dictionary<Guid, int> ItemArtifactCounts);
+
+    private static async Task<UniversityLinkCounts> LoadUniversityNoteAndArtifactCountsAsync(
+        AppDbContext db,
+        Guid userId,
+        CancellationToken ct)
+    {
+        var uniNotes = await db.Notes
+            .AsNoTracking()
+            .Where(n => n.UserId == userId && n.DeletedAt == null && n.UniversityCourseId != null)
+            .Select(n => new { n.Id, n.UniversityCourseId, n.UniversityActivityItemId })
+            .ToListAsync(ct);
+
+        var courseNoteCounts = uniNotes
+            .Where(n => n.UniversityActivityItemId == null && n.UniversityCourseId.HasValue)
+            .GroupBy(n => n.UniversityCourseId!.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var itemLinkedNoteIds = new Dictionary<Guid, Guid>();
+        foreach (var n in uniNotes.Where(n => n.UniversityActivityItemId.HasValue))
+        {
+            itemLinkedNoteIds[n.UniversityActivityItemId!.Value] = n.Id;
+        }
+
+        var uniArtifacts = await db.Attachments
+            .AsNoTracking()
+            .Where(a => a.UserId == userId
+                && a.DeletedAt == null
+                && a.Kind == Atrium.Api.Attachments.AttachmentKinds.Artifact
+                && a.UniversityCourseId != null)
+            .Select(a => new { a.UniversityCourseId, a.UniversityActivityItemId })
+            .ToListAsync(ct);
+
+        var courseArtifactCounts = uniArtifacts
+            .Where(a => a.UniversityActivityItemId == null && a.UniversityCourseId.HasValue)
+            .GroupBy(a => a.UniversityCourseId!.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var itemArtifactCounts = uniArtifacts
+            .Where(a => a.UniversityActivityItemId.HasValue)
+            .GroupBy(a => a.UniversityActivityItemId!.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        return new UniversityLinkCounts(
+            courseNoteCounts,
+            courseArtifactCounts,
+            itemLinkedNoteIds,
+            itemArtifactCounts);
+    }
+
+    private static UniversityCourseDto ToCourseDto(UniversityCourse c) => ToCourseDto(c, null);
+
+    private static UniversityCourseDto ToCourseDto(UniversityCourse c, UniversityLinkCounts? counts)
     {
         var orderedActivities = c.Activities
             .OrderBy(a => a.SortOrder)
             .ThenBy(a => a.CreatedAt)
-            .Select(ToActivityDto)
+            .Select(a => ToActivityDto(a, counts))
             .ToList();
 
         return new UniversityCourseDto(
@@ -1227,17 +1285,24 @@ public static partial class UniversityEndpoints
             c.MetadataJson,
             orderedActivities,
             c.CreatedAt,
-            c.UpdatedAt);
+            c.UpdatedAt,
+            counts?.CourseNoteCounts.GetValueOrDefault(c.Id, 0) ?? 0,
+            counts?.CourseArtifactCounts.GetValueOrDefault(c.Id, 0) ?? 0);
     }
 
-    private static UniversityCourseActivityDto ToActivityDto(UniversityCourseActivity a)
+    private static UniversityCourseActivityDto ToActivityDto(UniversityCourseActivity a) =>
+        ToActivityDto(a, null);
+
+    private static UniversityCourseActivityDto ToActivityDto(
+        UniversityCourseActivity a,
+        UniversityLinkCounts? counts)
     {
         var orderedItems = a.Items
             .OrderBy(i => i.CalendarEvent is null ? 1 : 0)
             .ThenBy(i => i.CalendarEvent?.StartAt ?? DateTimeOffset.MaxValue)
             .ThenBy(i => i.SequenceNumber ?? int.MaxValue)
             .ThenBy(i => i.CreatedAt)
-            .Select(ToItemDto)
+            .Select(i => ToItemDto(i, counts))
             .ToList();
 
         return new UniversityCourseActivityDto(
@@ -1258,21 +1323,36 @@ public static partial class UniversityEndpoints
             a.UpdatedAt);
     }
 
-    private static UniversityActivityItemDto ToItemDto(UniversityActivityItem i) => new(
-        i.Id,
-        i.ActivityId,
-        i.CourseId,
-        i.CalendarEventId,
-        i.Title,
-        i.Theme,
-        i.Notes,
-        i.SequenceNumber,
-        i.AttendanceStatus,
-        i.CalendarEvent?.StartAt.ToUniversalTime(),
-        i.CalendarEvent?.EndAt.ToUniversalTime(),
-        i.CalendarEvent?.IsAllDay ?? false,
-        i.CalendarEvent?.Location,
-        i.MetadataJson,
-        i.CreatedAt,
-        i.UpdatedAt);
+    private static UniversityActivityItemDto ToItemDto(UniversityActivityItem i) => ToItemDto(i, null);
+
+    private static UniversityActivityItemDto ToItemDto(
+        UniversityActivityItem i,
+        UniversityLinkCounts? counts)
+    {
+        Guid? linkedNoteId = null;
+        if (counts is not null && counts.ItemLinkedNoteIds.TryGetValue(i.Id, out var noteId))
+        {
+            linkedNoteId = noteId;
+        }
+
+        return new UniversityActivityItemDto(
+            i.Id,
+            i.ActivityId,
+            i.CourseId,
+            i.CalendarEventId,
+            i.Title,
+            i.Theme,
+            i.Notes,
+            i.SequenceNumber,
+            i.AttendanceStatus,
+            i.CalendarEvent?.StartAt.ToUniversalTime(),
+            i.CalendarEvent?.EndAt.ToUniversalTime(),
+            i.CalendarEvent?.IsAllDay ?? false,
+            i.CalendarEvent?.Location,
+            i.MetadataJson,
+            i.CreatedAt,
+            i.UpdatedAt,
+            linkedNoteId,
+            counts?.ItemArtifactCounts.GetValueOrDefault(i.Id, 0) ?? 0);
+    }
 }

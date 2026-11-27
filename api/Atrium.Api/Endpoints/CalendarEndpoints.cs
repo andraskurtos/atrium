@@ -571,7 +571,9 @@ public static partial class CalendarEndpoints
                 }
             }
 
-            var ordered = results
+            var enriched = await EnrichCalendarEventLinksAsync(db, userId, results, ct);
+
+            var ordered = enriched
                 .OrderBy(e => e.StartAt)
                 .ThenBy(e => e.EndAt)
                 .ThenBy(e => e.Title, StringComparer.Ordinal)
@@ -1517,6 +1519,76 @@ public static partial class CalendarEndpoints
             occurrenceStartAt,
             isRecurring,
             isException);
+    }
+
+    private static async Task<List<CalendarEventDto>> EnrichCalendarEventLinksAsync(
+        AppDbContext db,
+        Guid userId,
+        List<CalendarEventDto> events,
+        CancellationToken ct)
+    {
+        if (events.Count == 0)
+        {
+            return events;
+        }
+
+        var rawEventIds = events
+            .SelectMany(e => e.SeriesMasterId.HasValue ? new[] { e.Id, e.SeriesMasterId.Value } : new[] { e.Id })
+            .Distinct()
+            .ToList();
+
+        var uniItemByEventId = await db.UniversityActivityItems
+            .AsNoTracking()
+            .Where(i => i.UserId == userId && i.CalendarEventId != null && rawEventIds.Contains(i.CalendarEventId.Value))
+            .Select(i => new { EventId = i.CalendarEventId!.Value, ItemId = i.Id })
+            .ToDictionaryAsync(x => x.EventId, x => x.ItemId, ct);
+
+        var eventNotes = await db.Notes
+            .AsNoTracking()
+            .Where(n => n.UserId == userId && n.DeletedAt == null && n.CalendarEventId != null && rawEventIds.Contains(n.CalendarEventId.Value))
+            .Select(n => new { EventId = n.CalendarEventId!.Value, n.CalendarOccurrenceStartAt })
+            .ToListAsync(ct);
+
+        var noteKeys = new HashSet<(Guid, DateTimeOffset?)>(
+            eventNotes.Select(n => (n.EventId, n.CalendarOccurrenceStartAt?.ToUniversalTime())));
+
+        var eventArtifacts = await db.Attachments
+            .AsNoTracking()
+            .Where(a => a.UserId == userId
+                && a.DeletedAt == null
+                && a.Kind == Atrium.Api.Attachments.AttachmentKinds.Artifact
+                && a.CalendarEventId != null
+                && rawEventIds.Contains(a.CalendarEventId.Value))
+            .Select(a => new { EventId = a.CalendarEventId!.Value, a.CalendarOccurrenceStartAt })
+            .ToListAsync(ct);
+
+        var artifactCounts = eventArtifacts
+            .GroupBy(a => (a.EventId, a.CalendarOccurrenceStartAt?.ToUniversalTime()))
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        var output = new List<CalendarEventDto>(events.Count);
+        foreach (var dto in events)
+        {
+            Guid? uniItemId = uniItemByEventId.TryGetValue(dto.Id, out var matchedItemId)
+                ? matchedItemId
+                : null;
+
+            var masterId = dto.SeriesMasterId ?? dto.Id;
+            var occStart = dto.IsRecurring ? (dto.OccurrenceStartAt ?? dto.StartAt).ToUniversalTime() : (DateTimeOffset?)null;
+            var hasNote = noteKeys.Contains((masterId, occStart))
+                || (dto.IsRecurring && noteKeys.Contains((masterId, null)));
+            var artCount = artifactCounts.GetValueOrDefault((masterId, occStart), 0)
+                + (dto.IsRecurring ? artifactCounts.GetValueOrDefault((masterId, null), 0) : 0);
+
+            output.Add(dto with
+            {
+                UniversityActivityItemId = uniItemId,
+                HasNote = hasNote,
+                ArtifactCount = artCount,
+            });
+        }
+
+        return output;
     }
 
     private static CalendarEventDto ToExpandedOccurrenceDto(

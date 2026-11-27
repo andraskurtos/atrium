@@ -52,6 +52,22 @@ export interface NoteTagCount {
   count: number;
 }
 
+export type NoteLinkKind =
+  | 'general'
+  | 'university_course'
+  | 'university_item'
+  | 'calendar_event';
+
+export interface AttachmentSummary {
+  id: string;
+  kind: 'artifact' | 'inline_image';
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  url: string;
+  createdAt: string;
+}
+
 export interface NoteSummary {
   id: string;
   folderId: string | null;
@@ -63,6 +79,12 @@ export interface NoteSummary {
   version: number;
   createdAt: string;
   updatedAt: string;
+  universityCourseId?: string | null;
+  universityActivityItemId?: string | null;
+  calendarEventId?: string | null;
+  calendarOccurrenceStartAt?: string | null;
+  linkKind?: NoteLinkKind;
+  linkLabel?: string | null;
 }
 
 export interface NoteDetail {
@@ -77,13 +99,78 @@ export interface NoteDetail {
   effectiveAllowAgentRead: boolean;
   createdAt: string;
   updatedAt: string;
+  universityCourseId?: string | null;
+  universityActivityItemId?: string | null;
+  calendarEventId?: string | null;
+  calendarOccurrenceStartAt?: string | null;
+  linkKind?: NoteLinkKind;
+  linkLabel?: string | null;
+}
+
+export interface UniversityItemNotesTree {
+  id: string;
+  title: string;
+  sequenceNumber: number | null;
+  note: NoteSummary | null;
+  artifacts: AttachmentSummary[];
+}
+
+export interface UniversityActivityNotesTree {
+  id: string;
+  activityType: UniversityActivityType;
+  title: string;
+  items: UniversityItemNotesTree[];
+}
+
+export interface UniversityCourseNotesTree {
+  id: string;
+  name: string;
+  code: string | null;
+  color: string;
+  semester: string;
+  notes: NoteSummary[];
+  artifacts: AttachmentSummary[];
+  activities: UniversityActivityNotesTree[];
+}
+
+export interface UniversitySemesterNotesTree {
+  semester: string;
+  courses: UniversityCourseNotesTree[];
+}
+
+export interface EventOccurrenceNotes {
+  occurrenceStartAt: string;
+  note: NoteSummary | null;
+  artifacts: AttachmentSummary[];
+}
+
+export interface EventNotesGroup {
+  calendarEventId: string;
+  title: string;
+  startAt: string;
+  isRecurring: boolean;
+  sharedNote: NoteSummary | null;
+  sharedArtifacts: AttachmentSummary[];
+  occurrences: EventOccurrenceNotes[];
 }
 
 export interface NotesTreeResponse {
   folders: NoteFolder[];
   notes: NoteSummary[];
   tags: NoteTagCount[];
+  university: UniversitySemesterNotesTree[];
+  events: EventNotesGroup[];
 }
+
+export type PendingNoteTarget =
+  | { kind: 'note_id'; noteId: string }
+  | { kind: 'university_item'; universityActivityItemId: string }
+  | {
+      kind: 'calendar_event';
+      calendarEventId: string;
+      occurrenceStartAt?: string | null;
+    }
+  | { kind: 'new_course_note'; universityCourseId: string };
 
 export type UniversityActivityType =
   | 'lecture'
@@ -149,6 +236,8 @@ export interface UniversityActivityItem {
   metadataJson: string | null;
   createdAt: string;
   updatedAt: string;
+  linkedNoteId?: string | null;
+  artifactCount?: number;
 }
 
 export interface UniversityCourseActivity {
@@ -183,6 +272,8 @@ export interface UniversityCourse {
   activities: UniversityCourseActivity[];
   createdAt: string;
   updatedAt: string;
+  noteCount?: number;
+  artifactCount?: number;
 }
 
 export interface UniversityWorkspace {
@@ -305,6 +396,9 @@ export interface CalendarEvent {
   occurrenceStartAt: string | null;
   isRecurring: boolean;
   isRecurrenceException: boolean;
+  universityActivityItemId?: string | null;
+  hasNote?: boolean;
+  artifactCount?: number;
 }
 
 export interface IcsImportSummary {

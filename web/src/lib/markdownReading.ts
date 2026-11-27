@@ -2,10 +2,15 @@ import {
   Children,
   createElement,
   isValidElement,
+  useEffect,
   useState,
   type ReactNode,
 } from 'react';
 import type { Components, ExtraProps } from 'react-markdown';
+import {
+  isInternalAttachmentUrl,
+  resolveAttachmentImageUrl,
+} from './attachmentsClient.ts';
 import {
   CALLOUT_GLYPHS,
   formatCalloutDefaultTitle,
@@ -39,8 +44,37 @@ export function SafeReadingImage({
   alt?: string;
   standalone?: boolean;
 }) {
-  const [failed, setFailed] = useState(false);
   const safeSrc = src ? sanitizeMarkdownUrl(src, 'image') : null;
+  const isInternal = safeSrc ? isInternalAttachmentUrl(safeSrc) : false;
+  const [resolvedSrc, setResolvedSrc] = useState<string | null>(
+    isInternal ? null : safeSrc,
+  );
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+    if (!safeSrc) {
+      setResolvedSrc(null);
+      return;
+    }
+    if (!isInternal) {
+      setResolvedSrc(safeSrc);
+      return;
+    }
+
+    let cancelled = false;
+    void resolveAttachmentImageUrl(safeSrc).then((blobUrl) => {
+      if (cancelled) return;
+      if (!blobUrl) {
+        setFailed(true);
+      } else {
+        setResolvedSrc(blobUrl);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isInternal, safeSrc]);
 
   if (!safeSrc || failed) {
     const fallbackMessage = !safeSrc
@@ -60,9 +94,17 @@ export function SafeReadingImage({
       : badge;
   }
 
+  if (!resolvedSrc) {
+    return createElement(
+      'span',
+      { className: 'meta-text' },
+      'Loading image…',
+    );
+  }
+
   const imgEl = createElement('img', {
     className: standalone ? 'cm-md-image' : 'cm-md-image cm-md-image-inline',
-    src: safeSrc,
+    src: resolvedSrc,
     alt: alt ?? '',
     loading: 'lazy',
     decoding: 'async',

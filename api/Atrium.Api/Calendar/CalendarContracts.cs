@@ -49,7 +49,10 @@ public sealed record CalendarEventDto(
     Guid? SeriesMasterId = null,
     DateTimeOffset? OccurrenceStartAt = null,
     bool IsRecurring = false,
-    bool IsRecurrenceException = false);
+    bool IsRecurrenceException = false,
+    Guid? UniversityActivityItemId = null,
+    bool HasNote = false,
+    int ArtifactCount = 0);
 
 public sealed record CreateEventRequest(
     Guid? CalendarId,

@@ -114,6 +114,7 @@ import type {
   HouseholdMember,
   InviteItem,
   MobileTab,
+  PendingNoteTarget,
   RecurrenceScope,
   SessionItem,
   UniversityAttendanceStatus,
@@ -225,6 +226,7 @@ export function App() {
   const [universityCourses, setUniversityCourses] = useState<UniversityCourse[]>([]);
   const [universityLoading, setUniversityLoading] = useState(false);
   const [focusedUniversityCourseId, setFocusedUniversityCourseId] = useState<string | null>(null);
+  const [pendingNoteTarget, setPendingNoteTarget] = useState<PendingNoteTarget | null>(null);
 
   const [mobileTab, setMobileTab] = useState<MobileTab>('stream');
   const [isCommandOpen, setIsCommandOpen] = useState(false);
@@ -1396,6 +1398,11 @@ export function App() {
             onGenerateSeries={handleGenerateUniversitySeries}
             onToggleCalendarVisibility={handleToggleCalendarVisibility}
             onExportIcs={handleExportIcs}
+            onOpenLinkedNote={(target) => {
+              setPendingNoteTarget(target);
+              navigateTo('notes');
+            }}
+            onAnnounce={announce}
           />
 
           <MobileTabBar
@@ -1421,6 +1428,12 @@ export function App() {
             <NotesPage
               key={profile.id}
               userId={profile.id}
+              initialTarget={pendingNoteTarget}
+              onConsumeInitialTarget={() => setPendingNoteTarget(null)}
+              onJumpToUniversityCourse={(courseId) => {
+                setFocusedUniversityCourseId(courseId);
+                navigateTo('university');
+              }}
               onAnnounce={announce}
             />
           </Suspense>
@@ -1558,6 +1571,10 @@ export function App() {
                   onImportIcs={handleImportIcs}
                   onExportIcs={handleExportIcs}
                   onToggleExpanded={setIsCalendarExpanded}
+                  onOpenLinkedNote={(target) => {
+                    setPendingNoteTarget(target);
+                    navigateTo('notes');
+                  }}
                 />
               </div>
 

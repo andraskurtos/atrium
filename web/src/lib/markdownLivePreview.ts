@@ -16,6 +16,10 @@ import {
   type DecorationSet,
 } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
+import {
+  isInternalAttachmentUrl,
+  resolveAttachmentImageUrl,
+} from './attachmentsClient.ts';
 import { findFrontmatterRange } from './frontmatter.ts';
 import {
   CALLOUT_GLYPHS,
@@ -113,13 +117,12 @@ class ImageWidget extends WidgetType {
 
     const img = document.createElement('img');
     img.className = 'cm-md-image';
-    img.src = this.safeUrl;
     img.alt = this.alt;
     img.loading = 'lazy';
     img.decoding = 'async';
     img.referrerPolicy = 'no-referrer';
 
-    img.addEventListener('error', () => {
+    const showFallback = () => {
       figure.innerHTML = '';
       const fallback = document.createElement('div');
       fallback.className = 'cm-md-image-fallback';
@@ -127,7 +130,21 @@ class ImageWidget extends WidgetType {
         ? `Image failed to load: ${this.alt}`
         : `Image failed to load (${this.rawUrl})`;
       figure.appendChild(fallback);
-    });
+    };
+
+    img.addEventListener('error', showFallback);
+
+    if (isInternalAttachmentUrl(this.safeUrl)) {
+      void resolveAttachmentImageUrl(this.safeUrl).then((blobUrl) => {
+        if (!blobUrl) {
+          showFallback();
+          return;
+        }
+        img.src = blobUrl;
+      });
+    } else {
+      img.src = this.safeUrl;
+    }
 
     figure.appendChild(img);
 

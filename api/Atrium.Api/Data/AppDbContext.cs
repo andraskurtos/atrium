@@ -20,6 +20,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<NoteFolder> NoteFolders => Set<NoteFolder>();
     public DbSet<Note> Notes => Set<Note>();
     public DbSet<NoteTag> NoteTags => Set<NoteTag>();
+    public DbSet<Attachment> Attachments => Set<Attachment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -414,6 +415,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(n => n.Id).HasColumnName("id");
             entity.Property(n => n.UserId).HasColumnName("user_id");
             entity.Property(n => n.FolderId).HasColumnName("folder_id");
+            entity.Property(n => n.UniversityCourseId).HasColumnName("university_course_id");
+            entity.Property(n => n.UniversityActivityItemId).HasColumnName("university_activity_item_id");
+            entity.Property(n => n.CalendarEventId).HasColumnName("calendar_event_id");
+            entity.Property(n => n.CalendarOccurrenceStartAt).HasColumnName("calendar_occurrence_start_at");
             entity.Property(n => n.Title).HasColumnName("title").HasMaxLength(200).IsRequired();
             entity.Property(n => n.Content).HasColumnName("content").IsRequired();
             entity.Property(n => n.ContentHash).HasColumnName("content_hash").HasMaxLength(64).IsRequired();
@@ -428,6 +433,22 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .HasDatabaseName("ix_notes_user_folder_deleted");
             entity.HasIndex(n => new { n.UserId, n.UpdatedAt })
                 .HasDatabaseName("ix_notes_user_updated");
+            entity.HasIndex(n => new { n.UserId, n.UniversityCourseId, n.DeletedAt })
+                .HasDatabaseName("ix_notes_user_uni_course");
+            entity.HasIndex(n => new { n.UserId, n.CalendarEventId, n.DeletedAt })
+                .HasDatabaseName("ix_notes_user_calendar_event");
+            entity.HasIndex(n => n.UniversityActivityItemId)
+                .IsUnique()
+                .HasDatabaseName("ix_notes_uni_item_unique")
+                .HasFilter("\"university_activity_item_id\" IS NOT NULL AND \"deleted_at\" IS NULL");
+            entity.HasIndex(n => new { n.CalendarEventId, n.CalendarOccurrenceStartAt })
+                .IsUnique()
+                .HasDatabaseName("ix_notes_event_occurrence_unique")
+                .HasFilter("\"calendar_event_id\" IS NOT NULL AND \"calendar_occurrence_start_at\" IS NOT NULL AND \"deleted_at\" IS NULL");
+            entity.HasIndex(n => n.CalendarEventId)
+                .IsUnique()
+                .HasDatabaseName("ix_notes_event_shared_unique")
+                .HasFilter("\"calendar_event_id\" IS NOT NULL AND \"calendar_occurrence_start_at\" IS NULL AND \"deleted_at\" IS NULL");
 
             entity.HasOne(n => n.User)
                 .WithMany()
@@ -438,6 +459,77 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .WithMany(f => f.Notes)
                 .HasForeignKey(n => n.FolderId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(n => n.UniversityCourse)
+                .WithMany()
+                .HasForeignKey(n => n.UniversityCourseId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(n => n.UniversityActivityItem)
+                .WithMany()
+                .HasForeignKey(n => n.UniversityActivityItemId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(n => n.CalendarEvent)
+                .WithMany()
+                .HasForeignKey(n => n.CalendarEventId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<Attachment>(entity =>
+        {
+            entity.ToTable("attachments");
+            entity.HasKey(a => a.Id);
+            entity.Property(a => a.Id).HasColumnName("id");
+            entity.Property(a => a.UserId).HasColumnName("user_id");
+            entity.Property(a => a.Kind).HasColumnName("kind").HasMaxLength(24).IsRequired();
+            entity.Property(a => a.FileName).HasColumnName("file_name").HasMaxLength(255).IsRequired();
+            entity.Property(a => a.ContentType).HasColumnName("content_type").HasMaxLength(127).IsRequired();
+            entity.Property(a => a.SizeBytes).HasColumnName("size_bytes");
+            entity.Property(a => a.Sha256).HasColumnName("sha256").HasMaxLength(64).IsRequired();
+            entity.Property(a => a.StorageKey).HasColumnName("storage_key").HasMaxLength(255).IsRequired();
+            entity.Property(a => a.NoteId).HasColumnName("note_id");
+            entity.Property(a => a.UniversityCourseId).HasColumnName("university_course_id");
+            entity.Property(a => a.UniversityActivityItemId).HasColumnName("university_activity_item_id");
+            entity.Property(a => a.CalendarEventId).HasColumnName("calendar_event_id");
+            entity.Property(a => a.CalendarOccurrenceStartAt).HasColumnName("calendar_occurrence_start_at");
+            entity.Property(a => a.AllowAgentRead).HasColumnName("allow_agent_read").HasDefaultValue(true);
+            entity.Property(a => a.CreatedAt).HasColumnName("created_at");
+            entity.Property(a => a.DeletedAt).HasColumnName("deleted_at");
+
+            entity.HasIndex(a => new { a.UserId, a.NoteId, a.DeletedAt })
+                .HasDatabaseName("ix_attachments_user_note");
+            entity.HasIndex(a => new { a.UserId, a.UniversityCourseId, a.DeletedAt })
+                .HasDatabaseName("ix_attachments_user_uni_course");
+            entity.HasIndex(a => new { a.UserId, a.UniversityActivityItemId, a.DeletedAt })
+                .HasDatabaseName("ix_attachments_user_uni_item");
+            entity.HasIndex(a => new { a.UserId, a.CalendarEventId, a.DeletedAt })
+                .HasDatabaseName("ix_attachments_user_calendar_event");
+
+            entity.HasOne(a => a.User)
+                .WithMany()
+                .HasForeignKey(a => a.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(a => a.Note)
+                .WithMany()
+                .HasForeignKey(a => a.NoteId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(a => a.UniversityCourse)
+                .WithMany()
+                .HasForeignKey(a => a.UniversityCourseId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(a => a.UniversityActivityItem)
+                .WithMany()
+                .HasForeignKey(a => a.UniversityActivityItemId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(a => a.CalendarEvent)
+                .WithMany()
+                .HasForeignKey(a => a.CalendarEventId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<NoteTag>(entity =>
@@ -475,6 +567,22 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                         v => v.UtcTicks,
                         ticks => new DateTimeOffset(ticks, TimeSpan.Zero));
                 entity.Property(e => e.RecurrenceOriginalStartAt)
+                    .HasConversion(
+                        v => v.HasValue ? v.Value.UtcTicks : (long?)null,
+                        ticks => ticks.HasValue ? new DateTimeOffset(ticks.Value, TimeSpan.Zero) : (DateTimeOffset?)null);
+            });
+
+            modelBuilder.Entity<Note>(entity =>
+            {
+                entity.Property(n => n.CalendarOccurrenceStartAt)
+                    .HasConversion(
+                        v => v.HasValue ? v.Value.UtcTicks : (long?)null,
+                        ticks => ticks.HasValue ? new DateTimeOffset(ticks.Value, TimeSpan.Zero) : (DateTimeOffset?)null);
+            });
+
+            modelBuilder.Entity<Attachment>(entity =>
+            {
+                entity.Property(a => a.CalendarOccurrenceStartAt)
                     .HasConversion(
                         v => v.HasValue ? v.Value.UtcTicks : (long?)null,
                         ticks => ticks.HasValue ? new DateTimeOffset(ticks.Value, TimeSpan.Zero) : (DateTimeOffset?)null);

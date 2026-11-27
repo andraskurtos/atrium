@@ -1,6 +1,6 @@
 import { useState, type KeyboardEvent } from 'react';
 import { normalizeTag } from '../lib/frontmatter';
-import type { NoteFolder } from '../types/atrium';
+import type { NoteFolder, NoteLinkKind } from '../types/atrium';
 import { CloseIcon, EyeIcon, EyeOffIcon } from './Icons';
 
 interface NotePropertiesBarProps {
@@ -8,6 +8,9 @@ interface NotePropertiesBarProps {
   tags: string[];
   folderId: string | null;
   folders: NoteFolder[];
+  linkKind?: NoteLinkKind;
+  linkLabel?: string | null;
+  universityCourseId?: string | null;
   allowAgentRead: boolean;
   effectiveAllowAgentRead: boolean;
   readOnly: boolean;
@@ -16,6 +19,7 @@ interface NotePropertiesBarProps {
   onRemoveTag: (tag: string) => void;
   onFolderChange: (nextFolderId: string | null) => void;
   onToggleAgentRead: () => void;
+  onJumpToUniversityCourse?: (courseId: string) => void;
 }
 
 export function NotePropertiesBar({
@@ -23,6 +27,9 @@ export function NotePropertiesBar({
   tags,
   folderId,
   folders,
+  linkKind = 'general',
+  linkLabel = null,
+  universityCourseId = null,
   allowAgentRead,
   effectiveAllowAgentRead,
   readOnly,
@@ -31,6 +38,7 @@ export function NotePropertiesBar({
   onRemoveTag,
   onFolderChange,
   onToggleAgentRead,
+  onJumpToUniversityCourse,
 }: NotePropertiesBarProps) {
   const [tagDraft, setTagDraft] = useState('');
 
@@ -56,6 +64,24 @@ export function NotePropertiesBar({
 
   return (
     <div className="notes-properties-bar">
+      {linkKind !== 'general' && linkLabel && (
+        <div className="notes-link-breadcrumb">
+          <span className="notes-link-badge">
+            {linkKind === 'calendar_event' ? 'Event' : 'University'}
+          </span>
+          <span className="meta-text notes-link-path">{linkLabel}</span>
+          {universityCourseId && onJumpToUniversityCourse && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              onClick={() => onJumpToUniversityCourse(universityCourseId)}
+            >
+              Open course →
+            </button>
+          )}
+        </div>
+      )}
+
       {readOnly ? (
         <h1 className="notes-title-heading">{title}</h1>
       ) : (
@@ -104,7 +130,7 @@ export function NotePropertiesBar({
         </div>
 
         <div className="notes-properties-controls">
-          {!readOnly && (
+          {!readOnly && linkKind === 'general' && (
             <select
               className="input notes-folder-select"
               aria-label="Note folder"

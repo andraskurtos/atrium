@@ -265,24 +265,74 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.ToTable("daily_notes", (string?)null);
         });
 
+        modelBuilder.Entity("Atrium.Api.Data.Entities.Attachment", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<bool>("AllowAgentRead").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(true).HasColumnName("allow_agent_read");
+            b.Property<Guid?>("CalendarEventId").HasColumnType("uuid").HasColumnName("calendar_event_id");
+            b.Property<DateTimeOffset?>("CalendarOccurrenceStartAt").HasColumnType("timestamp with time zone").HasColumnName("calendar_occurrence_start_at");
+            b.Property<string>("ContentType").IsRequired().HasMaxLength(127).HasColumnType("character varying(127)").HasColumnName("content_type");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<DateTimeOffset?>("DeletedAt").HasColumnType("timestamp with time zone").HasColumnName("deleted_at");
+            b.Property<string>("FileName").IsRequired().HasMaxLength(255).HasColumnType("character varying(255)").HasColumnName("file_name");
+            b.Property<string>("Kind").IsRequired().HasMaxLength(24).HasColumnType("character varying(24)").HasColumnName("kind");
+            b.Property<Guid?>("NoteId").HasColumnType("uuid").HasColumnName("note_id");
+            b.Property<string>("Sha256").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)").HasColumnName("sha256");
+            b.Property<long>("SizeBytes").HasColumnType("bigint").HasColumnName("size_bytes");
+            b.Property<string>("StorageKey").IsRequired().HasMaxLength(255).HasColumnType("character varying(255)").HasColumnName("storage_key");
+            b.Property<Guid?>("UniversityActivityItemId").HasColumnType("uuid").HasColumnName("university_activity_item_id");
+            b.Property<Guid?>("UniversityCourseId").HasColumnType("uuid").HasColumnName("university_course_id");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("CalendarEventId");
+            b.HasIndex("NoteId");
+            b.HasIndex("UniversityActivityItemId");
+            b.HasIndex("UniversityCourseId");
+            b.HasIndex("UserId", "CalendarEventId", "DeletedAt").HasDatabaseName("ix_attachments_user_calendar_event");
+            b.HasIndex("UserId", "NoteId", "DeletedAt").HasDatabaseName("ix_attachments_user_note");
+            b.HasIndex("UserId", "UniversityActivityItemId", "DeletedAt").HasDatabaseName("ix_attachments_user_uni_item");
+            b.HasIndex("UserId", "UniversityCourseId", "DeletedAt").HasDatabaseName("ix_attachments_user_uni_course");
+            b.ToTable("attachments", (string?)null);
+        });
+
         modelBuilder.Entity("Atrium.Api.Data.Entities.Note", b =>
         {
             b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
             b.Property<bool>("AllowAgentRead").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(true).HasColumnName("allow_agent_read");
+            b.Property<Guid?>("CalendarEventId").HasColumnType("uuid").HasColumnName("calendar_event_id");
+            b.Property<DateTimeOffset?>("CalendarOccurrenceStartAt").HasColumnType("timestamp with time zone").HasColumnName("calendar_occurrence_start_at");
             b.Property<string>("Content").IsRequired().HasColumnType("text").HasColumnName("content");
             b.Property<string>("ContentHash").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)").HasColumnName("content_hash");
             b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
             b.Property<DateTimeOffset?>("DeletedAt").HasColumnType("timestamp with time zone").HasColumnName("deleted_at");
             b.Property<Guid?>("FolderId").HasColumnType("uuid").HasColumnName("folder_id");
             b.Property<string>("Title").IsRequired().HasMaxLength(200).HasColumnType("character varying(200)").HasColumnName("title");
+            b.Property<Guid?>("UniversityActivityItemId").HasColumnType("uuid").HasColumnName("university_activity_item_id");
+            b.Property<Guid?>("UniversityCourseId").HasColumnType("uuid").HasColumnName("university_course_id");
             b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone").HasColumnName("updated_at");
             b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
             b.Property<int>("Version").IsConcurrencyToken().ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(1).HasColumnName("version");
 
             b.HasKey("Id");
+            b.HasIndex("CalendarEventId")
+                .IsUnique()
+                .HasDatabaseName("ix_notes_event_shared_unique")
+                .HasFilter("\"calendar_event_id\" IS NOT NULL AND \"calendar_occurrence_start_at\" IS NULL AND \"deleted_at\" IS NULL");
             b.HasIndex("FolderId");
+            b.HasIndex("UniversityActivityItemId")
+                .IsUnique()
+                .HasDatabaseName("ix_notes_uni_item_unique")
+                .HasFilter("\"university_activity_item_id\" IS NOT NULL AND \"deleted_at\" IS NULL");
+            b.HasIndex("UniversityCourseId");
+            b.HasIndex("CalendarEventId", "CalendarOccurrenceStartAt")
+                .IsUnique()
+                .HasDatabaseName("ix_notes_event_occurrence_unique")
+                .HasFilter("\"calendar_event_id\" IS NOT NULL AND \"calendar_occurrence_start_at\" IS NOT NULL AND \"deleted_at\" IS NULL");
             b.HasIndex("UserId", "UpdatedAt").HasDatabaseName("ix_notes_user_updated");
+            b.HasIndex("UserId", "CalendarEventId", "DeletedAt").HasDatabaseName("ix_notes_user_calendar_event");
             b.HasIndex("UserId", "FolderId", "DeletedAt").HasDatabaseName("ix_notes_user_folder_deleted");
+            b.HasIndex("UserId", "UniversityCourseId", "DeletedAt").HasDatabaseName("ix_notes_user_uni_course");
             b.ToTable("notes", (string?)null);
         });
 
@@ -366,18 +416,63 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.Navigation("User");
         });
 
+        modelBuilder.Entity("Atrium.Api.Data.Entities.Attachment", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.CalendarEvent", "CalendarEvent")
+                .WithMany()
+                .HasForeignKey("CalendarEventId")
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasOne("Atrium.Api.Data.Entities.Note", "Note")
+                .WithMany()
+                .HasForeignKey("NoteId")
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasOne("Atrium.Api.Data.Entities.UniversityActivityItem", "UniversityActivityItem")
+                .WithMany()
+                .HasForeignKey("UniversityActivityItemId")
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasOne("Atrium.Api.Data.Entities.UniversityCourse", "UniversityCourse")
+                .WithMany()
+                .HasForeignKey("UniversityCourseId")
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("CalendarEvent");
+            b.Navigation("Note");
+            b.Navigation("UniversityActivityItem");
+            b.Navigation("UniversityCourse");
+            b.Navigation("User");
+        });
+
         modelBuilder.Entity("Atrium.Api.Data.Entities.Note", b =>
         {
+            b.HasOne("Atrium.Api.Data.Entities.CalendarEvent", "CalendarEvent")
+                .WithMany()
+                .HasForeignKey("CalendarEventId")
+                .OnDelete(DeleteBehavior.SetNull);
             b.HasOne("Atrium.Api.Data.Entities.NoteFolder", "Folder")
                 .WithMany("Notes")
                 .HasForeignKey("FolderId")
+                .OnDelete(DeleteBehavior.SetNull);
+            b.HasOne("Atrium.Api.Data.Entities.UniversityActivityItem", "UniversityActivityItem")
+                .WithMany()
+                .HasForeignKey("UniversityActivityItemId")
+                .OnDelete(DeleteBehavior.SetNull);
+            b.HasOne("Atrium.Api.Data.Entities.UniversityCourse", "UniversityCourse")
+                .WithMany()
+                .HasForeignKey("UniversityCourseId")
                 .OnDelete(DeleteBehavior.SetNull);
             b.HasOne("Atrium.Api.Data.Entities.User", "User")
                 .WithMany()
                 .HasForeignKey("UserId")
                 .OnDelete(DeleteBehavior.Cascade)
                 .IsRequired();
+            b.Navigation("CalendarEvent");
             b.Navigation("Folder");
+            b.Navigation("UniversityActivityItem");
+            b.Navigation("UniversityCourse");
             b.Navigation("User");
         });
 
