@@ -1,28 +1,82 @@
 import { EditorSelection, type Extension } from '@codemirror/state';
 import { keymap, type Command } from '@codemirror/view';
 
+function countStarRun(
+  text: string,
+  pos: number,
+  dir: 'forward' | 'backward',
+): number {
+  let count = 0;
+  if (dir === 'backward') {
+    for (let i = pos - 1; i >= 0 && text[i] === '*'; i -= 1) {
+      count += 1;
+    }
+  } else {
+    for (let i = pos; i < text.length && text[i] === '*'; i += 1) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function hasStandaloneItalicMarkers(
   text: string,
   pos: number,
   side: 'before' | 'after',
 ): boolean {
-  // Count consecutive '*' immediately adjacent to pos
-  let count = 0;
-  if (side === 'before') {
-    let i = pos - 1;
-    while (i >= 0 && text[i] === '*') {
-      count += 1;
-      i -= 1;
-    }
-  } else {
-    let i = pos;
-    while (i < text.length && text[i] === '*') {
-      count += 1;
-      i += 1;
-    }
-  }
   // Odd number of '*' (1 or 3) indicates italic is present; 2 means bold only
+  const count = countStarRun(
+    text,
+    pos,
+    side === 'before' ? 'backward' : 'forward',
+  );
   return count % 2 === 1;
+}
+
+function hasInternalClosingMarker(interior: string, marker: string): boolean {
+  if (marker === '**') {
+    return interior.includes('**');
+  }
+  if (marker === '*') {
+    for (let i = 0; i < interior.length; ) {
+      if (interior[i] === '*') {
+        const run = countStarRun(interior, i, 'forward');
+        if (run % 2 === 1) return true;
+        i += run;
+      } else {
+        i += 1;
+      }
+    }
+    return false;
+  }
+  return interior.includes(marker);
+}
+
+function isSingleWrappedSelection(selected: string, marker: string): boolean {
+  const mLen = marker.length;
+  if (
+    selected.length < mLen * 2 ||
+    !selected.startsWith(marker) ||
+    !selected.endsWith(marker)
+  ) {
+    return false;
+  }
+
+  if (marker === '*') {
+    const openRun = countStarRun(selected, 0, 'forward');
+    if (openRun === selected.length) {
+      return selected.length === 2;
+    }
+    const closeRun = countStarRun(selected, selected.length, 'backward');
+    if (openRun % 2 !== 1 || closeRun % 2 !== 1) {
+      return false;
+    }
+    const interior = selected.slice(openRun, selected.length - closeRun);
+    return !hasInternalClosingMarker(interior, '*');
+  }
+
+  const interior = selected.slice(mLen, -mLen);
+  return !hasInternalClosingMarker(interior, marker);
 }
 
 function toggleInlineWrapper(marker: string): Command {
@@ -43,12 +97,13 @@ function toggleInlineWrapper(marker: string): Command {
           ? state.sliceDoc(range.to, range.to + mLen)
           : '';
       const surroundingMatches =
-        marker === '*'
+        !hasInternalClosingMarker(selected, marker) &&
+        (marker === '*'
           ? before === '*' &&
             after === '*' &&
             hasStandaloneItalicMarkers(docText, range.from, 'before') &&
             hasStandaloneItalicMarkers(docText, range.to, 'after')
-          : before === marker && after === marker;
+          : before === marker && after === marker);
 
       if (surroundingMatches) {
         return {
@@ -60,16 +115,8 @@ function toggleInlineWrapper(marker: string): Command {
         };
       }
 
-      // Unwrap if the selection itself starts and ends with the marker
-      const selectionMatches =
-        selected.length >= mLen * 2 &&
-        selected.startsWith(marker) &&
-        selected.endsWith(marker) &&
-        (marker !== '*' ||
-          (hasStandaloneItalicMarkers(selected, 0, 'after') &&
-            hasStandaloneItalicMarkers(selected, selected.length, 'before')));
-
-      if (selectionMatches) {
+      // Unwrap if the selection itself is a single wrapped span (not two separate spans like "**foo** and **bar**")
+      if (isSingleWrappedSelection(selected, marker)) {
         const inner = selected.slice(mLen, -mLen);
         return {
           changes: { from: range.from, to: range.to, insert: inner },
@@ -102,9 +149,9 @@ export function setHeading(level: 1 | 2 | 3): Command {
     const { state } = view;
     const prefix = `${'#'.repeat(level)} `;
     const line = state.doc.lineAt(state.selection.main.head);
-    const match = line.text.match(/^(#{1,6})\s+/);
+    const match = line.text.match(/^(#{1,6})(?:\s+|$)/);
 
-    let from = line.from;
+    const from = line.from;
     let to = line.from;
     let insert = prefix;
 
@@ -113,11 +160,13 @@ export function setHeading(level: 1 | 2 | 3): Command {
       insert = match[1].length === level ? '' : prefix;
     }
 
-    const delta = insert.length - (to - from);
-    const nextCursor = Math.max(line.from, state.selection.main.head + delta);
+    const changeSpec = { from, to, insert };
+    const nextCursor = state
+      .changes(changeSpec)
+      .mapPos(state.selection.main.head, 1);
 
     view.dispatch({
-      changes: { from, to, insert },
+      changes: changeSpec,
       selection: EditorSelection.cursor(nextCursor),
     });
     view.focus();
@@ -127,45 +176,50 @@ export function setHeading(level: 1 | 2 | 3): Command {
 
 export const toggleBlockquote: Command = (view) => {
   const { state } = view;
-  const { from, to } = state.selection.main;
-  const startLine = state.doc.lineAt(from).number;
-  const endLine = state.doc.lineAt(to).number;
-
-  let allQuoted = true;
-  for (let n = startLine; n <= endLine; n += 1) {
-    if (!state.doc.line(n).text.startsWith('> ')) {
-      allQuoted = false;
-      break;
+  const trSpec = state.changeByRange((range) => {
+    const lines = [];
+    for (let pos = range.from; pos <= range.to; ) {
+      const line = state.doc.lineAt(pos);
+      if (range.empty || range.to > line.from) {
+        lines.push(line);
+      }
+      pos = line.to + 1;
     }
-  }
 
-  const changes: Array<{ from: number; to: number; insert: string }> = [];
-  let firstLineDelta = 0;
-  let totalDelta = 0;
+    const allQuoted =
+      lines.length > 0 && lines.every((line) => /^> ?/.test(line.text));
 
-  for (let n = startLine; n <= endLine; n += 1) {
-    const line = state.doc.line(n);
-    if (allQuoted) {
-      changes.push({ from: line.from, to: line.from + 2, insert: '' });
-      if (n === startLine) firstLineDelta = -2;
-      totalDelta -= 2;
-    } else if (!line.text.startsWith('> ')) {
-      changes.push({ from: line.from, to: line.from, insert: '> ' });
-      if (n === startLine) firstLineDelta = 2;
-      totalDelta += 2;
+    const changes: Array<{ from: number; to: number; insert: string }> = [];
+    for (const line of lines) {
+      const match = line.text.match(/^> ?/);
+      if (allQuoted && match) {
+        changes.push({
+          from: line.from,
+          to: line.from + match[0].length,
+          insert: '',
+        });
+      } else if (!allQuoted && !match) {
+        changes.push({ from: line.from, to: line.from, insert: '> ' });
+      }
     }
-  }
 
-  const nextFrom = Math.max(
-    state.doc.line(startLine).from,
-    from + firstLineDelta,
-  );
-  const nextTo = Math.max(nextFrom, to + totalDelta);
+    const changeSet = state.changes(changes);
+    const nextFrom = changeSet.mapPos(range.from, 1);
+    const nextTo = range.empty
+      ? nextFrom
+      : Math.max(nextFrom, changeSet.mapPos(range.to, -1));
+    const nextRange =
+      range.anchor <= range.head
+        ? EditorSelection.range(nextFrom, nextTo)
+        : EditorSelection.range(nextTo, nextFrom);
 
-  view.dispatch({
-    changes,
-    selection: EditorSelection.range(nextFrom, nextTo),
+    return {
+      changes,
+      range: nextRange,
+    };
   });
+
+  view.dispatch(trSpec);
   view.focus();
   return true;
 };
@@ -210,11 +264,12 @@ export const insertHorizontalRule: Command = (view) => {
   const line = state.doc.lineAt(pos);
   const needsLeadingNewline = line.text.trim().length > 0;
   const insert = needsLeadingNewline ? '\n\n---\n\n' : '---\n\n';
-  const insertAt = needsLeadingNewline ? line.to : line.from;
+  const insertFrom = needsLeadingNewline ? line.to : line.from;
+  const insertTo = line.to;
 
   view.dispatch({
-    changes: { from: insertAt, to: insertAt, insert },
-    selection: EditorSelection.cursor(insertAt + insert.length),
+    changes: { from: insertFrom, to: insertTo, insert },
+    selection: EditorSelection.cursor(insertFrom + insert.length),
   });
   view.focus();
   return true;
@@ -223,22 +278,64 @@ export const insertHorizontalRule: Command = (view) => {
 export const insertCallout: Command = (view) => {
   const { state } = view;
   const range = state.selection.main;
-  const selected = state.sliceDoc(range.from, range.to);
-  const body = selected
-    ? selected
-        .split('\n')
-        .map((line) => `> ${line}`)
-        .join('\n')
-    : '> ';
-
-  const line = state.doc.lineAt(range.from);
-  const needsLeadingNewline =
-    range.empty && line.text.trim().length > 0;
-  const prefix = needsLeadingNewline ? '\n\n' : '';
+  const startLine = state.doc.lineAt(range.from);
   const header = '> [!note] Note\n';
-  const insert = `${prefix}${header}${body}`;
-  const insertFrom = needsLeadingNewline ? line.to : range.from;
-  const insertTo = needsLeadingNewline ? line.to : range.to;
+
+  if (range.empty) {
+    const needsLeadingNewline = startLine.text.trim().length > 0;
+    const prefix = needsLeadingNewline ? '\n\n' : '';
+    const insertFrom = needsLeadingNewline ? startLine.to : startLine.from;
+    const insertTo = startLine.to;
+    const afterLine = state.doc.sliceString(insertTo, insertTo + 2);
+    const suffix =
+      insertTo < state.doc.length && afterLine !== '\n\n' ? '\n' : '';
+    const insert = `${prefix}${header}> ${suffix}`;
+    const titleStart = insertFrom + prefix.length + '> [!note] '.length;
+
+    view.dispatch({
+      changes: { from: insertFrom, to: insertTo, insert },
+      selection: EditorSelection.range(
+        titleStart,
+        titleStart + 'Note'.length,
+      ),
+    });
+    view.focus();
+    return true;
+  }
+
+  const rawSelected = state.sliceDoc(range.from, range.to);
+  const hasTrailingNewline = rawSelected.endsWith('\n');
+  const trimmedSelection = hasTrailingNewline
+    ? rawSelected.slice(0, -1)
+    : rawSelected;
+  const body = trimmedSelection
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n');
+
+  const textBefore = state.sliceDoc(startLine.from, range.from);
+  const hasTextBefore = textBefore.trim().length > 0;
+  const insertFrom = hasTextBefore
+    ? startLine.from + textBefore.trimEnd().length
+    : startLine.from;
+  const prefix = hasTextBefore ? '\n\n' : '';
+
+  const selectionEnd = hasTrailingNewline ? range.to - 1 : range.to;
+  const endLine = state.doc.lineAt(selectionEnd);
+  const textAfter = state.sliceDoc(selectionEnd, endLine.to);
+  const hasTextAfter = textAfter.trim().length > 0;
+  const insertTo = hasTextAfter
+    ? selectionEnd + (textAfter.length - textAfter.trimStart().length)
+    : endLine.to;
+
+  const afterInsert = state.doc.sliceString(insertTo, insertTo + 2);
+  const suffix = hasTextAfter
+    ? '\n\n'
+    : insertTo < state.doc.length && afterInsert !== '\n\n'
+      ? '\n'
+      : '';
+
+  const insert = `${prefix}${header}${body}${suffix}`;
   const titleStart = insertFrom + prefix.length + '> [!note] '.length;
 
   view.dispatch({

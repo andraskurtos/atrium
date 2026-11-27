@@ -1,7 +1,7 @@
 # Atrium Markdown Notes Editor (PR 1) Design
 
 **Date:** 2026-11-27
-**Status:** Draft (pending approval)
+**Status:** Implemented
 **Branch target:** `feature/markdown-notes-editor` (branched from `main`)
 
 ---
@@ -20,18 +20,20 @@ Atrium's long-term goal is a synced, Markdown-based personal knowledge base (Obs
 - Add a top-level **Notes** tab accessible from:
   - `TopBar` navigation pill (next to `University`)
   - `MobileTabBar` (4-tab mobile bottom bar: `Day`, `Calendar`, `University`, `Notes`)
-  - `CommandPalette` (`Open Notes Editor`)
+  - `CommandPalette` (`Open Markdown Notes Editor`)
   - URL hash `#notes` (preserving view on refresh and browser Back/Forward)
-- Fullscreen, distraction-free Markdown workspace styled to match Atrium's Atelier light and dark themes (centered readable measure around `760px` max-width on wide screens, responsive on mobile).
+- Fullscreen, distraction-free Markdown workspace styled to match Atrium's Atelier light and dark themes (centered readable measure around `780px` max-width on wide screens, responsive on mobile), lazy-loaded so the initial dashboard bundle stays lightweight.
 - Three seamlessly switchable view modes in the Notes header bar:
   1. **Live Preview** *(default)* — Obsidian-style single canvas powered by CodeMirror 6. Raw Markdown is edited directly; formatting syntax hides when the cursor/selection is outside a construct and reveals immediately when the cursor enters it.
   2. **Reading** — Pure rendered read-only Markdown view styled with matching typography, where links open directly in a new tab (`target="_blank" rel="noopener noreferrer"`).
   3. **Source** — Raw Markdown in CodeMirror 6 with syntax highlighting and visible markers.
-- Supported Markdown elements for PR 1 (100% standard CommonMark — **no underline**):
+- Supported Markdown elements for PR 1 (CommonMark + Obsidian-style callout blockquotes — **no underline**):
   - **Headings** (`#` through `######`, ATX headings)
   - **Bold** (`**text**` / `__text__`)
   - **Italics** (`*text*` / `_text_`)
+  - **Inline code** (`` `code` ``)
   - **Blockquotes** (`> quote`)
+  - **Callouts** (`> [!note]`, `> [!tip]`, `> [!warning]`, `> [!danger]`, `> [!quote]` with optional `+`/`-` fold suffix and custom formatted titles)
   - **Horizontal rules** (`---`, `***`, `___`)
   - **Links** (`[label](url)`)
   - **Images** (`![alt](url)`)
@@ -40,13 +42,13 @@ Atrium's long-term goal is a synced, Markdown-based personal knowledge base (Obs
   - `Cmd/Ctrl+I` — toggle italic (`*...*`)
   - `Cmd/Ctrl+Shift+K` — insert/wrap link (`[text](https://)`) *(keeps `Cmd/Ctrl+K` reserved globally for Atrium's Command Palette)*
   - `Cmd/Ctrl+E` — toggle between **Live Preview** and **Reading** mode (matching Obsidian)
-  - Toolbar buttons: Heading (`H1`, `H2`, `H3`), Bold, Italic, Quote, Link, Image, Horizontal Rule.
-- Temporary client-side draft persistence via `localStorage` (`atrium.notes.pr1.draft`) so refreshing doesn't lose text while testing, pre-populated on first open with a concise welcome/showcase Markdown note demonstrating all 7 supported elements, plus a subtle word/character count in the footer.
+  - Toolbar buttons: Heading (`H1`, `H2`, `H3`), Bold, Italic, Quote, Callout, Link, Image, Horizontal Rule.
+- Temporary client-side draft persistence via user-scoped `localStorage` (`atrium.notes.pr1.draft:<userId>`, cleared on sign-out and omitted until edited) so refreshing doesn't lose text while testing, pre-populated on first open with a concise welcome/showcase Markdown note, plus a subtle word/character count in the footer.
 
 ### Non-Goals (Deferred to Later PRs)
 - Backend database tables, API endpoints, server saving, or multi-note / folder / vault management.
 - Image file uploads, clipboard image pasting, or local attachment storage (URL-based images `![alt](https://...)` only in PR 1).
-- Extended Markdown constructs beyond the 7 basics (wikilinks `[[Note]]`, code blocks, tables, task lists, footnotes, LaTeX, frontmatter, callouts, underline).
+- Extended Markdown constructs beyond the PR 1 set (wikilinks `[[Note]]`, tables, task lists, footnotes, LaTeX, frontmatter, underline).
 - Agent read/write access to the knowledge base or desktop sync protocol.
 
 ### Anti-Goals
@@ -59,8 +61,8 @@ Atrium's long-term goal is a synced, Markdown-based personal knowledge base (Obs
 ## 3. Approaches Considered
 
 ### Approach 1: CodeMirror 6 + custom Live Preview extension + `react-markdown` Reading mode *(Selected)*
-- Uses `@codemirror/view`, `@codemirror/state`, `@codemirror/commands`, `@codemirror/language`, `@codemirror/lang-markdown`, `@lezer/highlight`, `@lezer/markdown` (all MIT — the exact engine Obsidian uses) and `react-markdown` (MIT) for Reading mode.
-- **Trade-offs:** True raw-Markdown source of truth with zero round-trip drift, single editor instance for Live Preview & Source modes, React 19 compatible, and directly extensible for future wikilinks/frontmatter/tables. Requires implementing a focused ~250–350 line CodeMirror 6 Live Preview decoration extension.
+- Uses `@codemirror/view`, `@codemirror/state`, `@codemirror/commands`, `@codemirror/language`, `@codemirror/lang-markdown`, `@lezer/highlight` (all MIT — the exact engine Obsidian uses) and `react-markdown` (MIT) for Reading mode.
+- **Trade-offs:** True raw-Markdown source of truth with zero round-trip drift, single editor instance for Live Preview & Source modes, React 19 compatible, and directly extensible for future wikilinks/frontmatter/tables. Requires implementing a focused CodeMirror 6 Live Preview decoration extension.
 
 ### Approach 2: Milkdown (ProseMirror-based Markdown editor, MIT)
 - **Trade-offs:** WYSIWYG feel rather than true Obsidian cursor-triggered Live Preview; requires a separate Source editor and ProseMirror-to-Markdown re-serialization on every switch, which risks reformatting raw `.md` files.
@@ -79,7 +81,6 @@ Atrium's long-term goal is a synced, Markdown-based personal knowledge base (Obs
 - `@codemirror/language`
 - `@codemirror/lang-markdown`
 - `@lezer/highlight`
-- `@lezer/markdown`
 - `react-markdown`
 
 *(Builder call: use `react-markdown` without `rehype-raw`, which renders CommonMark safely as React elements with zero raw HTML execution by default.)*
@@ -87,28 +88,30 @@ Atrium's long-term goal is a synced, Markdown-based personal knowledge base (Obs
 ### Safe URL Policy
 Both Live Preview widgets and Reading mode must validate URLs with a shared `sanitizeMarkdownUrl(rawUrl: string): string | null` helper:
 - Allow only `http:`, `https:`, and `mailto:` protocols for links, and `http:` / `https:` for images (parsed via `new URL(trimmed)`).
-- Reject `javascript:`, `data:`, `vbscript:`, or malformed URLs (render plain non-clickable text for unsafe links; show a styled fallback badge for unsafe/broken images).
+- Reject `javascript:`, `data:`, `vbscript:`, or malformed URLs (render plain non-clickable text for unsafe links; show a styled fallback badge for unsafe/broken images, and apply `referrerPolicy="no-referrer"` to external images).
 
 ### Live Preview Extension (`web/src/lib/markdownLivePreview.ts`)
-A CodeMirror 6 extension (`StateField<DecorationSet>` or `ViewPlugin` — note: block-level widgets like images and horizontal rules that replace or span lines work most reliably in a `StateField<DecorationSet>` in CodeMirror 6, avoiding `Decorations that replace line breaks may not be specified via plugins`).
-- **Active-range rule:** A syntax node is "active" if any selection range (`state.selection.ranges`) overlaps the node's `[from, to]` span (inclusive of boundaries, i.e., `sel.from <= node.to && sel.to >= node.from`). When active, markers remain visible for direct editing; when inactive, markers are hidden with `Decoration.replace({})`.
+A CodeMirror 6 extension (`StateField<DecorationSet>` — block-level widgets like images and horizontal rules work reliably in a `StateField<DecorationSet>` in CodeMirror 6, avoiding `Decorations that replace line breaks may not be specified via plugins` and rebuilding whenever `tr.docChanged || tr.selection || syntaxTree(tr.startState) !== syntaxTree(tr.state)`).
+- **Active-range rule:** A syntax node is "active" if any selection range (`state.selection.ranges`) overlaps the node's `[from, to]` span (inclusive of boundaries, i.e., `sel.from <= node.to && sel.to >= node.from`). When active, markers remain visible for direct editing; when inactive, markers are hidden with non-overlapping `Decoration.replace({})` ranges.
 - **Element behaviors when inactive:**
-  1. **Headings (`ATXHeading1`–`ATXHeading6`):** Apply line/mark heading class (`cm-md-h1`..`cm-md-h6`) to the heading text and hide the leading `HeaderMark` (`# `..`###### ` including the following space).
+  1. **Headings (`ATXHeading1`–`ATXHeading6`):** Apply line heading class (`cm-md-line-h1`..`cm-md-line-h6`) and hide opening/closing `HeaderMark` (`# `..`###### `).
   2. **Bold (`StrongEmphasis`):** Style inner text bold (`cm-md-strong`) and hide opening/closing `EmphasisMark` (`**` / `__`).
   3. **Italics (`Emphasis`):** Style inner text italic (`cm-md-em`) and hide opening/closing `EmphasisMark` (`*` / `_`).
-  4. **Blockquotes (`Blockquote`):** Apply blockquote line decoration (`cm-md-blockquote` with left accent border and subtle muted text) and hide the leading `QuoteMark` (`> `).
-  5. **Horizontal rules (`HorizontalRule`):** Replace the `---` / `***` / `___` line range with a clean `<hr class="cm-md-hr" />` widget when cursor is not on that line.
-  6. **Links (`Link`):** Style link text with accent color and underline (`cm-md-link`), hide `[`, `]`, and `(url)` parts when inactive, and allow opening safe links via `Cmd/Ctrl+Click` (showing a subtle tooltip `"Cmd/Ctrl+Click to open"` or direct click icon).
-  7. **Images (`Image`):** Parse `![alt](url)`. When inactive, hide the raw syntax (or keep syntax hidden and render a clean inline `WidgetType` displaying `<img>` with `alt`, responsive `max-width: 100%`, rounded corners, and a graceful fallback caption if the image fails to load or URL is blocked). When active (cursor on the image line/token), show the raw `![alt](url)` syntax AND render the image preview below the line so the user can edit alt text/URL while seeing the image.
+  4. **Inline code (`InlineCode`):** Style in monospace pill via `highlightStyle` and hide opening/closing `CodeMark` backticks when inactive.
+  5. **Blockquotes & Callouts (`Blockquote`):** Detect Obsidian-style `> [!type]` callout headers (including indented/nested callouts) and style with semantic Atelier tone tokens (`note`, `tip`, `warning`, `danger`, `quote`), replacing the inactive header line with `CalloutHeaderWidget`; otherwise apply `cm-md-blockquote` and hide leading `QuoteMark` (`> `).
+  6. **Horizontal rules (`HorizontalRule`):** Replace the `---` / `***` / `___` line range with a clean `<hr class="cm-md-hr" />` widget when cursor is not on that line.
+  7. **Links (`Link`):** Style link text with accent color and underline (`cm-md-link`), hide `[`, `]`, and `(url)` parts when inactive, and allow opening safe links via `Cmd/Ctrl+Click`.
+  8. **Images (`Image`):** Parse inline `![alt](url)` (leaving reference-style images untouched). When inactive, replace with `ImageWidget`; when active, keep raw syntax visible AND render the image preview below the line.
 
 ### Formatting Commands (`web/src/lib/markdownCommands.ts`)
 Pure CodeMirror 6 `Command` functions shared between keyboard shortcuts and toolbar buttons:
-- `toggleBold` (`**`), `toggleItalic` (`*`): wrap/unwrap current selection or insert `****`/`**` with cursor centered.
-- `setHeading(level: 1 | 2 | 3)`: toggle or replace the current line's leading `#` prefix.
-- `toggleBlockquote`: toggle leading `> ` on selected lines.
+- `toggleBold` (`**`), `toggleItalic` (`*`): wrap/unwrap single formatted spans without corrupting multi-span selections.
+- `setHeading(level: 1 | 2 | 3)`: toggle or replace the current line's leading `#` prefix (including bare `#` lines).
+- `toggleBlockquote`: toggle leading `> ?` across selected lines using `ChangeDesc.mapPos`.
+- `insertCallout`: insert or wrap selected text into a `> [!note] Note` callout block on its own lines.
 - `insertLink`: wrap selected text as `[selected](https://)` (selecting `https://`) or insert `[link text](https://)`.
 - `insertImage`: insert `![alt text](https://)` (selecting `https://`).
-- `insertHorizontalRule`: insert `\n---\n` on a new line.
+- `insertHorizontalRule`: insert `---` on its own block.
 
 ### Frontend Components & Integration
 - **`web/src/components/MarkdownEditor.tsx`**: Encapsulates the CodeMirror 6 `EditorView`, dynamically reconfiguring the Live Preview extension via a `Compartment` when switching between `live` and `source` modes (so undo history, scroll position, and cursor position are preserved!), plus the Atrium theme compartment syncing with `data-theme="light" | "dark"`.

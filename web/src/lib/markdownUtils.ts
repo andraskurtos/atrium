@@ -6,38 +6,46 @@ export interface ParsedCalloutHeader {
   title: string;
 }
 
-const CALLOUT_TONE_MAP: Record<string, CalloutTone> = {
-  note: 'note',
-  info: 'note',
-  abstract: 'note',
-  summary: 'note',
-  tldr: 'note',
-  todo: 'note',
-  tip: 'tip',
-  hint: 'tip',
-  important: 'tip',
-  success: 'tip',
-  check: 'tip',
-  done: 'tip',
-  warning: 'warning',
-  caution: 'warning',
-  attention: 'warning',
-  question: 'warning',
-  help: 'warning',
-  faq: 'warning',
-  danger: 'danger',
-  error: 'danger',
-  bug: 'danger',
-  failure: 'danger',
-  fail: 'danger',
-  missing: 'danger',
-  quote: 'quote',
-  cite: 'quote',
-  example: 'quote',
+export const CALLOUT_GLYPHS: Record<CalloutTone, string> = {
+  note: 'ℹ',
+  tip: '✦',
+  warning: '⚠',
+  danger: '✕',
+  quote: '❝',
 };
 
+const CALLOUT_TONE_MAP = new Map<string, CalloutTone>([
+  ['note', 'note'],
+  ['info', 'note'],
+  ['abstract', 'note'],
+  ['summary', 'note'],
+  ['tldr', 'note'],
+  ['todo', 'note'],
+  ['tip', 'tip'],
+  ['hint', 'tip'],
+  ['important', 'tip'],
+  ['success', 'tip'],
+  ['check', 'tip'],
+  ['done', 'tip'],
+  ['warning', 'warning'],
+  ['caution', 'warning'],
+  ['attention', 'warning'],
+  ['question', 'warning'],
+  ['help', 'warning'],
+  ['faq', 'warning'],
+  ['danger', 'danger'],
+  ['error', 'danger'],
+  ['bug', 'danger'],
+  ['failure', 'danger'],
+  ['fail', 'danger'],
+  ['missing', 'danger'],
+  ['quote', 'quote'],
+  ['cite', 'quote'],
+  ['example', 'quote'],
+]);
+
 export function resolveCalloutTone(rawType: string): CalloutTone {
-  return CALLOUT_TONE_MAP[rawType.trim().toLowerCase()] ?? 'note';
+  return CALLOUT_TONE_MAP.get(rawType.trim().toLowerCase()) ?? 'note';
 }
 
 export function formatCalloutDefaultTitle(rawType: string): string {
@@ -50,7 +58,7 @@ export function parseCalloutHeaderLine(
   lineText: string,
 ): ParsedCalloutHeader | null {
   const match = lineText.match(
-    /^\s*>\s*\[!([a-zA-Z0-9_-]+)\][+-]?(?:\s+(.*))?$/,
+    /^\s*>\s*\[!([a-zA-Z0-9_-]+)\][+-]?(?:$|\s+(.*)$)/,
   );
   if (!match) return null;
   const rawType = match[1];
@@ -63,6 +71,13 @@ export function parseCalloutHeaderLine(
 }
 
 export const NOTES_DRAFT_STORAGE_KEY = 'atrium.notes.pr1.draft';
+
+export function getNotesDraftStorageKey(userId?: string): string {
+  const trimmed = userId?.trim();
+  return trimmed
+    ? `${NOTES_DRAFT_STORAGE_KEY}:${trimmed}`
+    : NOTES_DRAFT_STORAGE_KEY;
+}
 
 export const DEFAULT_SAMPLE_NOTE = `# Atrium Notes
 
@@ -131,22 +146,38 @@ export function countWordsAndChars(markdown: string): {
   return { words, chars: markdown.length };
 }
 
-export function loadNotesDraft(): string {
+export function loadNotesDraft(userId?: string): string {
   if (typeof window === 'undefined') return DEFAULT_SAMPLE_NOTE;
   try {
-    const saved = window.localStorage.getItem(NOTES_DRAFT_STORAGE_KEY);
+    const saved = window.localStorage.getItem(getNotesDraftStorageKey(userId));
     return saved !== null ? saved : DEFAULT_SAMPLE_NOTE;
   } catch {
     return DEFAULT_SAMPLE_NOTE;
   }
 }
 
-export function saveNotesDraft(content: string): void {
+export function saveNotesDraft(content: string, userId?: string): void {
   if (typeof window === 'undefined') return;
   try {
-    window.localStorage.setItem(NOTES_DRAFT_STORAGE_KEY, content);
+    const key = getNotesDraftStorageKey(userId);
+    if (content === DEFAULT_SAMPLE_NOTE) {
+      window.localStorage.removeItem(key);
+    } else {
+      window.localStorage.setItem(key, content);
+    }
   } catch {
     // Ignore storage quota or private-mode errors
   }
 }
 
+export function clearNotesDraft(userId?: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (userId?.trim()) {
+      window.localStorage.removeItem(getNotesDraftStorageKey(userId));
+    }
+    window.localStorage.removeItem(NOTES_DRAFT_STORAGE_KEY);
+  } catch {
+    // Ignore storage errors
+  }
+}

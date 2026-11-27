@@ -1,13 +1,9 @@
 import {
-  Children,
-  cloneElement,
-  isValidElement,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type ReactElement,
-  type ReactNode,
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import {
@@ -20,15 +16,12 @@ import {
   toggleBold,
   toggleItalic,
 } from '../lib/markdownCommands';
+import { readingMarkdownComponents } from '../lib/markdownReading';
 import {
   countWordsAndChars,
   DEFAULT_SAMPLE_NOTE,
-  formatCalloutDefaultTitle,
   loadNotesDraft,
-  resolveCalloutTone,
-  sanitizeMarkdownUrl,
   saveNotesDraft,
-  type CalloutTone,
 } from '../lib/markdownUtils';
 import {
   MarkdownEditor,
@@ -38,132 +31,72 @@ import {
 export type NotesViewMode = 'live' | 'reading' | 'source';
 
 interface NotesPageProps {
+  userId: string;
   onAnnounce: (message: string) => void;
 }
 
-const CALLOUT_GLYPHS: Record<CalloutTone, string> = {
-  note: 'ℹ',
-  tip: '✦',
-  warning: '⚠',
-  danger: '✕',
-  quote: '❝',
-};
-
-function renderReadingBlockquote(children: ReactNode) {
-  const childArray = Children.toArray(children).filter(
-    (c) => !(typeof c === 'string' && c.trim() === ''),
-  );
-  const first = childArray[0];
-
-  if (isValidElement<{ children?: ReactNode }>(first)) {
-    const firstChildren = Children.toArray(first.props.children);
-    const firstText = firstChildren[0];
-    if (typeof firstText === 'string') {
-      const match = firstText.match(
-        /^\[!([a-zA-Z0-9_-]+)\][+-]?(?:[ \t]+([^\n]*))?(?:\n([\s\S]*))?$/,
-      );
-      if (match) {
-        const rawType = match[1];
-        const tone = resolveCalloutTone(rawType);
-        const title =
-          (match[2] ?? '').trim() || formatCalloutDefaultTitle(rawType);
-        const remainderFirstLine = match[3] ?? '';
-        const restOfFirstParagraph = firstChildren.slice(1);
-        const bodyNodes: ReactNode[] = [];
-
-        if (remainderFirstLine || restOfFirstParagraph.length > 0) {
-          bodyNodes.push(
-            cloneElement(first as ReactElement<{ children?: ReactNode }>, {
-              key: 'callout-first-body',
-              children: [
-                ...(remainderFirstLine ? [remainderFirstLine] : []),
-                ...restOfFirstParagraph,
-              ],
-            }),
-          );
-        }
-        bodyNodes.push(...childArray.slice(1));
-
-        return (
-          <div className={`notes-callout is-${tone}`}>
-            <div className={`notes-callout-header is-${tone}`}>
-              <span className="cm-md-callout-icon" aria-hidden="true">
-                {CALLOUT_GLYPHS[tone]}
-              </span>
-              <span>{title}</span>
-            </div>
-            {bodyNodes.length > 0 && (
-              <div className="notes-callout-body">{bodyNodes}</div>
-            )}
-          </div>
-        );
-      }
-    }
-  }
-
-  return <blockquote>{children}</blockquote>;
-}
-
-function SafeReadingImage({
-  src,
-  alt,
-}: {
-  src?: string;
-  alt?: string;
-}) {
-  const [failed, setFailed] = useState(false);
-  const safeSrc = src ? sanitizeMarkdownUrl(src, 'image') : null;
-
-  if (!safeSrc || failed) {
-    return (
-      <span className="cm-md-image-fallback">
-        {!safeSrc
-          ? alt
-            ? `Blocked or invalid image URL (${alt})`
-            : 'Blocked or invalid image URL'
-          : alt
-            ? `Image failed to load: ${alt}`
-            : 'Image failed to load'}
-      </span>
-    );
-  }
-
-  return (
-    <figure className="cm-md-image-figure">
-      <img
-        className="cm-md-image"
-        src={safeSrc}
-        alt={alt ?? ''}
-        loading="lazy"
-        decoding="async"
-        onError={() => setFailed(true)}
-      />
-      {alt && alt.trim().length > 0 && (
-        <figcaption className="cm-md-image-caption">{alt}</figcaption>
-      )}
-    </figure>
-  );
-}
-
-export function NotesPage({ onAnnounce }: NotesPageProps) {
-  const [content, setContent] = useState<string>(loadNotesDraft);
+export function NotesPage({ userId, onAnnounce }: NotesPageProps) {
+  const [content, setContent] = useState<string>(() => loadNotesDraft(userId));
   const [mode, setMode] = useState<NotesViewMode>('live');
   const [editorMode, setEditorMode] = useState<'live' | 'source'>('live');
   const [confirmReset, setConfirmReset] = useState(false);
 
   const editorRef = useRef<MarkdownEditorHandle | null>(null);
+  const modeRef = useRef<NotesViewMode>(mode);
+  modeRef.current = mode;
 
-  const switchMode = (nextMode: NotesViewMode) => {
+  const pendingSaveRef = useRef<{ userId: string; content: string } | null>(
+    null,
+  );
+  const saveTimerRef = useRef<number | null>(null);
+
+  const switchMode = useCallback((nextMode: NotesViewMode) => {
+    modeRef.current = nextMode;
     setMode(nextMode);
     if (nextMode !== 'reading') {
       setEditorMode(nextMode);
       requestAnimationFrame(() => editorRef.current?.focus());
     }
-  };
+  }, []);
+
+  const handleContentChange = useCallback(
+    (nextContent: string) => {
+      setContent(nextContent);
+      pendingSaveRef.current = { userId, content: nextContent };
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+      }
+      saveTimerRef.current = window.setTimeout(() => {
+        saveTimerRef.current = null;
+        const pending = pendingSaveRef.current;
+        pendingSaveRef.current = null;
+        if (pending) {
+          saveNotesDraft(pending.content, pending.userId);
+        }
+      }, 250);
+    },
+    [userId],
+  );
 
   useEffect(() => {
-    saveNotesDraft(content);
-  }, [content]);
+    const flushPending = () => {
+      if (saveTimerRef.current !== null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      const pending = pendingSaveRef.current;
+      pendingSaveRef.current = null;
+      if (pending) {
+        saveNotesDraft(pending.content, pending.userId);
+      }
+    };
+
+    window.addEventListener('pagehide', flushPending);
+    return () => {
+      window.removeEventListener('pagehide', flushPending);
+      flushPending();
+    };
+  }, []);
 
   // Cmd/Ctrl+E toggles between Live Preview and Reading mode (Obsidian convention)
   useEffect(() => {
@@ -178,24 +111,23 @@ export function NotesPage({ onAnnounce }: NotesPageProps) {
           return;
         }
         event.preventDefault();
-        setMode((prev) => {
-          const next = prev === 'reading' ? 'live' : 'reading';
-          if (next === 'live') {
-            setEditorMode('live');
-            requestAnimationFrame(() => editorRef.current?.focus());
-          }
-          return next;
-        });
+        switchMode(modeRef.current === 'reading' ? 'live' : 'reading');
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [switchMode]);
 
   const stats = useMemo(() => countWordsAndChars(content), [content]);
 
   const handleResetSample = () => {
+    if (saveTimerRef.current !== null) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    pendingSaveRef.current = null;
     setContent(DEFAULT_SAMPLE_NOTE);
+    saveNotesDraft(DEFAULT_SAMPLE_NOTE, userId);
     setConfirmReset(false);
     onAnnounce('Restored sample Markdown note');
   };
@@ -206,7 +138,7 @@ export function NotesPage({ onAnnounce }: NotesPageProps) {
         <div className="notes-toolbar-inner">
           <div
             className="notes-mode-switcher"
-            role="radiogroup"
+            role="group"
             aria-label="Editor view mode"
           >
             {(
@@ -220,8 +152,7 @@ export function NotesPage({ onAnnounce }: NotesPageProps) {
                 key={opt.id}
                 id={`notes-mode-${opt.id}`}
                 type="button"
-                role="radio"
-                aria-checked={mode === opt.id}
+                aria-pressed={mode === opt.id}
                 className={`mode-chip ${mode === opt.id ? 'is-active' : ''}`}
                 onClick={() => switchMode(opt.id)}
               >
@@ -369,47 +300,7 @@ export function NotesPage({ onAnnounce }: NotesPageProps) {
                   start writing.
                 </p>
               ) : (
-                <ReactMarkdown
-                  components={{
-                    blockquote({ children }) {
-                      return renderReadingBlockquote(children);
-                    },
-                    a({ href, children }) {
-                      const safeHref = href
-                        ? sanitizeMarkdownUrl(href, 'link')
-                        : null;
-                      if (!safeHref) {
-                        return (
-                          <span
-                            className="cm-md-link-invalid"
-                            title="Blocked unsafe or invalid URL"
-                          >
-                            {children}
-                          </span>
-                        );
-                      }
-                      return (
-                        <a
-                          href={safeHref}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="notes-reading-link"
-                        >
-                          {children}
-                        </a>
-                      );
-                    },
-                    img({ src, alt }) {
-                      return (
-                        <SafeReadingImage
-                          key={src ?? ''}
-                          src={src}
-                          alt={alt}
-                        />
-                      );
-                    },
-                  }}
-                >
+                <ReactMarkdown components={readingMarkdownComponents}>
                   {content}
                 </ReactMarkdown>
               )}
@@ -420,7 +311,7 @@ export function NotesPage({ onAnnounce }: NotesPageProps) {
               ref={editorRef}
               value={content}
               mode={editorMode}
-              onChange={setContent}
+              onChange={handleContentChange}
             />
           </div>
         </div>

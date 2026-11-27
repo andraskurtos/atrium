@@ -17,18 +17,11 @@ import {
 } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
 import {
+  CALLOUT_GLYPHS,
   parseCalloutHeaderLine,
   sanitizeMarkdownUrl,
   type CalloutTone,
-} from './markdownUtils';
-
-const CALLOUT_GLYPHS: Record<CalloutTone, string> = {
-  note: 'ℹ',
-  tip: '✦',
-  warning: '⚠',
-  danger: '✕',
-  quote: '❝',
-};
+} from './markdownUtils.ts';
 
 class CalloutHeaderWidget extends WidgetType {
   readonly tone: CalloutTone;
@@ -67,6 +60,10 @@ class CalloutHeaderWidget extends WidgetType {
 }
 
 class HorizontalRuleWidget extends WidgetType {
+  override eq(): boolean {
+    return true;
+  }
+
   override toDOM(): HTMLElement {
     const hr = document.createElement('hr');
     hr.className = 'cm-md-hr';
@@ -119,6 +116,7 @@ class ImageWidget extends WidgetType {
     img.alt = this.alt;
     img.loading = 'lazy';
     img.decoding = 'async';
+    img.referrerPolicy = 'no-referrer';
 
     img.addEventListener('error', () => {
       figure.innerHTML = '';
@@ -161,26 +159,34 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
   const doc = state.doc;
   const hiddenRanges: Array<{ from: number; to: number }> = [];
 
-  const isInsideHidden = (from: number, to: number): boolean =>
+  const isFullyHidden = (from: number, to: number): boolean =>
     hiddenRanges.some((r) => from >= r.from && to <= r.to);
 
-  const pushHidden = (from: number, to: number) => {
-    if (to <= from) return;
-    if (isInsideHidden(from, to)) return;
+  const overlapsHidden = (from: number, to: number): boolean =>
+    hiddenRanges.some((r) => from < r.to && to > r.from);
+
+  const pushReplace = (
+    from: number,
+    to: number,
+    spec: Parameters<typeof Decoration.replace>[0] = {},
+  ): boolean => {
+    if (to <= from || overlapsHidden(from, to)) return false;
     hiddenRanges.push({ from, to });
-    decorations.push(Decoration.replace({}).range(from, to));
+    decorations.push(Decoration.replace(spec).range(from, to));
+    return true;
   };
 
   syntaxTree(state).iterate({
     enter(nodeRef) {
       const { name, from, to, node } = nodeRef;
 
-      if (isInsideHidden(from, to)) {
+      if (isFullyHidden(from, to)) {
         return false;
       }
 
       // 1. Headings (ATXHeading1 .. ATXHeading6)
       if (name.startsWith('ATXHeading')) {
+        if (overlapsHidden(from, to)) return;
         const level = Number.parseInt(name.slice('ATXHeading'.length), 10);
         if (level >= 1 && level <= 6) {
           const line = doc.lineAt(from);
@@ -201,7 +207,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
                     child.to < line.to
                       ? doc.sliceString(child.to, child.to + 1)
                       : '';
-                  pushHidden(
+                  pushReplace(
                     child.from,
                     nextChar === ' ' ? child.to + 1 : child.to,
                   );
@@ -210,7 +216,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
                     child.from > line.from
                       ? doc.sliceString(child.from - 1, child.from)
                       : '';
-                  pushHidden(
+                  pushReplace(
                     prevChar === ' ' ? child.from - 1 : child.from,
                     child.to,
                   );
@@ -225,6 +231,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
 
       // 2. Bold (StrongEmphasis)
       if (name === 'StrongEmphasis') {
+        if (overlapsHidden(from, to)) return;
         decorations.push(
           Decoration.mark({ class: 'cm-md-strong' }).range(from, to),
         );
@@ -232,7 +239,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
           let child = node.firstChild;
           while (child) {
             if (child.name === 'EmphasisMark') {
-              pushHidden(child.from, child.to);
+              pushReplace(child.from, child.to);
             }
             child = child.nextSibling;
           }
@@ -242,6 +249,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
 
       // 3. Italic (Emphasis)
       if (name === 'Emphasis') {
+        if (overlapsHidden(from, to)) return;
         decorations.push(
           Decoration.mark({ class: 'cm-md-em' }).range(from, to),
         );
@@ -249,7 +257,22 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
           let child = node.firstChild;
           while (child) {
             if (child.name === 'EmphasisMark') {
-              pushHidden(child.from, child.to);
+              pushReplace(child.from, child.to);
+            }
+            child = child.nextSibling;
+          }
+        }
+        return;
+      }
+
+      // 3b. Inline code (`code`)
+      if (name === 'InlineCode') {
+        if (overlapsHidden(from, to)) return;
+        if (!isRangeActive(state, from, to)) {
+          let child = node.firstChild;
+          while (child) {
+            if (child.name === 'CodeMark') {
+              pushReplace(child.from, child.to);
             }
             child = child.nextSibling;
           }
@@ -262,7 +285,9 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         const startLineNo = doc.lineAt(from).number;
         const endLineNo = doc.lineAt(to).number;
         const firstLine = doc.line(startLineNo);
-        const callout = parseCalloutHeaderLine(firstLine.text);
+        const callout = parseCalloutHeaderLine(
+          doc.sliceString(from, firstLine.to),
+        );
 
         if (callout) {
           for (let lineNo = startLineNo; lineNo <= endLineNo; lineNo += 1) {
@@ -281,12 +306,9 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
           }
 
           if (!isRangeActive(state, firstLine.from, firstLine.to)) {
-            hiddenRanges.push({ from: firstLine.from, to: firstLine.to });
-            decorations.push(
-              Decoration.replace({
-                widget: new CalloutHeaderWidget(callout.tone, callout.title),
-              }).range(firstLine.from, firstLine.to),
-            );
+            pushReplace(from, firstLine.to, {
+              widget: new CalloutHeaderWidget(callout.tone, callout.title),
+            });
           }
           return;
         }
@@ -303,25 +325,22 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
       }
 
       if (name === 'QuoteMark') {
+        if (overlapsHidden(from, to)) return;
         const line = doc.lineAt(from);
         if (!isRangeActive(state, line.from, line.to)) {
           const nextChar =
             to < line.to ? doc.sliceString(to, to + 1) : '';
-          pushHidden(from, nextChar === ' ' ? to + 1 : to);
+          pushReplace(from, nextChar === ' ' ? to + 1 : to);
         }
         return;
       }
 
       // 5. Horizontal Rule
       if (name === 'HorizontalRule') {
+        if (overlapsHidden(from, to)) return false;
         const line = doc.lineAt(from);
         if (!isRangeActive(state, line.from, line.to)) {
-          hiddenRanges.push({ from, to });
-          decorations.push(
-            Decoration.replace({
-              widget: new HorizontalRuleWidget(),
-            }).range(from, to),
-          );
+          pushReplace(from, to, { widget: new HorizontalRuleWidget() });
           return false;
         }
         return;
@@ -329,10 +348,15 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
 
       // 6. Images: ![alt](url)
       if (name === 'Image') {
+        if (overlapsHidden(from, to)) return;
+        const urlNode = node.getChild('URL');
+        if (!urlNode) {
+          // Reference-style images (e.g. ![alt][1]) have no inline URL child; leave unstyled rather than marking invalid
+          return;
+        }
         const startLine = doc.lineAt(from);
         const endLine = doc.lineAt(to);
-        const urlNode = node.getChild('URL');
-        const rawUrl = urlNode ? doc.sliceString(urlNode.from, urlNode.to) : '';
+        const rawUrl = doc.sliceString(urlNode.from, urlNode.to);
         const safeUrl = sanitizeMarkdownUrl(rawUrl, 'image');
 
         let closeBracketPos = -1;
@@ -354,12 +378,9 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
             : '';
 
         if (!isRangeActive(state, startLine.from, endLine.to)) {
-          hiddenRanges.push({ from, to });
-          decorations.push(
-            Decoration.replace({
-              widget: new ImageWidget(alt, safeUrl, rawUrl),
-            }).range(from, to),
-          );
+          pushReplace(from, to, {
+            widget: new ImageWidget(alt, safeUrl, rawUrl),
+          });
           return false;
         }
 
@@ -376,6 +397,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
 
       // 7. Links: [label](url)
       if (name === 'Link') {
+        if (overlapsHidden(from, to)) return;
         const urlNode = node.getChild('URL');
         if (!urlNode) {
           // Reference-style links (e.g. [ref][1]) have no inline URL child; leave unstyled rather than marking invalid
@@ -413,8 +435,8 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
           );
 
           if (!isRangeActive(state, from, to)) {
-            pushHidden(from, openBracketEnd);
-            pushHidden(closeBracketStart, to);
+            pushReplace(from, openBracketEnd);
+            pushReplace(closeBracketStart, to);
           }
         }
         return;
@@ -430,7 +452,11 @@ const livePreviewField = StateField.define<DecorationSet>({
     return buildLivePreviewDecorations(state);
   },
   update(decorations, tr) {
-    if (tr.docChanged || tr.selection) {
+    if (
+      tr.docChanged ||
+      tr.selection ||
+      syntaxTree(tr.startState) !== syntaxTree(tr.state)
+    ) {
       return buildLivePreviewDecorations(tr.state);
     }
     return decorations;
@@ -507,6 +533,14 @@ const highlightStyle = HighlightStyle.define([
   { tag: tags.heading6, fontWeight: '600', color: 'var(--text-muted)' },
   { tag: tags.strong, fontWeight: '700' },
   { tag: tags.emphasis, fontStyle: 'italic' },
+  {
+    tag: tags.monospace,
+    fontFamily: 'var(--font-mono)',
+    fontSize: '0.88em',
+    backgroundColor: 'var(--surface-muted)',
+    borderRadius: '4px',
+    padding: '0.1em 0.35em',
+  },
   { tag: tags.quote, color: 'var(--text-muted)', fontStyle: 'italic' },
   { tag: tags.link, color: 'var(--accent)', textDecoration: 'underline' },
   { tag: tags.url, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.88em' },

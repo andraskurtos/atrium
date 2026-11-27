@@ -3530,6 +3530,8 @@ select {
   --callout-bg: var(--accent-soft);
   border-left: 3px solid var(--callout-color);
   background-color: var(--callout-bg);
+  color: var(--text);
+  font-style: normal;
   padding-left: 14px !important;
   padding-right: 14px !important;
 }
@@ -3554,20 +3556,20 @@ select {
 
 .cm-md-callout-tip,
 .notes-callout.is-tip {
-  --callout-color: #2f7d57;
-  --callout-bg: rgba(47, 125, 87, 0.1);
+  --callout-color: var(--ok);
+  --callout-bg: color-mix(in srgb, var(--ok) 11%, transparent);
 }
 
 .cm-md-callout-warning,
 .notes-callout.is-warning {
-  --callout-color: #b7791f;
-  --callout-bg: rgba(183, 121, 31, 0.11);
+  --callout-color: var(--warn);
+  --callout-bg: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
 .cm-md-callout-danger,
 .notes-callout.is-danger {
   --callout-color: var(--danger);
-  --callout-bg: rgba(196, 69, 54, 0.1);
+  --callout-bg: color-mix(in srgb, var(--danger) 11%, transparent);
 }
 
 .cm-md-callout-quote,
@@ -3599,6 +3601,8 @@ select {
   padding: 10px 14px;
   border-left: 3px solid var(--callout-color);
   background-color: var(--callout-bg);
+  color: var(--text);
+  font-style: normal;
   border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
@@ -3645,6 +3649,15 @@ select {
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background-color: var(--surface-muted);
+}
+
+.notes-reading-inline-image {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.cm-md-image.cm-md-image-inline {
+  vertical-align: middle;
 }
 
 .cm-md-image-caption {
@@ -3715,6 +3728,32 @@ select {
 
 .notes-reading-prose li {
   margin-bottom: 0.25em;
+}
+
+.notes-reading-prose code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  padding: 0.12em 0.38em;
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-muted);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.notes-reading-prose pre {
+  margin: 0 0 0.9em;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background-color: var(--surface-muted);
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.notes-reading-prose pre code {
+  padding: 0;
+  border: none;
+  background-color: transparent;
+  font-size: 0.875rem;
 }
 
 .notes-reading-prose blockquote {

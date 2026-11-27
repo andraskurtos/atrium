@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { AccountPage } from './components/AccountPage';
 import { AuthScreen } from './components/AuthScreen';
 import { CalendarCard } from './components/CalendarCard';
@@ -8,7 +16,6 @@ import { DailyNoteCard } from './components/DailyNoteCard';
 import { ChevronLeftIcon, ChevronRightIcon } from './components/Icons';
 import { LocalStatusCard } from './components/LocalStatusCard';
 import { MobileTabBar } from './components/MobileTabBar';
-import { NotesPage } from './components/NotesPage';
 import { QuickCapture } from './components/QuickCapture';
 import { TopBar } from './components/TopBar';
 import { UniversityPage } from './components/UniversityPage';
@@ -95,6 +102,7 @@ import {
   type UpdateActivityItemInput,
   type UpdateCourseInput,
 } from './lib/universityClient';
+import { clearNotesDraft } from './lib/markdownUtils';
 import type {
   AccountPreferences,
   AgentToken,
@@ -113,6 +121,10 @@ import type {
   UserCalendar,
   UserProfile,
 } from './types/atrium';
+
+const NotesPage = lazy(() =>
+  import('./components/NotesPage').then((m) => ({ default: m.NotesPage })),
+);
 
 function readInviteCodeFromHash(): string {
   if (typeof window === 'undefined') return '';
@@ -563,8 +575,20 @@ export function App() {
     announce(`Signed in as ${session.user.displayName || session.user.username}`);
   };
 
+  const signedOutNotesUserIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!profile && signedOutNotesUserIdRef.current !== null) {
+      clearNotesDraft(signedOutNotesUserIdRef.current);
+      signedOutNotesUserIdRef.current = null;
+    }
+  }, [profile]);
+
   const handleSignOut = async () => {
+    const signingOutUserId = profile?.id ?? '';
+    signedOutNotesUserIdRef.current = signingOutUserId;
     await logout();
+    clearNotesDraft(signingOutUserId);
     clearAuthState();
     announce('Signed out');
   };
@@ -1381,7 +1405,25 @@ export function App() {
         </>
       ) : activeView === 'notes' ? (
         <>
-          <NotesPage onAnnounce={announce} />
+          <Suspense
+            fallback={
+              <main
+                className="notes-page-shell"
+                role="status"
+                aria-live="polite"
+              >
+                <div className="notes-canvas">
+                  <p className="meta-text">Loading Markdown editor…</p>
+                </div>
+              </main>
+            }
+          >
+            <NotesPage
+              key={profile.id}
+              userId={profile.id}
+              onAnnounce={announce}
+            />
+          </Suspense>
 
           <MobileTabBar
             activeTab="notes"
