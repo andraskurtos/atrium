@@ -17,6 +17,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<UniversityActivityItem> UniversityActivityItems => Set<UniversityActivityItem>();
     public DbSet<DailyCheckItem> DailyCheckItems => Set<DailyCheckItem>();
     public DbSet<DailyNote> DailyNotes => Set<DailyNote>();
+    public DbSet<NoteFolder> NoteFolders => Set<NoteFolder>();
+    public DbSet<Note> Notes => Set<Note>();
+    public DbSet<NoteTag> NoteTags => Set<NoteTag>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -372,6 +375,90 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasOne(n => n.User)
                 .WithMany()
                 .HasForeignKey(n => n.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<NoteFolder>(entity =>
+        {
+            entity.ToTable("note_folders");
+            entity.HasKey(f => f.Id);
+            entity.Property(f => f.Id).HasColumnName("id");
+            entity.Property(f => f.UserId).HasColumnName("user_id");
+            entity.Property(f => f.ParentFolderId).HasColumnName("parent_folder_id");
+            entity.Property(f => f.Name).HasColumnName("name").HasMaxLength(120).IsRequired();
+            entity.Property(f => f.AllowAgentRead).HasColumnName("allow_agent_read").HasDefaultValue(true);
+            entity.Property(f => f.SortOrder).HasColumnName("sort_order").HasDefaultValue(0);
+            entity.Property(f => f.CreatedAt).HasColumnName("created_at");
+            entity.Property(f => f.UpdatedAt).HasColumnName("updated_at");
+            entity.Property(f => f.DeletedAt).HasColumnName("deleted_at");
+
+            entity.HasIndex(f => f.ParentFolderId);
+            entity.HasIndex(f => new { f.UserId, f.ParentFolderId, f.DeletedAt })
+                .HasDatabaseName("ix_note_folders_user_parent");
+
+            entity.HasOne(f => f.User)
+                .WithMany()
+                .HasForeignKey(f => f.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(f => f.ParentFolder)
+                .WithMany(f => f.ChildFolders)
+                .HasForeignKey(f => f.ParentFolderId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Note>(entity =>
+        {
+            entity.ToTable("notes");
+            entity.HasKey(n => n.Id);
+            entity.Property(n => n.Id).HasColumnName("id");
+            entity.Property(n => n.UserId).HasColumnName("user_id");
+            entity.Property(n => n.FolderId).HasColumnName("folder_id");
+            entity.Property(n => n.Title).HasColumnName("title").HasMaxLength(200).IsRequired();
+            entity.Property(n => n.Content).HasColumnName("content").IsRequired();
+            entity.Property(n => n.ContentHash).HasColumnName("content_hash").HasMaxLength(64).IsRequired();
+            entity.Property(n => n.Version).HasColumnName("version").HasDefaultValue(1).IsConcurrencyToken();
+            entity.Property(n => n.AllowAgentRead).HasColumnName("allow_agent_read").HasDefaultValue(true);
+            entity.Property(n => n.CreatedAt).HasColumnName("created_at");
+            entity.Property(n => n.UpdatedAt).HasColumnName("updated_at");
+            entity.Property(n => n.DeletedAt).HasColumnName("deleted_at");
+
+            entity.HasIndex(n => n.FolderId);
+            entity.HasIndex(n => new { n.UserId, n.FolderId, n.DeletedAt })
+                .HasDatabaseName("ix_notes_user_folder_deleted");
+            entity.HasIndex(n => new { n.UserId, n.UpdatedAt })
+                .HasDatabaseName("ix_notes_user_updated");
+
+            entity.HasOne(n => n.User)
+                .WithMany()
+                .HasForeignKey(n => n.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(n => n.Folder)
+                .WithMany(f => f.Notes)
+                .HasForeignKey(n => n.FolderId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<NoteTag>(entity =>
+        {
+            entity.ToTable("note_tags");
+            entity.HasKey(t => new { t.NoteId, t.Tag });
+            entity.Property(t => t.NoteId).HasColumnName("note_id");
+            entity.Property(t => t.UserId).HasColumnName("user_id");
+            entity.Property(t => t.Tag).HasColumnName("tag").HasMaxLength(40).IsRequired();
+
+            entity.HasIndex(t => new { t.UserId, t.Tag })
+                .HasDatabaseName("ix_note_tags_user_tag");
+
+            entity.HasOne(t => t.Note)
+                .WithMany(n => n.Tags)
+                .HasForeignKey(t => t.NoteId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(t => t.User)
+                .WithMany()
+                .HasForeignKey(t => t.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

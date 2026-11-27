@@ -16,6 +16,7 @@ import {
   type DecorationSet,
 } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
+import { findFrontmatterRange } from './frontmatter.ts';
 import {
   CALLOUT_GLYPHS,
   parseCalloutHeaderLine,
@@ -175,6 +176,12 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
     decorations.push(Decoration.replace(spec).range(from, to));
     return true;
   };
+
+  // Hide leading YAML frontmatter block in Live Preview when cursor is outside it
+  const fmRange = findFrontmatterRange(doc.toString());
+  if (fmRange && !isRangeActive(state, fmRange.from, fmRange.to)) {
+    pushReplace(fmRange.from, fmRange.bodyStart);
+  }
 
   syntaxTree(state).iterate({
     enter(nodeRef) {
@@ -483,8 +490,19 @@ const linkClickHandler = EditorView.domEventHandlers({
   },
 });
 
+const frontmatterAtomicRanges = EditorView.atomicRanges.of((view) => {
+  const fmRange = findFrontmatterRange(view.state.doc.toString());
+  if (!fmRange || isRangeActive(view.state, fmRange.from, fmRange.to)) {
+    return Decoration.none;
+  }
+  return Decoration.set([
+    Decoration.replace({}).range(fmRange.from, fmRange.bodyStart),
+  ]);
+});
+
 export const markdownLivePreviewExtension: Extension = [
   livePreviewField,
+  frontmatterAtomicRanges,
   linkClickHandler,
 ];
 

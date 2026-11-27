@@ -11,6 +11,7 @@ Atrium uses **Entity Framework Core 10** (`Npgsql.EntityFrameworkCore.PostgreSQL
 | `20261126150000_AddRecurrenceOverrides` | Adds `recurrence_master_id`, `recurrence_original_start_at`, `is_recurrence_exception_deleted`, and `ix_calendar_events_master_original_start` for recurring event series overrides and single-occurrence deletions. |
 | `20261126180000_AddUniversityModule` | Adds `calendars.module` (`ix_calendars_user_module`) and creates `university_courses`, `university_course_activities`, and `university_activity_items` for the University courses, attendance, and dedicated calendar module. |
 | `20261126230000_AddDailyTracker` | Creates `daily_check_items` (`ix_daily_check_items_user_date_sort`) and `daily_notes` (`ix_daily_notes_user_date`) for per-day checklists and auto-saving daily shortform notes. |
+| `20261127120000_AddNotesVault` | Creates `note_folders`, `notes`, and `note_tags` for nested Markdown folders, YAML frontmatter tag indexing, optimistic concurrency, and per-note/folder AI agent access control. |
 
 ---
 
@@ -88,3 +89,4 @@ Expected rows:
 - `20261126150000_AddRecurrenceOverrides`
 - `20261126180000_AddUniversityModule`
 - `20261126230000_AddDailyTracker`
+- `20261127120000_AddNotesVault`

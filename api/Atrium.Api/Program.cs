@@ -212,6 +212,7 @@ app.MapHouseholdEndpoints();
 app.MapCalendarEndpoints();
 app.MapUniversityEndpoints();
 app.MapDayEndpoints();
+app.MapNoteEndpoints();
 
 var configuredDistPath = builder.Configuration["Atrium:WebDistPath"];
 var resolvedDistPath = !string.IsNullOrWhiteSpace(configuredDistPath)
