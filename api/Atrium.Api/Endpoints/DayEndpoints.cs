@@ -4,6 +4,7 @@ using Atrium.Api.Auth;
 using Atrium.Api.Data;
 using Atrium.Api.Data.Entities;
 using Atrium.Api.Days;
+using Atrium.Api.Notes;
 using Microsoft.EntityFrameworkCore;
 
 namespace Atrium.Api.Endpoints;
@@ -40,14 +41,34 @@ public static class DayEndpoints
                 .ThenBy(i => i.CreatedAt)
                 .ToList();
 
-            var note = await db.DailyNotes
+            var linkedNote = await db.Notes
                 .AsNoTracking()
-                .FirstOrDefaultAsync(n => n.UserId == userId && n.Date == parsedDate, ct);
+                .FirstOrDefaultAsync(
+                    n => n.UserId == userId && n.DailyDate == parsedDate && n.DeletedAt == null,
+                    ct);
+
+            DailyNoteDto? noteDto;
+            if (linkedNote is not null)
+            {
+                noteDto = new DailyNoteDto(
+                    linkedNote.Id,
+                    FormatDate(parsedDate),
+                    linkedNote.Content,
+                    linkedNote.CreatedAt,
+                    linkedNote.UpdatedAt);
+            }
+            else
+            {
+                var legacyNote = await db.DailyNotes
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(n => n.UserId == userId && n.Date == parsedDate, ct);
+                noteDto = legacyNote is null ? null : ToNoteDto(legacyNote);
+            }
 
             var response = new DailyTrackerResponse(
                 FormatDate(parsedDate),
                 items.Select(ToCheckItemDto).ToList(),
-                note is null ? null : ToNoteDto(note));
+                noteDto);
 
             return Results.Ok(response);
         }).RequireAuthorization(AuthConstants.HumanOrAgentPolicy);
@@ -222,14 +243,34 @@ public static class DayEndpoints
             }
 
             var formattedDate = FormatDate(parsedDate);
-            var existing = await db.DailyNotes
+            var existingNote = await db.Notes
+                .Include(n => n.Tags)
+                .FirstOrDefaultAsync(
+                    n => n.UserId == userId.Value && n.DailyDate == parsedDate && n.DeletedAt == null,
+                    ct);
+            var legacyNote = await db.DailyNotes
                 .FirstOrDefaultAsync(n => n.UserId == userId.Value && n.Date == parsedDate, ct);
 
             if (string.IsNullOrWhiteSpace(content))
             {
-                if (existing is not null)
+                var nowClear = DateTimeOffset.UtcNow;
+                if (existingNote is not null)
                 {
-                    db.DailyNotes.Remove(existing);
+                    existingNote.DeletedAt = nowClear;
+                    existingNote.UpdatedAt = nowClear;
+                    if (existingNote.Tags.Count > 0)
+                    {
+                        db.NoteTags.RemoveRange(existingNote.Tags);
+                    }
+                }
+
+                if (legacyNote is not null)
+                {
+                    db.DailyNotes.Remove(legacyNote);
+                }
+
+                if (existingNote is not null || legacyNote is not null)
+                {
                     await db.SaveChangesAsync(ct);
                 }
 
@@ -237,44 +278,76 @@ public static class DayEndpoints
             }
 
             var now = DateTimeOffset.UtcNow;
-            if (existing is not null)
+            var parsedFm = NoteFrontmatter.Parse(content);
+
+            if (legacyNote is not null)
             {
-                existing.Content = content;
-                existing.UpdatedAt = now;
-                await db.SaveChangesAsync(ct);
-                return Results.Ok(new UpsertDailyNoteResponse(formattedDate, ToNoteDto(existing)));
+                db.DailyNotes.Remove(legacyNote);
             }
 
-            var created = new DailyNote
+            if (existingNote is not null)
+            {
+                existingNote.Content = content;
+                existingNote.ContentHash = NoteFrontmatter.ComputeContentHash(content);
+                existingNote.Version += 1;
+                existingNote.UpdatedAt = now;
+                SyncNoteTags(db, existingNote, userId.Value, parsedFm.Tags);
+                await db.SaveChangesAsync(ct);
+                return Results.Ok(new UpsertDailyNoteResponse(
+                    formattedDate,
+                    new DailyNoteDto(existingNote.Id, formattedDate, existingNote.Content, existingNote.CreatedAt, existingNote.UpdatedAt)));
+            }
+
+            var title = !string.IsNullOrWhiteSpace(parsedFm.Title)
+                ? parsedFm.Title.Trim()
+                : parsedDate.ToString("MMM d, yyyy", CultureInfo.InvariantCulture);
+            if (title.Length > 200) title = title[..200];
+
+            var created = new Note
             {
                 Id = Guid.NewGuid(),
                 UserId = userId.Value,
-                Date = parsedDate,
+                DailyDate = parsedDate,
+                Title = title,
                 Content = content,
+                ContentHash = NoteFrontmatter.ComputeContentHash(content),
+                Version = 1,
+                AllowAgentRead = true,
                 CreatedAt = now,
                 UpdatedAt = now,
             };
+            SyncNoteTags(db, created, userId.Value, parsedFm.Tags);
 
-            db.DailyNotes.Add(created);
+            db.Notes.Add(created);
             try
             {
                 await db.SaveChangesAsync(ct);
-                return Results.Ok(new UpsertDailyNoteResponse(formattedDate, ToNoteDto(created)));
+                return Results.Ok(new UpsertDailyNoteResponse(
+                    formattedDate,
+                    new DailyNoteDto(created.Id, formattedDate, created.Content, created.CreatedAt, created.UpdatedAt)));
             }
             catch (DbUpdateException)
             {
                 db.Entry(created).State = EntityState.Detached;
-                var raced = await db.DailyNotes
-                    .FirstOrDefaultAsync(n => n.UserId == userId.Value && n.Date == parsedDate, ct);
+                var raced = await db.Notes
+                    .Include(n => n.Tags)
+                    .FirstOrDefaultAsync(
+                        n => n.UserId == userId.Value && n.DailyDate == parsedDate && n.DeletedAt == null,
+                        ct);
                 if (raced is null)
                 {
                     throw;
                 }
 
                 raced.Content = content;
+                raced.ContentHash = NoteFrontmatter.ComputeContentHash(content);
+                raced.Version += 1;
                 raced.UpdatedAt = DateTimeOffset.UtcNow;
+                SyncNoteTags(db, raced, userId.Value, parsedFm.Tags);
                 await db.SaveChangesAsync(ct);
-                return Results.Ok(new UpsertDailyNoteResponse(formattedDate, ToNoteDto(raced)));
+                return Results.Ok(new UpsertDailyNoteResponse(
+                    formattedDate,
+                    new DailyNoteDto(raced.Id, formattedDate, raced.Content, raced.CreatedAt, raced.UpdatedAt)));
             }
         }).RequireAuthorization(AuthConstants.HumanJwtOnlyPolicy);
     }
@@ -344,6 +417,35 @@ public static class DayEndpoints
         item.SortOrder,
         item.CreatedAt,
         item.UpdatedAt);
+
+    private static void SyncNoteTags(
+        AppDbContext db,
+        Note note,
+        Guid userId,
+        IReadOnlyList<string> desiredTags)
+    {
+        var desiredSet = new HashSet<string>(desiredTags, StringComparer.Ordinal);
+        var toRemove = note.Tags.Where(t => !desiredSet.Contains(t.Tag)).ToList();
+        foreach (var oldTag in toRemove)
+        {
+            note.Tags.Remove(oldTag);
+            db.NoteTags.Remove(oldTag);
+        }
+
+        var existingSet = note.Tags.Select(t => t.Tag).ToHashSet(StringComparer.Ordinal);
+        foreach (var tag in desiredTags)
+        {
+            if (!existingSet.Contains(tag))
+            {
+                note.Tags.Add(new NoteTag
+                {
+                    NoteId = note.Id,
+                    UserId = userId,
+                    Tag = tag,
+                });
+            }
+        }
+    }
 
     private static DailyNoteDto ToNoteDto(DailyNote note) => new(
         note.Id,

@@ -1544,6 +1544,10 @@ export function App() {
                   loading={dayLoading || dayLoadedDateKey !== selectedDateKey}
                   loadError={dayLoadError}
                   onRetryLoad={() => void loadDayData(selectedDateKey)}
+                  onOpenInNotes={(dateKey) => {
+                    setPendingNoteTarget({ kind: 'daily', dailyDate: dateKey });
+                    navigateTo('notes');
+                  }}
                   onSaveNote={handleSaveDailyNote}
                 />
               </div>

@@ -305,6 +305,7 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.Property<string>("Content").IsRequired().HasColumnType("text").HasColumnName("content");
             b.Property<string>("ContentHash").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)").HasColumnName("content_hash");
             b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<DateOnly?>("DailyDate").HasColumnType("date").HasColumnName("daily_date");
             b.Property<DateTimeOffset?>("DeletedAt").HasColumnType("timestamp with time zone").HasColumnName("deleted_at");
             b.Property<Guid?>("FolderId").HasColumnType("uuid").HasColumnName("folder_id");
             b.Property<string>("Title").IsRequired().HasMaxLength(200).HasColumnType("character varying(200)").HasColumnName("title");
@@ -331,6 +332,10 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .HasFilter("\"calendar_event_id\" IS NOT NULL AND \"calendar_occurrence_start_at\" IS NOT NULL AND \"deleted_at\" IS NULL");
             b.HasIndex("UserId", "UpdatedAt").HasDatabaseName("ix_notes_user_updated");
             b.HasIndex("UserId", "CalendarEventId", "DeletedAt").HasDatabaseName("ix_notes_user_calendar_event");
+            b.HasIndex("UserId", "DailyDate")
+                .IsUnique()
+                .HasDatabaseName("ix_notes_daily_date_unique")
+                .HasFilter("\"daily_date\" IS NOT NULL AND \"deleted_at\" IS NULL");
             b.HasIndex("UserId", "FolderId", "DeletedAt").HasDatabaseName("ix_notes_user_folder_deleted");
             b.HasIndex("UserId", "UniversityCourseId", "DeletedAt").HasDatabaseName("ix_notes_user_uni_course");
             b.ToTable("notes", (string?)null);

@@ -234,5 +234,36 @@ public sealed class LinkedNoteEndpointsTests
         Assert.Equal(NoteLinkKinds.UniversityCourse, found.LinkKind);
         Assert.Contains("Databases", found.LinkLabel, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task DailyNote_SyncsWithDayEndpoint_AndAppearsInDailySidebarSection()
+    {
+        using var factory = new TestAppFactory();
+        using var client = factory.CreateClient();
+        await SetupOwnerAsync(client);
+
+        // Saving via Day endpoint creates a Markdown note in the Daily section
+        var putRes = await client.PutAsJsonAsync(
+            "/api/days/2026-11-27/note",
+            new { content = "# Today\n\n- **Ship** daily markdown notes" });
+        Assert.Equal(HttpStatusCode.OK, putRes.StatusCode);
+
+        var tree = await client.GetFromJsonAsync<NotesTreeResponse>("/api/notes/tree");
+        Assert.NotNull(tree);
+        Assert.Empty(tree.Notes); // Daily notes do NOT appear in General
+        var daily = Assert.Single(tree.Daily);
+        Assert.Equal(NoteLinkKinds.Daily, daily.LinkKind);
+        Assert.Equal("2026-11-27", daily.DailyDate);
+
+        // Opening via POST /api/notes/linked returns the exact same note (idempotent)
+        var linkedRes = await client.PostAsJsonAsync(
+            "/api/notes/linked",
+            new OpenLinkedNoteRequest(NoteLinkKinds.Daily, DailyDate: "2026-11-27"));
+        Assert.Equal(HttpStatusCode.OK, linkedRes.StatusCode);
+        var detail = await linkedRes.Content.ReadFromJsonAsync<NoteDetailDto>();
+        Assert.NotNull(detail);
+        Assert.Equal(daily.Id, detail.Id);
+        Assert.Contains("**Ship**", detail.Content, StringComparison.Ordinal);
+    }
 }
 

@@ -144,6 +144,7 @@ export function NotesPage({
     UniversitySemesterNotesTree[]
   >([]);
   const [eventsTree, setEventsTree] = useState<EventNotesGroup[]>([]);
+  const [dailyNotes, setDailyNotes] = useState<NoteSummary[]>([]);
   const [tags, setTags] = useState<NoteTagCount[]>([]);
   const [treeLoading, setTreeLoading] = useState(true);
   const [noteArtifacts, setNoteArtifacts] = useState<AttachmentSummary[]>([]);
@@ -224,6 +225,7 @@ export function NotesPage({
     setNotes(data.notes);
     setUniversityTree(data.university ?? []);
     setEventsTree(data.events ?? []);
+    setDailyNotes(data.daily ?? []);
     setTags(data.tags);
     setSearchRefreshTick((t) => t + 1);
     return data;
@@ -450,6 +452,16 @@ export function NotesPage({
             kind: 'calendar_event',
             calendarEventId: initialTarget.calendarEventId,
             occurrenceStartAt: initialTarget.occurrenceStartAt ?? null,
+          });
+          if (cancelled) return;
+          latestVersionByNoteRef.current.set(detail.id, detail.version);
+          await refreshTree();
+          await openNote(detail.id);
+        } else if (initialTarget.kind === 'daily') {
+          flushCurrentNote(false);
+          const detail = await openLinkedNote({
+            kind: 'daily',
+            dailyDate: initialTarget.dailyDate,
           });
           if (cancelled) return;
           latestVersionByNoteRef.current.set(detail.id, detail.version);
@@ -1250,12 +1262,15 @@ export function NotesPage({
         for (const a of occ.artifacts) addPdf(a, evt.title);
       }
     }
+    for (const n of dailyNotes) {
+      noteOpts.push({ id: n.id, label: `Daily · ${n.dailyDate ?? n.title}` });
+    }
     for (const a of noteArtifacts) addPdf(a, 'This note');
     return {
       notes: noteOpts,
       pdfs: Array.from(pdfMap.values()),
     };
-  }, [eventsTree, noteArtifacts, notes, universityTree]);
+  }, [dailyNotes, eventsTree, noteArtifacts, notes, universityTree]);
 
   const handleSplitSelect = (value: string) => {
     if (value.startsWith('note:')) {
@@ -1564,6 +1579,7 @@ export function NotesPage({
           notes={notes}
           university={universityTree}
           events={eventsTree}
+          daily={dailyNotes}
           tags={tags}
           searchQuery={searchQuery}
           searchMode={searchMode}

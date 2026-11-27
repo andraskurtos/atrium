@@ -8,6 +8,7 @@ public static class NoteLinkKinds
     public const string UniversityCourse = "university_course";
     public const string UniversityItem = "university_item";
     public const string CalendarEvent = "calendar_event";
+    public const string Daily = "daily";
 }
 
 public sealed record NoteFolderDto(
@@ -40,7 +41,8 @@ public sealed record NoteSummaryDto(
     Guid? CalendarEventId = null,
     DateTimeOffset? CalendarOccurrenceStartAt = null,
     string LinkKind = NoteLinkKinds.General,
-    string? LinkLabel = null);
+    string? LinkLabel = null,
+    string? DailyDate = null);
 
 public sealed record NoteDetailDto(
     Guid Id,
@@ -59,7 +61,8 @@ public sealed record NoteDetailDto(
     Guid? CalendarEventId = null,
     DateTimeOffset? CalendarOccurrenceStartAt = null,
     string LinkKind = NoteLinkKinds.General,
-    string? LinkLabel = null);
+    string? LinkLabel = null,
+    string? DailyDate = null);
 
 public sealed record UniversityItemNotesTreeDto(
     Guid Id,
@@ -107,7 +110,8 @@ public sealed record NotesTreeResponse(
     IReadOnlyList<NoteSummaryDto> Notes,
     IReadOnlyList<NoteTagCountDto> Tags,
     IReadOnlyList<UniversitySemesterNotesTreeDto> University,
-    IReadOnlyList<EventNotesGroupDto> Events);
+    IReadOnlyList<EventNotesGroupDto> Events,
+    IReadOnlyList<NoteSummaryDto> Daily);
 
 public sealed record NoteConflictResponse(
     string Error,
@@ -143,4 +147,5 @@ public sealed record OpenLinkedNoteRequest(
     string Kind,
     Guid? UniversityActivityItemId = null,
     Guid? CalendarEventId = null,
-    DateTimeOffset? OccurrenceStartAt = null);
+    DateTimeOffset? OccurrenceStartAt = null,
+    string? DailyDate = null);

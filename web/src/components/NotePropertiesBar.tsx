@@ -67,7 +67,11 @@ export function NotePropertiesBar({
       {linkKind !== 'general' && linkLabel && (
         <div className="notes-link-breadcrumb">
           <span className="notes-link-badge">
-            {linkKind === 'calendar_event' ? 'Event' : 'University'}
+            {linkKind === 'calendar_event'
+              ? 'Event'
+              : linkKind === 'daily'
+                ? 'Daily'
+                : 'University'}
           </span>
           <span className="meta-text notes-link-path">{linkLabel}</span>
           {universityCourseId && onJumpToUniversityCourse && (

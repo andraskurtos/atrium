@@ -56,7 +56,8 @@ export type NoteLinkKind =
   | 'general'
   | 'university_course'
   | 'university_item'
-  | 'calendar_event';
+  | 'calendar_event'
+  | 'daily';
 
 export interface AttachmentSummary {
   id: string;
@@ -83,6 +84,7 @@ export interface NoteSummary {
   universityActivityItemId?: string | null;
   calendarEventId?: string | null;
   calendarOccurrenceStartAt?: string | null;
+  dailyDate?: string | null;
   linkKind?: NoteLinkKind;
   linkLabel?: string | null;
 }
@@ -103,6 +105,7 @@ export interface NoteDetail {
   universityActivityItemId?: string | null;
   calendarEventId?: string | null;
   calendarOccurrenceStartAt?: string | null;
+  dailyDate?: string | null;
   linkKind?: NoteLinkKind;
   linkLabel?: string | null;
 }
@@ -160,6 +163,7 @@ export interface NotesTreeResponse {
   tags: NoteTagCount[];
   university: UniversitySemesterNotesTree[];
   events: EventNotesGroup[];
+  daily: NoteSummary[];
 }
 
 export type PendingNoteTarget =
@@ -170,7 +174,8 @@ export type PendingNoteTarget =
       calendarEventId: string;
       occurrenceStartAt?: string | null;
     }
-  | { kind: 'new_course_note'; universityCourseId: string };
+  | { kind: 'new_course_note'; universityCourseId: string }
+  | { kind: 'daily'; dailyDate: string };
 
 export type UniversityActivityType =
   | 'lecture'

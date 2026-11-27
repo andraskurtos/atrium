@@ -3373,6 +3373,34 @@ select {
   font-family: inherit;
 }
 
+.daily-note-card {
+  cursor: pointer;
+}
+
+.daily-note-content {
+  cursor: text;
+  min-height: 112px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--surface-subtle);
+}
+
+.daily-note-content .notes-cm-host {
+  min-height: 96px;
+}
+
+.daily-note-content .cm-editor {
+  font-size: 0.9375rem;
+}
+
+.daily-note-placeholder {
+  margin: 0;
+  padding: 6px 2px;
+}
+
 @media (max-width: 767px) {
   .day-header-row {
     flex-direction: column;

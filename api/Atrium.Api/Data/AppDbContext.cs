@@ -419,6 +419,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(n => n.UniversityActivityItemId).HasColumnName("university_activity_item_id");
             entity.Property(n => n.CalendarEventId).HasColumnName("calendar_event_id");
             entity.Property(n => n.CalendarOccurrenceStartAt).HasColumnName("calendar_occurrence_start_at");
+            entity.Property(n => n.DailyDate).HasColumnName("daily_date").HasColumnType("date");
             entity.Property(n => n.Title).HasColumnName("title").HasMaxLength(200).IsRequired();
             entity.Property(n => n.Content).HasColumnName("content").IsRequired();
             entity.Property(n => n.ContentHash).HasColumnName("content_hash").HasMaxLength(64).IsRequired();
@@ -449,6 +450,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .IsUnique()
                 .HasDatabaseName("ix_notes_event_shared_unique")
                 .HasFilter("\"calendar_event_id\" IS NOT NULL AND \"calendar_occurrence_start_at\" IS NULL AND \"deleted_at\" IS NULL");
+            entity.HasIndex(n => new { n.UserId, n.DailyDate })
+                .IsUnique()
+                .HasDatabaseName("ix_notes_daily_date_unique")
+                .HasFilter("\"daily_date\" IS NOT NULL AND \"deleted_at\" IS NULL");
 
             entity.HasOne(n => n.User)
                 .WithMany()

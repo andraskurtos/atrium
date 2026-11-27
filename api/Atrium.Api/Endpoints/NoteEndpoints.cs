@@ -63,6 +63,7 @@ public static class NoteEndpoints
             var allVisibleNotesForTags = activeNotes
                 .Where(n =>
                     IsGeneralNote(n)
+                    || IsDailyNote(n)
                     || (IsUniversityNote(n) && canReadUni)
                     || (IsEventNote(n) && canReadCal))
                 .Select(n => (Note: n, EffectiveAgent: IsNoteAgentReadable(n, effectiveFolderAccess)))
@@ -75,6 +76,18 @@ public static class NoteEndpoints
                 .Select(g => new NoteTagCountDto(g.Key, g.Count()))
                 .OrderByDescending(t => t.Count)
                 .ThenBy(t => t.Tag, StringComparer.Ordinal)
+                .ToList();
+
+            var dailyNotes = activeNotes
+                .Where(IsDailyNote)
+                .Select(n => (Note: n, EffectiveAgent: IsNoteAgentReadable(n, effectiveFolderAccess)))
+                .Where(x => !isPat || x.EffectiveAgent)
+                .OrderByDescending(x => x.Note.DailyDate)
+                .Select(x => ToSummaryDto(
+                    x.Note,
+                    x.EffectiveAgent,
+                    null,
+                    BuildDailyLinkLabel(x.Note.DailyDate!.Value)))
                 .ToList();
 
             var universityTree = canReadUni
@@ -90,7 +103,8 @@ public static class NoteEndpoints
                 generalNotes,
                 tagCounts,
                 universityTree,
-                eventsTree));
+                eventsTree,
+                dailyNotes));
         }).RequireAuthorization(AuthConstants.HumanOrAgentPolicy);
 
         group.MapGet("/", async (
@@ -195,6 +209,7 @@ public static class NoteEndpoints
             var filteredCandidates = candidates
                 .Where(n =>
                     IsGeneralNote(n)
+                    || IsDailyNote(n)
                     || (IsUniversityNote(n) && canReadUni)
                     || (IsEventNote(n) && canReadCal))
                 .ToList();
@@ -734,7 +749,98 @@ public static class NoteEndpoints
                 }
             }
 
-            return Results.BadRequest(new { error = "kind must be 'university_item' or 'calendar_event'." });
+            if (kind == NoteLinkKinds.Daily)
+            {
+                if (string.IsNullOrWhiteSpace(request.DailyDate)
+                    || !DateOnly.TryParseExact(
+                        request.DailyDate.Trim(),
+                        "yyyy-MM-dd",
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.None,
+                        out var parsedDate))
+                {
+                    return Results.BadRequest(new { error = "dailyDate must be a valid yyyy-MM-dd date." });
+                }
+
+                var label = BuildDailyLinkLabel(parsedDate);
+                var existing = await db.Notes
+                    .AsNoTracking()
+                    .Include(n => n.Tags)
+                    .FirstOrDefaultAsync(
+                        n => n.UserId == userId.Value
+                            && n.DailyDate == parsedDate
+                            && n.DeletedAt == null,
+                        ct);
+                if (existing is not null)
+                {
+                    return Results.Ok(ToDetailDto(existing, existing.AllowAgentRead, label));
+                }
+
+                var legacy = await db.DailyNotes
+                    .FirstOrDefaultAsync(d => d.UserId == userId.Value && d.Date == parsedDate, ct);
+                var initialContent = legacy?.Content ?? string.Empty;
+                var parsedFm = NoteFrontmatter.Parse(initialContent);
+                var title = !string.IsNullOrWhiteSpace(parsedFm.Title)
+                    ? parsedFm.Title.Trim()
+                    : parsedDate.ToString("MMM d, yyyy", CultureInfo.InvariantCulture);
+                if (title.Length > MaxNoteTitleLength) title = title[..MaxNoteTitleLength];
+
+                var now = DateTimeOffset.UtcNow;
+                var created = new Note
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = userId.Value,
+                    DailyDate = parsedDate,
+                    Title = title,
+                    Content = initialContent,
+                    ContentHash = NoteFrontmatter.ComputeContentHash(initialContent),
+                    Version = 1,
+                    AllowAgentRead = true,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                };
+                foreach (var tag in parsedFm.Tags)
+                {
+                    created.Tags.Add(new NoteTag
+                    {
+                        NoteId = created.Id,
+                        UserId = userId.Value,
+                        Tag = tag,
+                    });
+                }
+
+                if (legacy is not null)
+                {
+                    db.DailyNotes.Remove(legacy);
+                }
+
+                db.Notes.Add(created);
+                try
+                {
+                    await db.SaveChangesAsync(ct);
+                    return Results.Created($"/api/notes/{created.Id}", ToDetailDto(created, created.AllowAgentRead, label));
+                }
+                catch (DbUpdateException)
+                {
+                    db.Entry(created).State = EntityState.Detached;
+                    var raced = await db.Notes
+                        .AsNoTracking()
+                        .Include(n => n.Tags)
+                        .FirstOrDefaultAsync(
+                            n => n.UserId == userId.Value
+                                && n.DailyDate == parsedDate
+                                && n.DeletedAt == null,
+                            ct);
+                    if (raced is not null)
+                    {
+                        return Results.Ok(ToDetailDto(raced, raced.AllowAgentRead, label));
+                    }
+
+                    throw;
+                }
+            }
+
+            return Results.BadRequest(new { error = "kind must be 'university_item', 'calendar_event', or 'daily'." });
         }).RequireAuthorization(AuthConstants.HumanJwtOnlyPolicy);
 
         group.MapPut("/{id:guid}", async (
@@ -1056,7 +1162,13 @@ public static class NoteEndpoints
             .Any(c => string.Equals(c.Value, scope, StringComparison.Ordinal));
 
     private static bool IsGeneralNote(Note n) =>
-        !n.UniversityCourseId.HasValue && !n.UniversityActivityItemId.HasValue && !n.CalendarEventId.HasValue;
+        !n.UniversityCourseId.HasValue
+        && !n.UniversityActivityItemId.HasValue
+        && !n.CalendarEventId.HasValue
+        && !n.DailyDate.HasValue;
+
+    private static bool IsDailyNote(Note n) =>
+        n.DailyDate.HasValue;
 
     private static bool IsUniversityNote(Note n) =>
         n.UniversityCourseId.HasValue || n.UniversityActivityItemId.HasValue;
@@ -1066,11 +1178,15 @@ public static class NoteEndpoints
 
     private static string GetLinkKind(Note n)
     {
+        if (n.DailyDate.HasValue) return NoteLinkKinds.Daily;
         if (n.UniversityActivityItemId.HasValue) return NoteLinkKinds.UniversityItem;
         if (n.UniversityCourseId.HasValue) return NoteLinkKinds.UniversityCourse;
         if (n.CalendarEventId.HasValue) return NoteLinkKinds.CalendarEvent;
         return NoteLinkKinds.General;
     }
+
+    private static string BuildDailyLinkLabel(DateOnly date) =>
+        date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     private static string BuildCourseLinkLabel(UniversityCourse course)
     {
@@ -1157,7 +1273,11 @@ public static class NoteEndpoints
 
         foreach (var note in notes)
         {
-            if (note.UniversityActivityItemId.HasValue && items.TryGetValue(note.UniversityActivityItemId.Value, out var item))
+            if (note.DailyDate.HasValue)
+            {
+                labels[note.Id] = BuildDailyLinkLabel(note.DailyDate.Value);
+            }
+            else if (note.UniversityActivityItemId.HasValue && items.TryGetValue(note.UniversityActivityItemId.Value, out var item))
             {
                 labels[note.Id] = BuildItemLinkLabel(item.Course, item.Activity, item);
             }
@@ -1481,7 +1601,8 @@ public static class NoteEndpoints
             n.CalendarEventId,
             n.CalendarOccurrenceStartAt,
             GetLinkKind(n),
-            linkLabel);
+            linkLabel,
+            n.DailyDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
     }
 
     private static NoteDetailDto ToDetailDto(Note n, bool effectiveAgent, string? linkLabel = null) => new(
@@ -1501,6 +1622,7 @@ public static class NoteEndpoints
         n.CalendarEventId,
         n.CalendarOccurrenceStartAt,
         GetLinkKind(n),
-        linkLabel);
+        linkLabel,
+        n.DailyDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
 }
 

@@ -9,6 +9,7 @@ public sealed class Note
     public Guid? UniversityActivityItemId { get; set; }
     public Guid? CalendarEventId { get; set; }
     public DateTimeOffset? CalendarOccurrenceStartAt { get; set; }
+    public DateOnly? DailyDate { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Content { get; set; } = string.Empty;
     public string ContentHash { get; set; } = string.Empty;

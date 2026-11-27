@@ -1,4 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+} from 'react';
+
+const MarkdownEditor = lazy(() =>
+  import('./MarkdownEditor').then((m) => ({ default: m.MarkdownEditor })),
+);
 
 const MAX_NOTE_LENGTH = 10_000;
 const AUTOSAVE_DELAY_MS = 600;
@@ -10,6 +22,7 @@ interface DailyNoteCardProps {
   loading: boolean;
   loadError: string | null;
   onRetryLoad: () => void;
+  onOpenInNotes?: (dateKey: string) => void;
   onSaveNote: (
     dateKey: string,
     content: string,
@@ -26,6 +39,7 @@ export function DailyNoteCard({
   loading,
   loadError,
   onRetryLoad,
+  onOpenInNotes,
   onSaveNote,
 }: DailyNoteCardProps) {
   const [draft, setDraft] = useState(initialContent);
@@ -129,8 +143,12 @@ export function DailyNoteCard({
   }, [clearTimer]);
 
   const handleChange = (nextValue: string) => {
-    setDraft(nextValue);
-    draftRef.current = nextValue;
+    const clamped =
+      nextValue.length > MAX_NOTE_LENGTH
+        ? nextValue.slice(0, MAX_NOTE_LENGTH)
+        : nextValue;
+    setDraft(clamped);
+    draftRef.current = clamped;
     dirtyRef.current = true;
     editSeqRef.current += 1;
     setSaveState('idle');
@@ -171,10 +189,41 @@ export function DailyNoteCard({
     );
   };
 
+  const handleCardDoubleClick = (e: MouseEvent<HTMLElement>) => {
+    if (!onOpenInNotes || loading || Boolean(loadError)) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('.daily-note-content, button')) {
+      return;
+    }
+
+    clearTimer();
+    if (dirtyRef.current) {
+      const pendingDate = dateKeyRef.current;
+      const pendingDraft = draftRef.current;
+      dirtyRef.current = false;
+      void onSaveNoteRef
+        .current(pendingDate, pendingDraft, { background: true })
+        .catch(() => undefined)
+        .finally(() => onOpenInNotes(pendingDate));
+      return;
+    }
+
+    onOpenInNotes(dateKeyRef.current);
+  };
+
   const isDisabled = loading || Boolean(loadError);
 
   return (
-    <section className="card daily-note-card" aria-labelledby="daily-note-heading">
+    <section
+      className="card daily-note-card"
+      aria-labelledby="daily-note-heading"
+      title={
+        onOpenInNotes
+          ? 'Double-click the card border to open full Markdown note'
+          : undefined
+      }
+      onDoubleClick={handleCardDoubleClick}
+    >
       <div className="card-header">
         <h2 id="daily-note-heading" className="card-title">
           Daily Note
@@ -215,26 +264,34 @@ export function DailyNoteCard({
         </div>
       </div>
 
-      <label className="sr-only" htmlFor="daily-note-textarea">
-        Daily note for {dateLabel}
-      </label>
-      <textarea
-        id="daily-note-textarea"
-        className="input daily-note-textarea"
-        rows={5}
-        maxLength={MAX_NOTE_LENGTH}
-        disabled={isDisabled}
-        value={isDisabled ? '' : draft}
-        onChange={(e) => handleChange(e.target.value)}
+      <div
+        className="daily-note-content"
+        aria-label={`Daily note for ${dateLabel}`}
         onBlur={handleBlur}
-        placeholder={
-          loading
-            ? `Loading note for ${dateLabel}…`
-            : loadError
-              ? 'Could not load this day’s note.'
-              : `Jot down notes, thoughts, or context for ${dateLabel}…`
-        }
-      />
+      >
+        {isDisabled ? (
+          <p className="meta-text daily-note-placeholder">
+            {loading
+              ? `Loading note for ${dateLabel}…`
+              : 'Could not load this day’s note.'}
+          </p>
+        ) : (
+          <Suspense
+            fallback={
+              <p className="meta-text daily-note-placeholder">
+                Loading editor…
+              </p>
+            }
+          >
+            <MarkdownEditor
+              key={dateKey}
+              value={draft}
+              mode="live"
+              onChange={handleChange}
+            />
+          </Suspense>
+        )}
+      </div>
 
       {(loadError || errorMessage) && (
         <p className="calendar-inline-error" role="alert">

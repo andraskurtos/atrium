@@ -107,7 +107,8 @@ export async function openLinkedNote(
         kind: 'calendar_event';
         calendarEventId: string;
         occurrenceStartAt?: string | null;
-      },
+      }
+    | { kind: 'daily'; dailyDate: string },
 ): Promise<NoteDetail> {
   return apiFetch<NoteDetail>('/api/notes/linked', {
     method: 'POST',

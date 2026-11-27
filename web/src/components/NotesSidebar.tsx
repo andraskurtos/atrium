@@ -33,6 +33,7 @@ import {
 
 const SHOW_UNI_KEY = 'atrium.notes.sidebar.showUni';
 const SHOW_EVENTS_KEY = 'atrium.notes.sidebar.showEvents';
+const SHOW_DAILY_KEY = 'atrium.notes.sidebar.showDaily';
 
 function readBoolPref(key: string, fallback: boolean): boolean {
   if (typeof window === 'undefined') return fallback;
@@ -60,6 +61,7 @@ interface NotesSidebarProps {
   notes: NoteSummary[];
   university: UniversitySemesterNotesTree[];
   events: EventNotesGroup[];
+  daily: NoteSummary[];
   tags: NoteTagCount[];
   searchQuery: string;
   searchMode: NoteSearchMode;
@@ -95,6 +97,7 @@ export function NotesSidebar({
   notes,
   university,
   events,
+  daily,
   tags,
   searchQuery,
   searchMode,
@@ -125,6 +128,9 @@ export function NotesSidebar({
   );
   const [showEvents, setShowEvents] = useState<boolean>(() =>
     readBoolPref(SHOW_EVENTS_KEY, false),
+  );
+  const [showDaily, setShowDaily] = useState<boolean>(() =>
+    readBoolPref(SHOW_DAILY_KEY, true),
   );
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
   const [creatingFolderParent, setCreatingFolderParent] = useState<
@@ -168,6 +174,18 @@ export function NotesSidebar({
       const next = !prev;
       try {
         window.localStorage.setItem(SHOW_EVENTS_KEY, String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
+  const toggleShowDaily = () => {
+    setShowDaily((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(SHOW_DAILY_KEY, String(next));
       } catch {
         // ignore
       }
@@ -767,6 +785,14 @@ export function NotesSidebar({
             >
               Events
             </button>
+            <button
+              type="button"
+              aria-pressed={showDaily}
+              className={`notes-section-toggle-chip ${showDaily ? 'is-active' : ''}`}
+              onClick={toggleShowDaily}
+            >
+              Daily
+            </button>
           </div>
 
           {tags.length > 0 && (
@@ -1303,6 +1329,39 @@ export function NotesSidebar({
                             </div>
                           );
                         })
+                      )}
+                    </div>
+                  )}
+                </section>
+              )}
+
+              {/* Daily Section */}
+              {showDaily && (
+                <section className="notes-sidebar-section">
+                  <button
+                    type="button"
+                    className="notes-sidebar-section-header"
+                    onClick={() => toggleExpand('section:daily', true)}
+                    aria-expanded={isNodeExpanded('section:daily', true)}
+                  >
+                    <ChevronRightIcon
+                      className={`notes-tree-chevron ${
+                        isNodeExpanded('section:daily', true)
+                          ? 'is-expanded'
+                          : ''
+                      }`}
+                    />
+                    <span>Daily</span>
+                  </button>
+
+                  {isNodeExpanded('section:daily', true) && (
+                    <div className="notes-tree-list">
+                      {daily.length === 0 ? (
+                        <p className="meta-text empty-state">
+                          No daily notes yet.
+                        </p>
+                      ) : (
+                        daily.map((note) => renderNoteButton(note, 0, false))
                       )}
                     </div>
                   )}
