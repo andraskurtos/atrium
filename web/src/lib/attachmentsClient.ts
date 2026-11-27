@@ -169,3 +169,13 @@ export function resolveAttachmentImageUrl(
   return promise;
 }
 
+
+export function isPdfAttachment(a: {
+  contentType: string;
+  fileName: string;
+}): boolean {
+  return (
+    a.contentType.toLowerCase().startsWith('application/pdf') ||
+    a.fileName.toLowerCase().endsWith('.pdf')
+  );
+}

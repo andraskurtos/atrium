@@ -8,6 +8,7 @@ import {
 } from 'react';
 import {
   downloadAttachment,
+  isPdfAttachment,
   type UploadAttachmentOptions,
 } from '../lib/attachmentsClient';
 import type { NoteSearchMode } from '../lib/notesClient';
@@ -73,6 +74,8 @@ interface NotesSidebarProps {
   onSelectNote: (noteId: string) => void;
   onSelectSearchResult: (noteId: string) => void;
   onOpenUniversityItemNote: (itemId: string) => Promise<void>;
+  onViewPdf: (artifact: AttachmentSummary) => void;
+  onOpenNoteSplit: (noteId: string) => void;
   onCreateCourseNote: (courseId: string) => Promise<void>;
   onUploadArtifact: (
     file: File,
@@ -106,6 +109,8 @@ export function NotesSidebar({
   onSelectNote,
   onSelectSearchResult,
   onOpenUniversityItemNote,
+  onViewPdf,
+  onOpenNoteSplit,
   onCreateCourseNote,
   onUploadArtifact,
   onMoveNoteToFolder,
@@ -352,21 +357,46 @@ export function NotesSidebar({
     },
   });
 
-  const renderArtifactButton = (artifact: AttachmentSummary, depth: number) => (
-    <button
-      key={artifact.id}
-      type="button"
-      className="notes-tree-note notes-tree-artifact"
-      style={{ paddingLeft: `${12 + depth * 12}px` }}
-      onClick={() => void downloadAttachment(artifact.id, artifact.fileName)}
-      title={`Download ${artifact.fileName}`}
-    >
-      <span className="notes-tree-artifact-glyph" aria-hidden="true">
-        📎
-      </span>
-      <span className="notes-tree-note-title">{artifact.fileName}</span>
-    </button>
-  );
+  const renderArtifactButton = (artifact: AttachmentSummary, depth: number) => {
+    const isPdf = isPdfAttachment(artifact);
+    return (
+      <div key={artifact.id} className="notes-tree-artifact-row">
+        <button
+          type="button"
+          className="notes-tree-note notes-tree-artifact"
+          style={{ paddingLeft: `${12 + depth * 12}px` }}
+          onClick={() =>
+            isPdf
+              ? onViewPdf(artifact)
+              : void downloadAttachment(artifact.id, artifact.fileName)
+          }
+          title={
+            isPdf
+              ? `View ${artifact.fileName} beside your note`
+              : `Download ${artifact.fileName}`
+          }
+        >
+          <span className="notes-tree-artifact-glyph" aria-hidden="true">
+            📎
+          </span>
+          <span className="notes-tree-note-title">{artifact.fileName}</span>
+        </button>
+        {isPdf && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-icon-sm notes-tree-artifact-download"
+            title={`Download ${artifact.fileName}`}
+            aria-label={`Download ${artifact.fileName}`}
+            onClick={() =>
+              void downloadAttachment(artifact.id, artifact.fileName)
+            }
+          >
+            ↓
+          </button>
+        )}
+      </div>
+    );
+  };
 
   const renderNoteButton = (
     note: NoteSummary,
@@ -386,13 +416,17 @@ export function NotesSidebar({
       }`}
       {...fileDropProps(`note:${note.id}`, ownerForNote(note))}
       style={{ paddingLeft: `${12 + depth * 12}px` }}
-      onClick={() => {
+      onClick={(e) => {
+        if (e.shiftKey) {
+          onOpenNoteSplit(note.id);
+          return;
+        }
         onSelectNote(note.id);
         onCloseMobile();
       }}
       title={
         allowDrag
-          ? `${note.title} (drag into a folder to move)`
+          ? `${note.title} (drag into a folder to move, Shift+click to open beside)`
           : note.title
       }
     >

@@ -12,6 +12,7 @@ import {
   deleteAttachment,
   downloadAttachment,
   formatFileSize,
+  isPdfAttachment,
   listAttachments,
   uploadAttachment,
   type AttachmentFilter,
@@ -69,6 +70,12 @@ import {
 } from './MarkdownEditor';
 import { NotePropertiesBar } from './NotePropertiesBar';
 import { NotesSidebar } from './NotesSidebar';
+import { NoteReadPane, PdfViewerPane } from './SplitPanes';
+
+type SplitPaneState =
+  | { kind: 'note'; noteId: string }
+  | { kind: 'pdf'; attachment: AttachmentSummary }
+  | null;
 
 export type NotesViewMode = 'live' | 'reading' | 'source';
 
@@ -142,6 +149,8 @@ export function NotesPage({
   const [noteArtifacts, setNoteArtifacts] = useState<AttachmentSummary[]>([]);
   const [uploadingArtifact, setUploadingArtifact] = useState(false);
   const [canvasFileDrag, setCanvasFileDrag] = useState(false);
+  const [splitPane, setSplitPane] = useState<SplitPaneState>(null);
+  const [splitSide, setSplitSide] = useState<'left' | 'right'>('right');
   const inlineImageInputRef = useRef<HTMLInputElement | null>(null);
   const noteArtifactInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -1207,6 +1216,94 @@ export function NotesPage({
     })();
   };
 
+  const splitOptions = useMemo(() => {
+    const noteOpts: Array<{ id: string; label: string }> = [];
+    const pdfMap = new Map<string, { att: AttachmentSummary; label: string }>();
+    const addPdf = (att: AttachmentSummary, label: string) => {
+      if (isPdfAttachment(att) && !pdfMap.has(att.id)) {
+        pdfMap.set(att.id, { att, label: `${label} · ${att.fileName}` });
+      }
+    };
+    for (const n of notes) noteOpts.push({ id: n.id, label: n.title });
+    for (const sem of universityTree) {
+      for (const c of sem.courses) {
+        const cl = c.code ?? c.name;
+        for (const n of c.notes) noteOpts.push({ id: n.id, label: `${cl} · ${n.title}` });
+        for (const a of c.artifacts) addPdf(a, cl);
+        for (const act of c.activities) {
+          for (const item of act.items) {
+            if (item.note) {
+              noteOpts.push({ id: item.note.id, label: `${cl} › ${item.title}` });
+            }
+            for (const a of item.artifacts) addPdf(a, `${cl} › ${item.title}`);
+          }
+        }
+      }
+    }
+    for (const evt of eventsTree) {
+      if (evt.sharedNote) {
+        noteOpts.push({ id: evt.sharedNote.id, label: evt.sharedNote.title });
+      }
+      for (const a of evt.sharedArtifacts) addPdf(a, evt.title);
+      for (const occ of evt.occurrences) {
+        if (occ.note) noteOpts.push({ id: occ.note.id, label: occ.note.title });
+        for (const a of occ.artifacts) addPdf(a, evt.title);
+      }
+    }
+    for (const a of noteArtifacts) addPdf(a, 'This note');
+    return {
+      notes: noteOpts,
+      pdfs: Array.from(pdfMap.values()),
+    };
+  }, [eventsTree, noteArtifacts, notes, universityTree]);
+
+  const handleSplitSelect = (value: string) => {
+    if (value.startsWith('note:')) {
+      setSplitPane({ kind: 'note', noteId: value.slice(5) });
+    } else if (value.startsWith('pdf:')) {
+      const found = splitOptions.pdfs.find((p) => p.att.id === value.slice(4));
+      if (found) setSplitPane({ kind: 'pdf', attachment: found.att });
+    }
+  };
+
+  const handleViewPdf = (artifact: AttachmentSummary) => {
+    setSplitPane({ kind: 'pdf', attachment: artifact });
+  };
+
+  const handleOpenNoteSplit = (noteId: string) => {
+    if (noteId === selectedNoteIdRef.current) return;
+    setSplitPane({ kind: 'note', noteId });
+  };
+
+  const handleSplitOpenInEditor = async (noteId: string) => {
+    const previous = selectedNoteIdRef.current;
+    await openNote(noteId);
+    setSplitPane(previous && previous !== noteId ? { kind: 'note', noteId: previous } : null);
+  };
+
+  const toggleSplitSide = () =>
+    setSplitSide((prev) => (prev === 'right' ? 'left' : 'right'));
+
+  const closeSplit = () => setSplitPane(null);
+
+  const splitPaneNode = splitPane ? (
+    splitPane.kind === 'pdf' ? (
+      <PdfViewerPane
+        attachment={splitPane.attachment}
+        onSwap={toggleSplitSide}
+        onClose={closeSplit}
+      />
+    ) : (
+      <NoteReadPane
+        noteId={splitPane.noteId}
+        refreshKey={notes.length + (activeNote?.version ?? 0)}
+        onOpenInEditor={(id) => void handleSplitOpenInEditor(id)}
+        onSwap={toggleSplitSide}
+        onClose={closeSplit}
+      />
+    )
+  ) : null;
+
   const readingBody = useMemo(
     () => stripFrontmatterForReading(draftContent),
     [draftContent],
@@ -1364,6 +1461,54 @@ export function NotesPage({
               )}
 
               <div className="notes-toolbar-right">
+                <div className="notes-split-controls">
+                  <select
+                    className="input notes-split-select"
+                    aria-label="Open beside the current note"
+                    value=""
+                    onChange={(e) => handleSplitSelect(e.target.value)}
+                  >
+                    <option value="">Split view…</option>
+                    <optgroup label="Notes">
+                      {splitOptions.notes
+                        .filter((o) => o.id !== activeNote.id)
+                        .map((o) => (
+                          <option key={o.id} value={`note:${o.id}`}>
+                            {o.label}
+                          </option>
+                        ))}
+                    </optgroup>
+                    <optgroup label="PDFs">
+                      {splitOptions.pdfs.map((p) => (
+                        <option key={p.att.id} value={`pdf:${p.att.id}`}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                  {splitPane && (
+                    <>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={toggleSplitSide}
+                        title="Swap sides"
+                        aria-label="Swap sides"
+                      >
+                        ⇄
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={closeSplit}
+                        title="Close split view"
+                        aria-label="Close split view"
+                      >
+                        ×
+                      </button>
+                    </>
+                  )}
+                </div>
                 {saveState === 'saving' && (
                   <span className="pill-neutral daily-note-status">Saving…</span>
                 )}
@@ -1435,6 +1580,8 @@ export function NotesPage({
           onSelectNote={(id) => void openNote(id)}
           onSelectSearchResult={handleSelectSearchResult}
           onOpenUniversityItemNote={handleOpenUniversityItemNote}
+          onViewPdf={handleViewPdf}
+          onOpenNoteSplit={handleOpenNoteSplit}
           onCreateCourseNote={handleCreateCourseNote}
           onUploadArtifact={handleUploadSidebarArtifact}
           onMoveNoteToFolder={handleMoveAnyNoteToFolder}
@@ -1445,8 +1592,11 @@ export function NotesPage({
           onDeleteFolder={handleDeleteFolder}
         />
 
-        <div
-          className={`notes-canvas-scroll ${canvasFileDrag ? 'is-file-drag' : ''}`}
+        <div className={`notes-main-area ${splitPane ? 'is-split' : ''}`}>
+
+        {splitPane && splitSide === 'left' && splitPaneNode}
+
+        <div className={`notes-canvas-scroll ${canvasFileDrag ? 'is-file-drag' : ''}`}
           onDragOver={handleCanvasDragOver}
           onDragLeave={handleCanvasDragLeave}
           onDrop={handleCanvasDrop}
@@ -1718,6 +1868,16 @@ export function NotesPage({
                           {formatFileSize(art.sizeBytes)}
                         </span>
                       </button>
+                      {isPdfAttachment(art) && (
+                        <button
+                          type="button"
+                          className="notes-artifact-view"
+                          onClick={() => handleViewPdf(art)}
+                          title={`View ${art.fileName} beside this note`}
+                        >
+                          View
+                        </button>
+                      )}
                       {mode !== 'reading' && (
                         <button
                           type="button"
@@ -1782,6 +1942,8 @@ export function NotesPage({
             )}
           </div>
         </div>
+        {splitPane && splitSide === 'right' && splitPaneNode}
+      </div>
       </div>
 
       <footer className="notes-statusbar">
