@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type DragEvent,
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import {
@@ -140,6 +141,7 @@ export function NotesPage({
   const [treeLoading, setTreeLoading] = useState(true);
   const [noteArtifacts, setNoteArtifacts] = useState<AttachmentSummary[]>([]);
   const [uploadingArtifact, setUploadingArtifact] = useState(false);
+  const [canvasFileDrag, setCanvasFileDrag] = useState(false);
   const inlineImageInputRef = useRef<HTMLInputElement | null>(null);
   const noteArtifactInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -1154,6 +1156,57 @@ export function NotesPage({
     );
   };
 
+  const handleCanvasDragOver = (e: DragEvent<HTMLElement>) => {
+    if (!e.dataTransfer.types.includes('Files') || !activeNoteRef.current) {
+      return;
+    }
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setCanvasFileDrag(true);
+  };
+
+  const handleCanvasDragLeave = (e: DragEvent<HTMLElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      setCanvasFileDrag(false);
+    }
+  };
+
+  const handleCanvasDrop = (e: DragEvent<HTMLElement>) => {
+    setCanvasFileDrag(false);
+    const note = activeNoteRef.current;
+    if (!note || e.dataTransfer.files.length === 0) return;
+    e.preventDefault();
+    // In edit modes the editor already embeds dropped images inline.
+    const files = Array.from(e.dataTransfer.files).filter(
+      (f) =>
+        modeRef.current === 'reading' ||
+        !/^image\/(png|jpeg|webp|gif)$/i.test(f.type),
+    );
+    if (files.length === 0) return;
+    void (async () => {
+      setUploadingArtifact(true);
+      try {
+        const { upload } = getArtifactOwnerForNote(note);
+        for (const file of files) {
+          await uploadAttachment(file, { kind: 'artifact', ...upload });
+        }
+        await refreshActiveArtifacts(note);
+        await refreshTree();
+        onAnnounce(
+          files.length === 1
+            ? `Attached "${files[0].name}"`
+            : `Attached ${files.length} files`,
+        );
+      } catch (err) {
+        onAnnounce(
+          err instanceof Error ? err.message : 'Could not attach file',
+        );
+      } finally {
+        setUploadingArtifact(false);
+      }
+    })();
+  };
+
   const readingBody = useMemo(
     () => stripFrontmatterForReading(draftContent),
     [draftContent],
@@ -1392,7 +1445,12 @@ export function NotesPage({
           onDeleteFolder={handleDeleteFolder}
         />
 
-        <div className="notes-canvas-scroll">
+        <div
+          className={`notes-canvas-scroll ${canvasFileDrag ? 'is-file-drag' : ''}`}
+          onDragOver={handleCanvasDragOver}
+          onDragLeave={handleCanvasDragLeave}
+          onDrop={handleCanvasDrop}
+        >
           <div className="notes-canvas">
             {saveState === 'conflict' && conflictNote && (
               <div className="notes-conflict-banner" role="alert">

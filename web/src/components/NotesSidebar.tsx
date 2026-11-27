@@ -136,6 +136,9 @@ export function NotesSidebar({
   const [dropTargetFolderId, setDropTargetFolderId] = useState<
     string | 'root' | null
   >(null);
+  const [fileDropTargetKey, setFileDropTargetKey] = useState<string | null>(
+    null,
+  );
 
   const artifactUploadInputRef = useRef<HTMLInputElement | null>(null);
   const pendingUploadOwnerRef = useRef<Omit<
@@ -305,6 +308,50 @@ export function NotesSidebar({
     void onMoveNoteToFolder(noteId, targetFolderId);
   };
 
+  const ownerForNote = (
+    note: NoteSummary,
+  ): Omit<UploadAttachmentOptions, 'kind'> => {
+    if (note.universityActivityItemId) {
+      return { universityActivityItemId: note.universityActivityItemId };
+    }
+    if (note.calendarEventId) {
+      return {
+        calendarEventId: note.calendarEventId,
+        calendarOccurrenceStartAt: note.calendarOccurrenceStartAt ?? null,
+      };
+    }
+    return { noteId: note.id };
+  };
+
+  const fileDropProps = (
+    key: string,
+    owner: Omit<UploadAttachmentOptions, 'kind'>,
+  ) => ({
+    'data-file-drop': fileDropTargetKey === key ? 'true' : undefined,
+    onDragOver: (e: DragEvent<HTMLElement>) => {
+      if (!e.dataTransfer.types.includes('Files')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+      if (fileDropTargetKey !== key) setFileDropTargetKey(key);
+    },
+    onDragLeave: () => {
+      if (fileDropTargetKey === key) setFileDropTargetKey(null);
+    },
+    onDrop: (e: DragEvent<HTMLElement>) => {
+      if (e.dataTransfer.files.length === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setFileDropTargetKey(null);
+      const files = Array.from(e.dataTransfer.files);
+      void (async () => {
+        for (const file of files) {
+          await onUploadArtifact(file, owner);
+        }
+      })();
+    },
+  });
+
   const renderArtifactButton = (artifact: AttachmentSummary, depth: number) => (
     <button
       key={artifact.id}
@@ -337,6 +384,7 @@ export function NotesSidebar({
       className={`notes-tree-note ${selectedNoteId === note.id ? 'is-selected' : ''} ${
         draggingNoteId === note.id ? 'is-dragging' : ''
       }`}
+      {...fileDropProps(`note:${note.id}`, ownerForNote(note))}
       style={{ paddingLeft: `${12 + depth * 12}px` }}
       onClick={() => {
         onSelectNote(note.id);
@@ -879,6 +927,7 @@ export function NotesSidebar({
                                       <div
                                         className="notes-tree-folder-row"
                                         style={{ paddingLeft: '20px' }}
+                                        {...fileDropProps(`course:${course.id}`, { universityCourseId: course.id })}
                                       >
                                         <button
                                           type="button"
@@ -1023,6 +1072,7 @@ export function NotesSidebar({
                                                           style={{
                                                             paddingLeft: '44px',
                                                           }}
+                                                          {...fileDropProps(`item:${item.id}`, { universityActivityItemId: item.id })}
                                                         >
                                                           {hasArtifacts ? (
                                                             <button

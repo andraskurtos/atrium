@@ -4576,3 +4576,16 @@ select {
 
 
 
+
+/* Drag-and-drop file upload targets */
+[data-file-drop='true'] {
+  outline: 1.5px dashed var(--accent);
+  outline-offset: -2px;
+  background-color: var(--accent-soft);
+}
+
+.notes-canvas-scroll.is-file-drag {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+  background-color: var(--accent-soft);
+}
