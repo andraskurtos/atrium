@@ -64,6 +64,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(p => p.RequireAgentApproval).HasColumnName("require_agent_approval");
             entity.Property(p => p.MorningBrief).HasColumnName("morning_brief");
             entity.Property(p => p.EventReminders).HasColumnName("event_reminders");
+            entity.Property(p => p.AiInferenceUrl).HasColumnName("ai_inference_url").HasMaxLength(500);
+            entity.Property(p => p.AiModel).HasColumnName("ai_model").HasMaxLength(120);
+            entity.Property(p => p.AiApiKeyEncrypted).HasColumnName("ai_api_key_encrypted").HasColumnType("text");
 
             entity.HasOne(p => p.User)
                 .WithOne(u => u.Preferences)

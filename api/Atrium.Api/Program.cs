@@ -1,6 +1,7 @@
 using System.Text;
 using System.Threading.RateLimiting;
 using Atrium.Api.Auth;
+using Atrium.Api.Chat;
 using Atrium.Api.Data;
 using Atrium.Api.Data.Entities;
 using Atrium.Api.Endpoints;
@@ -40,10 +41,16 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<IDatabaseHealthCheck, EfDatabaseHealthCheck>();
 builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddSingleton<JwtTokenService>();
+builder.Services.AddSingleton<SecretProtector>();
 builder.Services.AddSingleton<IAttachmentStorage, LocalDiskAttachmentStorage>();
 builder.Services.AddSingleton<IArtifactTextExtractor, DefaultArtifactTextExtractor>();
 builder.Services.AddScoped<ArtifactTextService>();
 builder.Services.AddScoped<KnowledgeReadService>();
+builder.Services.AddScoped<OpenAiChatService>();
+builder.Services.AddHttpClient(OpenAiChatService.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(2);
+});
 builder.Services.AddHostedService<ArtifactTextBackfillService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services
@@ -235,6 +242,7 @@ app.MapDayEndpoints();
 app.MapNoteEndpoints();
 app.MapAttachmentEndpoints();
 app.MapKnowledgeEndpoints();
+app.MapChatEndpoints();
 app.MapMcp("/mcp").RequireAuthorization(AuthConstants.AgentPatOnlyPolicy);
 
 var configuredDistPath = builder.Configuration["Atrium:WebDistPath"];

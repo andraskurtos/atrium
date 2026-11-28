@@ -105,6 +105,7 @@ public static class AccountEndpoints
             UpdatePreferencesRequest request,
             ClaimsPrincipal principal,
             AppDbContext db,
+            SecretProtector secretProtector,
             CancellationToken ct) =>
         {
             var userId = principal.GetUserId();
@@ -122,6 +123,35 @@ public static class AccountEndpoints
                 return Results.BadRequest(new { error = "Invalid preference value." });
             }
 
+            string? normalizedUrl = null;
+            if (request.AiInferenceUrl is not null)
+            {
+                var trimmedUrl = request.AiInferenceUrl.Trim().TrimEnd('/');
+                if (trimmedUrl.Length > 0)
+                {
+                    if (trimmedUrl.Length > 500
+                        || !Uri.TryCreate(trimmedUrl, UriKind.Absolute, out var uri)
+                        || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                    {
+                        return Results.BadRequest(new { error = "Inference URL must be a valid http:// or https:// URL (500 characters max)." });
+                    }
+
+                    normalizedUrl = trimmedUrl;
+                }
+            }
+
+            string? normalizedModel = null;
+            if (request.AiModel is not null)
+            {
+                var trimmedModel = request.AiModel.Trim();
+                if (trimmedModel.Length > 120)
+                {
+                    return Results.BadRequest(new { error = "Model name must be 120 characters or fewer." });
+                }
+
+                normalizedModel = trimmedModel.Length > 0 ? trimmedModel : null;
+            }
+
             var prefs = user.Preferences;
             if (prefs is null)
             {
@@ -135,6 +165,31 @@ public static class AccountEndpoints
             prefs.RequireAgentApproval = request.RequireAgentApproval;
             prefs.MorningBrief = request.MorningBrief;
             prefs.EventReminders = request.EventReminders;
+
+            if (request.AiInferenceUrl is not null)
+            {
+                prefs.AiInferenceUrl = normalizedUrl;
+            }
+
+            if (request.AiModel is not null)
+            {
+                prefs.AiModel = normalizedModel;
+            }
+
+            if (request.ClearAiApiKey)
+            {
+                prefs.AiApiKeyEncrypted = null;
+            }
+            else if (!string.IsNullOrWhiteSpace(request.AiApiKey))
+            {
+                var trimmedKey = request.AiApiKey.Trim();
+                if (trimmedKey.Length > 512)
+                {
+                    return Results.BadRequest(new { error = "API key must be 512 characters or fewer." });
+                }
+
+                prefs.AiApiKeyEncrypted = secretProtector.Protect(trimmedKey);
+            }
 
             await db.SaveChangesAsync(ct);
             return Results.Ok(AuthMappings.ToPreferencesDto(prefs));

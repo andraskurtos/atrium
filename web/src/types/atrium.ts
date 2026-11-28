@@ -307,6 +307,35 @@ export interface AccountPreferences {
   requireAgentApproval: boolean;
   morningBrief: boolean;
   eventReminders: boolean;
+  aiInferenceUrl?: string | null;
+  aiModel?: string | null;
+  hasAiApiKey?: boolean;
+}
+
+export interface UpdatePreferencesPayload extends AccountPreferences {
+  aiApiKey?: string | null;
+  clearAiApiKey?: boolean;
+}
+
+export interface ChatCitation {
+  sourceType: 'note' | 'artifact';
+  id: string;
+  title: string;
+  linkLabel?: string | null;
+  pageLabel?: string | null;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  citations?: ChatCitation[];
+  error?: boolean;
+}
+
+export interface ChatScope {
+  courseId: string | null;
+  courseLabel?: string | null;
 }
 
 export interface AgentToken {

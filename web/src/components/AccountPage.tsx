@@ -9,6 +9,7 @@ import type {
   InviteItem,
   SessionItem,
   ThemePreference,
+  UpdatePreferencesPayload,
   UserProfile,
 } from '../types/atrium';
 import {
@@ -45,7 +46,7 @@ interface AccountPageProps {
     timezone: string;
     avatarDataUrl: string | null;
   }) => Promise<void>;
-  onUpdatePreferences: (next: AccountPreferences) => Promise<void>;
+  onUpdatePreferences: (next: UpdatePreferencesPayload) => Promise<void>;
   onSetTheme: (theme: ThemePreference) => void;
   onChangePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   onCreateToken: (name: string, scopes: string[]) => Promise<string>;
@@ -137,6 +138,62 @@ export function AccountPage({
     setBio(profile.bio);
     setTimezone(profile.timezone);
   }, [profile]);
+
+  // AI Inference settings state
+  const [aiInferenceUrl, setAiInferenceUrl] = useState(
+    preferences.aiInferenceUrl ?? '',
+  );
+  const [aiModel, setAiModel] = useState(preferences.aiModel ?? '');
+  const [aiApiKeyInput, setAiApiKeyInput] = useState('');
+  const [showAiApiKey, setShowAiApiKey] = useState(false);
+  const [savingAiSettings, setSavingAiSettings] = useState(false);
+  const [aiSettingsError, setAiSettingsError] = useState('');
+
+  useEffect(() => {
+    setAiInferenceUrl(preferences.aiInferenceUrl ?? '');
+    setAiModel(preferences.aiModel ?? '');
+  }, [preferences.aiInferenceUrl, preferences.aiModel]);
+
+  async function handleSaveAiSettings(e: FormEvent) {
+    e.preventDefault();
+    setAiSettingsError('');
+    setSavingAiSettings(true);
+    try {
+      await onUpdatePreferences({
+        ...preferences,
+        aiInferenceUrl: aiInferenceUrl.trim(),
+        aiModel: aiModel.trim(),
+        aiApiKey: aiApiKeyInput.trim() || undefined,
+      });
+      setAiApiKeyInput('');
+      onAnnounce('AI Assistant settings saved');
+    } catch (err) {
+      setAiSettingsError(
+        err instanceof ApiError ? err.message : 'Failed to save AI settings.',
+      );
+    } finally {
+      setSavingAiSettings(false);
+    }
+  }
+
+  async function handleClearAiApiKey() {
+    setAiSettingsError('');
+    setSavingAiSettings(true);
+    try {
+      await onUpdatePreferences({
+        ...preferences,
+        clearAiApiKey: true,
+      });
+      setAiApiKeyInput('');
+      onAnnounce('AI API key cleared');
+    } catch (err) {
+      setAiSettingsError(
+        err instanceof ApiError ? err.message : 'Failed to clear API key.',
+      );
+    } finally {
+      setSavingAiSettings(false);
+    }
+  }
 
   // Password form state
   const [currentPassword, setCurrentPassword] = useState('');
@@ -1037,7 +1094,123 @@ export function AccountPage({
           </div>
         </section>
 
-        {/* 5. Scoped MCP Agent Tokens */}
+        {/* 5. AI Assistant (OpenAI-Compatible Inference) */}
+        <section className="card" aria-labelledby="ai-assistant-heading">
+          <div className="card-header">
+            <div className="card-header-group">
+              <h2 id="ai-assistant-heading" className="card-title">
+                AI Assistant
+              </h2>
+              <span className="pill-accent">OpenAI API</span>
+            </div>
+            <span className="meta-text">
+              {preferences.aiInferenceUrl && preferences.aiModel
+                ? 'Configured'
+                : 'Not configured'}
+            </span>
+          </div>
+
+          <form className="settings-form" onSubmit={(e) => void handleSaveAiSettings(e)}>
+            <div className="form-grid-2">
+              <div className="form-field">
+                <label className="field-label" htmlFor="account-ai-url">
+                  Inference Base URL
+                </label>
+                <input
+                  id="account-ai-url"
+                  type="url"
+                  className="input mono-num"
+                  value={aiInferenceUrl}
+                  onChange={(e) => setAiInferenceUrl(e.target.value)}
+                  placeholder="https://api.openai.com/v1 or http://localhost:11434/v1"
+                  maxLength={500}
+                />
+              </div>
+
+              <div className="form-field">
+                <label className="field-label" htmlFor="account-ai-model">
+                  Model Name
+                </label>
+                <input
+                  id="account-ai-model"
+                  type="text"
+                  className="input mono-num"
+                  value={aiModel}
+                  onChange={(e) => setAiModel(e.target.value)}
+                  placeholder="gpt-4o-mini, llama3.2, qwen2.5…"
+                  maxLength={120}
+                />
+              </div>
+            </div>
+
+            <div className="form-field">
+              <div className="field-label-row">
+                <label className="field-label" htmlFor="account-ai-key">
+                  API Key{' '}
+                  <span className="meta-text">
+                    ({preferences.hasAiApiKey ? 'Saved · encrypted' : 'Optional for local servers'})
+                  </span>
+                </label>
+                <div className="avatar-actions">
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    onClick={() => setShowAiApiKey((prev) => !prev)}
+                  >
+                    {showAiApiKey ? <EyeOffIcon /> : <EyeIcon />}
+                    <span>{showAiApiKey ? 'Hide' : 'Show'}</span>
+                  </button>
+                  {preferences.hasAiApiKey && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      disabled={savingAiSettings}
+                      onClick={() => void handleClearAiApiKey()}
+                    >
+                      Clear key
+                    </button>
+                  )}
+                </div>
+              </div>
+              <input
+                id="account-ai-key"
+                type={showAiApiKey ? 'text' : 'password'}
+                className="input mono-num"
+                value={aiApiKeyInput}
+                onChange={(e) => setAiApiKeyInput(e.target.value)}
+                placeholder={
+                  preferences.hasAiApiKey
+                    ? '•••••••••••••••• (enter new key to replace)'
+                    : 'sk-… (leave empty for local Ollama / LM Studio)'
+                }
+                autoComplete="off"
+                maxLength={512}
+              />
+            </div>
+
+            {aiSettingsError && (
+              <p className="field-error" role="alert">
+                {aiSettingsError}
+              </p>
+            )}
+
+            <div className="form-footer">
+              <span className="meta-text">
+                Used by the right-hand chat sidebar via OpenAI Chat Completions.
+              </span>
+              <button
+                id="account-save-ai-btn"
+                type="submit"
+                className="btn btn-primary"
+                disabled={savingAiSettings}
+              >
+                {savingAiSettings ? 'Saving…' : 'Save AI Settings'}
+              </button>
+            </div>
+          </form>
+        </section>
+
+        {/* 6. Scoped MCP Agent Tokens */}
         <section className="card" aria-labelledby="tokens-heading">
           <div className="card-header">
             <div className="card-header-group">

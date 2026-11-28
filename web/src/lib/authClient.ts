@@ -4,6 +4,7 @@ import type {
   HouseholdMember,
   InviteItem,
   SessionItem,
+  UpdatePreferencesPayload,
   UserProfile,
 } from '../types/atrium';
 
@@ -236,7 +237,7 @@ export async function updateProfile(payload: {
 }
 
 export async function updatePreferences(
-  payload: AccountPreferences,
+  payload: UpdatePreferencesPayload,
 ): Promise<AccountPreferences> {
   return apiFetch<AccountPreferences>('/api/account/preferences', {
     method: 'PUT',

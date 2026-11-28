@@ -10,6 +10,7 @@ import {
 import { AccountPage } from './components/AccountPage';
 import { AuthScreen } from './components/AuthScreen';
 import { CalendarCard } from './components/CalendarCard';
+import { ChatSidebar } from './components/ChatSidebar';
 import { ChecklistCard } from './components/ChecklistCard';
 import { CommandPalette, type CommandItem } from './components/CommandPalette';
 import { DailyNoteCard } from './components/DailyNoteCard';
@@ -103,12 +104,15 @@ import {
   type UpdateCourseInput,
 } from './lib/universityClient';
 import { clearNotesDraft } from './lib/markdownUtils';
+import { streamChat } from './lib/chatClient';
 import type {
   AccountPreferences,
   AgentToken,
   AppView,
   CalendarEvent,
   CaptureKind,
+  ChatMessage,
+  ChatScope,
   DailyCheckItem,
   DailyNote,
   HouseholdMember,
@@ -118,6 +122,7 @@ import type {
   RecurrenceScope,
   SessionItem,
   UniversityAttendanceStatus,
+  UpdatePreferencesPayload,
   UniversityCourse,
   UserCalendar,
   UserProfile,
@@ -662,15 +667,137 @@ export function App() {
     setProfile(updated);
   };
 
-  const handleUpdatePreferences = async (next: AccountPreferences) => {
+  const handleUpdatePreferences = async (next: UpdatePreferencesPayload) => {
+    const previous = preferences;
     setPreferences(next);
     try {
       const saved = await updatePreferences(next);
       setPreferences(saved);
-    } catch {
+    } catch (err) {
+      setPreferences(previous);
       announce('Could not save preferences');
+      throw err;
     }
   };
+
+  // Collapsible AI Chat Sidebar (in-memory per-scope threads)
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatScope, setChatScope] = useState<ChatScope>({ courseId: null });
+  const [chatThreads, setChatThreads] = useState<Record<string, ChatMessage[]>>({});
+  const [chatStreaming, setChatStreaming] = useState(false);
+  const [chatStatusText, setChatStatusText] = useState<string | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
+
+  const chatThreadKey = chatScope.courseId ? `course:${chatScope.courseId}` : 'global';
+  const activeChatMessages = chatThreads[chatThreadKey] ?? [];
+  const isAiConfigured = Boolean(
+    preferences.aiInferenceUrl?.trim() && preferences.aiModel?.trim(),
+  );
+
+  const handleStopChat = useCallback(() => {
+    chatAbortRef.current?.abort();
+    chatAbortRef.current = null;
+    setChatStreaming(false);
+    setChatStatusText(null);
+  }, []);
+
+  const handleOpenCourseChat = useCallback((course: UniversityCourse) => {
+    const label = course.code ? `${course.code} · ${course.name}` : course.name;
+    setChatScope({ courseId: course.id, courseLabel: label });
+    setIsChatOpen(true);
+  }, []);
+
+  const handleSendChat = useCallback(
+    async (prompt: string) => {
+      if (chatStreaming) return;
+      const scopeKey = chatThreadKey;
+      const scopeCourseId = chatScope.courseId;
+      const userMsg: ChatMessage = {
+        id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        role: 'user',
+        content: prompt,
+      };
+      const assistantId = `a_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const assistantMsg: ChatMessage = {
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+      };
+
+      const historyPayload = [
+        ...(chatThreads[scopeKey] ?? [])
+          .filter((m) => !m.error && m.content.trim().length > 0)
+          .map((m) => ({ role: m.role, content: m.content })),
+        { role: 'user' as const, content: prompt },
+      ];
+
+      setChatThreads((prev) => ({
+        ...prev,
+        [scopeKey]: [...(prev[scopeKey] ?? []), userMsg, assistantMsg],
+      }));
+      setChatStreaming(true);
+      setChatStatusText('Thinking…');
+
+      const controller = new AbortController();
+      chatAbortRef.current = controller;
+
+      try {
+        await streamChat({
+          messages: historyPayload,
+          courseId: scopeCourseId,
+          signal: controller.signal,
+          onStatus: (status) => setChatStatusText(status),
+          onDelta: (delta) => {
+            setChatStatusText(null);
+            setChatThreads((prev) => ({
+              ...prev,
+              [scopeKey]: (prev[scopeKey] ?? []).map((m) =>
+                m.id === assistantId ? { ...m, content: m.content + delta } : m,
+              ),
+            }));
+          },
+          onCitations: (citations) => {
+            setChatThreads((prev) => ({
+              ...prev,
+              [scopeKey]: (prev[scopeKey] ?? []).map((m) =>
+                m.id === assistantId ? { ...m, citations } : m,
+              ),
+            }));
+          },
+          onError: (message) => {
+            setChatThreads((prev) => ({
+              ...prev,
+              [scopeKey]: (prev[scopeKey] ?? []).map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: m.content || message, error: true }
+                  : m,
+              ),
+            }));
+          },
+        });
+      } catch (err) {
+        if ((err as Error)?.name !== 'AbortError') {
+          const message =
+            err instanceof Error ? err.message : 'Chat request failed.';
+          setChatThreads((prev) => ({
+            ...prev,
+            [scopeKey]: (prev[scopeKey] ?? []).map((m) =>
+              m.id === assistantId
+                ? { ...m, content: m.content || message, error: true }
+                : m,
+            ),
+          }));
+        }
+      } finally {
+        if (chatAbortRef.current === controller) {
+          chatAbortRef.current = null;
+        }
+        setChatStreaming(false);
+        setChatStatusText(null);
+      }
+    },
+    [chatScope.courseId, chatStreaming, chatThreadKey, chatThreads],
+  );
 
   const handleChangePassword = async (
     currentPassword: string,
@@ -1342,6 +1469,8 @@ export function App() {
         activeView={activeView}
         profile={profile}
         theme={theme}
+        isChatOpen={isChatOpen}
+        onToggleChat={() => setIsChatOpen((prev) => !prev)}
         onCycleTheme={cycleTheme}
         onOpenCommandPalette={() => setIsCommandOpen(true)}
         onNavigate={navigateTo}
@@ -1409,6 +1538,7 @@ export function App() {
               setPendingNoteTarget(target);
               navigateTo('notes');
             }}
+            onAskAboutCourse={handleOpenCourseChat}
             onAnnounce={announce}
           />
 
@@ -1748,6 +1878,31 @@ export function App() {
           />
         </>
       )}
+
+      <ChatSidebar
+        isOpen={isChatOpen}
+        scope={chatScope}
+        isConfigured={isAiConfigured}
+        modelLabel={preferences.aiModel}
+        messages={activeChatMessages}
+        streaming={chatStreaming}
+        statusText={chatStatusText}
+        onClose={() => setIsChatOpen(false)}
+        onClearScope={() => setChatScope({ courseId: null })}
+        onNewChat={() =>
+          setChatThreads((prev) => ({
+            ...prev,
+            [chatThreadKey]: [],
+          }))
+        }
+        onSend={(prompt) => void handleSendChat(prompt)}
+        onStop={handleStopChat}
+        onOpenSettings={() => navigateTo('account')}
+        onOpenNote={(noteId) => {
+          setPendingNoteTarget({ kind: 'note_id', noteId });
+          navigateTo('notes');
+        }}
+      />
 
       <CommandPalette
         isOpen={isCommandOpen}

@@ -1,6 +1,7 @@
 import { getInitials } from '../data/mockData';
 import type { AppView, ThemePreference, UserProfile } from '../types/atrium';
 import {
+  ChatIcon,
   GraduationCapIcon,
   MoonIcon,
   NoteIcon,
@@ -13,6 +14,8 @@ interface TopBarProps {
   activeView: AppView;
   profile: UserProfile;
   theme: ThemePreference;
+  isChatOpen?: boolean;
+  onToggleChat?: () => void;
   onCycleTheme: () => void;
   onOpenCommandPalette: () => void;
   onNavigate: (view: AppView) => void;
@@ -23,6 +26,8 @@ export function TopBar({
   activeView,
   profile,
   theme,
+  isChatOpen = false,
+  onToggleChat,
   onCycleTheme,
   onOpenCommandPalette,
   onNavigate,
@@ -101,6 +106,22 @@ export function TopBar({
             <NoteIcon />
             <span className="topbar-nav-pill-label">Notes</span>
           </button>
+
+          {onToggleChat && (
+            <button
+              id="topbar-chat-btn"
+              type="button"
+              className={`btn btn-compact topbar-nav-pill ${
+                isChatOpen ? 'is-active' : 'btn-ghost'
+              }`}
+              onClick={onToggleChat}
+              aria-pressed={isChatOpen}
+              title="Toggle AI Assistant sidebar"
+            >
+              <ChatIcon />
+              <span className="topbar-nav-pill-label">Assistant</span>
+            </button>
+          )}
 
           <button
             id="topbar-command-btn"

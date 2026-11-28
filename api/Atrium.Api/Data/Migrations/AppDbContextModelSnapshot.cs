@@ -222,6 +222,9 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
         modelBuilder.Entity("Atrium.Api.Data.Entities.UserPreferences", b =>
         {
             b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+            b.Property<string>("AiApiKeyEncrypted").HasColumnType("text").HasColumnName("ai_api_key_encrypted");
+            b.Property<string>("AiInferenceUrl").HasMaxLength(500).HasColumnType("character varying(500)").HasColumnName("ai_inference_url");
+            b.Property<string>("AiModel").HasMaxLength(120).HasColumnType("character varying(120)").HasColumnName("ai_model");
             b.Property<bool>("EventReminders").HasColumnType("boolean").HasColumnName("event_reminders");
             b.Property<bool>("MorningBrief").HasColumnType("boolean").HasColumnName("morning_brief");
             b.Property<bool>("RequireAgentApproval").HasColumnType("boolean").HasColumnName("require_agent_approval");
