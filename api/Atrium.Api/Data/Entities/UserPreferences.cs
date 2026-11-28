@@ -12,6 +12,13 @@ public sealed class UserPreferences
     public string? AiInferenceUrl { get; set; }
     public string? AiModel { get; set; }
     public string? AiApiKeyEncrypted { get; set; }
+    public Guid? DefaultAiModelId { get; set; }
+    public Guid? DefaultVisionModelId { get; set; }
+    public string? WebSearchProvider { get; set; }
+    public string? WebSearchUrl { get; set; }
+    public string? WebSearchApiKeyEncrypted { get; set; }
 
     public User User { get; set; } = null!;
+    public AiModel? DefaultAiModel { get; set; }
+    public AiModel? DefaultVisionModel { get; set; }
 }

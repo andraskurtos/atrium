@@ -167,6 +167,17 @@ public sealed class KnowledgeAndMcpTests
             "list_artifacts",
             "read_artifact_text",
             "search_knowledge",
+            "create_note",
+            "update_note",
+            "extract_pdf_images",
+            "create_checklist_item",
+            "toggle_checklist_item",
+            "create_event",
+            "create_course",
+            "create_activity",
+            "create_activity_item",
+            "create_activity_items",
+            "create_quiz",
         };
 
         Assert.Equal(expectedTools.Length, tools.Count);
@@ -488,5 +499,193 @@ public sealed class KnowledgeAndMcpTests
         Assert.Equal(2, search.TotalReturned);
         Assert.Contains(search.Hits, h => h.SourceType == "note" && h.Id == note.Id);
         Assert.Contains(search.Hits, h => h.SourceType == "artifact" && h.Id == courseArtifact.Id);
+    }
+
+    [Fact]
+    public async Task McpWriteTools_CreateCoursesLecturesMultipleNotesEventsTasks_AndEnforceScopesAndPrivacy()
+    {
+        using var factory = new TestAppFactory();
+        using var client = factory.CreateClient();
+        await SetupOwnerAsync(client);
+
+        // Private note must NOT be updatable by an agent PAT even with notes:write
+        var privateNote = await (await client.PostAsJsonAsync(
+            "/api/notes",
+            new CreateNoteRequest("Private Journal", null, "Do not overwrite", AllowAgentRead: false)))
+            .Content.ReadFromJsonAsync<NoteDetailDto>();
+        Assert.NotNull(privateNote);
+
+        var readOnlyPat = await CreatePatAsync(client, "ReadOnly", "notes:read", "university:read");
+        var (roErr, roText) = await CallMcpToolAsync(
+            client,
+            readOnlyPat,
+            "create_course",
+            new { name = "Blocked Course" });
+        Assert.True(roErr);
+        Assert.Contains("university:write", roText, StringComparison.Ordinal);
+
+        var writePat = await CreatePatAsync(
+            client,
+            "FullReadWrite",
+            "notes:read", "notes:write",
+            "tasks:read", "tasks:write",
+            "calendar:read", "calendar:write",
+            "university:read", "university:write");
+
+        // 1. Create course -> activity -> lecture item via MCP
+        var (cErr, cJson) = await CallMcpToolAsync(client, writePat, "create_course", new
+        {
+            name = "Operating Systems",
+            code = "CS320",
+            semester = "2026 Fall",
+        });
+        Assert.False(cErr, cJson);
+        var createdCourse = JsonSerializer.Deserialize<UniversityCourseDto>(cJson, JsonOptions);
+        Assert.NotNull(createdCourse);
+
+        var (aErr, aJson) = await CallMcpToolAsync(client, writePat, "create_activity", new
+        {
+            courseId = createdCourse.Id,
+            activityType = "lecture",
+            title = "Lectures",
+        });
+        Assert.False(aErr, aJson);
+        var createdAct = JsonSerializer.Deserialize<UniversityCourseActivityDto>(aJson, JsonOptions);
+        Assert.NotNull(createdAct);
+
+        var (iErr, iJson) = await CallMcpToolAsync(client, writePat, "create_activity_item", new
+        {
+            activityId = createdAct.Id,
+            title = "Lecture 1",
+            theme = "Processes & Threads",
+            sequenceNumber = 1,
+            startAt = "2026-11-28T09:00:00Z",
+            endAt = "2026-11-28T10:30:00Z",
+        });
+        Assert.False(iErr, iJson);
+        var createdItem = JsonSerializer.Deserialize<UniversityActivityItemDto>(iJson, JsonOptions);
+        Assert.NotNull(createdItem);
+        Assert.NotNull(createdItem.CalendarEventId);
+
+        // 2. Attach MULTIPLE notes to the same lecture via MCP
+        var (n1Err, n1Json) = await CallMcpToolAsync(client, writePat, "create_note", new
+        {
+            title = "Lecture 1 Raw Notes",
+            content = "Context switches save registers.",
+            universityActivityItemId = createdItem.Id,
+        });
+        Assert.False(n1Err, n1Json);
+        var note1 = JsonSerializer.Deserialize<NoteDetailDto>(n1Json, JsonOptions);
+        Assert.NotNull(note1);
+
+        var (n2Err, n2Json) = await CallMcpToolAsync(client, writePat, "create_note", new
+        {
+            title = "Study Guide — Lecture 1",
+            content = "# Study Guide\n\n> [!note] Key Concept\n> PCB stores process state.",
+            universityActivityItemId = createdItem.Id,
+        });
+        Assert.False(n2Err, n2Json);
+        var note2 = JsonSerializer.Deserialize<NoteDetailDto>(n2Json, JsonOptions);
+        Assert.NotNull(note2);
+        Assert.NotEqual(note1.Id, note2.Id);
+
+        // Notes tree returns BOTH notes for that lecture
+        var tree = await client.GetFromJsonAsync<NotesTreeResponse>("/api/notes/tree");
+        Assert.NotNull(tree);
+        var treeItem = tree.University
+            .SelectMany(s => s.Courses)
+            .SelectMany(c => c.Activities)
+            .SelectMany(a => a.Items)
+            .First(i => i.Id == createdItem.Id);
+        Assert.NotNull(treeItem.Notes);
+        Assert.Equal(2, treeItem.Notes.Count);
+
+        // 3. Update agent-readable note succeeds; updating private note is blocked
+        var (uErr, uJson) = await CallMcpToolAsync(client, writePat, "update_note", new
+        {
+            noteId = note2.Id,
+            content = "# Study Guide\nUpdated with exam tips.",
+        });
+        Assert.False(uErr, uJson);
+
+        var (privErr, _) = await CallMcpToolAsync(client, writePat, "update_note", new
+        {
+            noteId = privateNote.Id,
+            content = "Attempted hijack",
+        });
+        Assert.True(privErr);
+
+        // 4. Create & toggle checklist item + create calendar event
+        var (tErr, tJson) = await CallMcpToolAsync(client, writePat, "create_checklist_item", new
+        {
+            title = "Review OS study guide",
+            date = "2026-11-28",
+            dueTime = "19:00",
+        });
+        Assert.False(tErr, tJson);
+        var task = JsonSerializer.Deserialize<DailyCheckItemDto>(tJson, JsonOptions);
+        Assert.NotNull(task);
+
+        var (togErr, togJson) = await CallMcpToolAsync(client, writePat, "toggle_checklist_item", new
+        {
+            itemId = task.Id,
+            isCompleted = true,
+        });
+        Assert.False(togErr, togJson);
+        var toggled = JsonSerializer.Deserialize<DailyCheckItemDto>(togJson, JsonOptions);
+        Assert.NotNull(toggled);
+        Assert.True(toggled.IsCompleted);
+
+        var (evErr, evJson) = await CallMcpToolAsync(client, writePat, "create_event", new
+        {
+            title = "OS Office Hours",
+            startAt = "2026-11-29T14:00:00Z",
+            endAt = "2026-11-29T15:00:00Z",
+            location = "Room 301",
+        });
+        Assert.False(evErr, evJson);
+        var createdEvent = JsonSerializer.Deserialize<CalendarEventDto>(evJson, JsonOptions);
+        Assert.NotNull(createdEvent);
+        Assert.Equal("OS Office Hours", createdEvent.Title);
+
+        // 5. Batch create_activity_items creates multiple scheduled items + calendar events and enforces 50-item limit
+        var batchItems = Enumerable.Range(2, 4).Select(i => new
+        {
+            title = $"Lecture {i}",
+            theme = $"Topic {i}",
+            sequenceNumber = i,
+            startAt = new DateTimeOffset(2026, 9, 8, 10, 15, 0, TimeSpan.Zero).AddDays((i - 1) * 7).ToString("O"),
+            endAt = new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero).AddDays((i - 1) * 7).ToString("O"),
+            location = "IE220",
+        }).ToArray();
+
+        var (batchErr, batchJson) = await CallMcpToolAsync(client, writePat, "create_activity_items", new
+        {
+            activityId = createdItem.ActivityId,
+            items = batchItems,
+        });
+        Assert.False(batchErr, batchJson);
+        var batchRes = JsonSerializer.Deserialize<BatchCreateActivityItemsResponse>(batchJson, JsonOptions);
+        Assert.NotNull(batchRes);
+        Assert.Equal(4, batchRes.CreatedCount);
+        Assert.Equal(4, batchRes.Items.Count);
+        Assert.All(batchRes.Items, it => Assert.NotNull(it.CalendarEventId));
+
+        // Read-only PAT is denied
+        var (roBatchErr, _) = await CallMcpToolAsync(client, readOnlyPat, "create_activity_items", new
+        {
+            activityId = createdItem.ActivityId,
+            items = batchItems,
+        });
+        Assert.True(roBatchErr);
+
+        // > 50 items rejected
+        var tooMany = Enumerable.Range(1, 51).Select(i => new { title = $"Item {i}" }).ToArray();
+        var (limitErr, _) = await CallMcpToolAsync(client, writePat, "create_activity_items", new
+        {
+            activityId = createdItem.ActivityId,
+            items = tooMany,
+        });
+        Assert.True(limitErr);
     }
 }

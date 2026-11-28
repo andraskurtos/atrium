@@ -10,6 +10,7 @@ import hljs from 'highlight.js/lib/common';
 import 'katex/dist/katex.min.css';
 import type { Components, ExtraProps } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
+import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import {
   isInternalAttachmentUrl,
@@ -22,7 +23,7 @@ import {
   sanitizeMarkdownUrl,
 } from './markdownUtils.ts';
 
-export const readingRemarkPlugins = [remarkMath];
+export const readingRemarkPlugins = [remarkGfm, remarkMath];
 export const readingRehypePlugins = [rehypeKatex];
 
 function extractCodeText(children: ReactNode): string {
@@ -368,6 +369,13 @@ export const readingMarkdownComponents: Components = {
   },
   blockquote({ children }) {
     return renderReadingBlockquote(children);
+  },
+  table({ children }) {
+    return createElement(
+      'div',
+      { className: 'chat-table-scroll notes-reading-table-wrap' },
+      createElement('table', null, children),
+    );
   },
   a({ href, children }) {
     const safeHref = href ? sanitizeMarkdownUrl(href, 'link') : null;

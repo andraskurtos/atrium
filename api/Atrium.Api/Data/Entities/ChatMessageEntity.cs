@@ -13,5 +13,6 @@ public sealed class ChatMessageEntity
 
     public ChatThread Thread { get; set; } = null!;
     public User User { get; set; } = null!;
+    public ICollection<ChatAttachment> Attachments { get; } = [];
 }
 

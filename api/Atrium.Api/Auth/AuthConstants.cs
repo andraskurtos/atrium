@@ -34,11 +34,15 @@ public static class AuthConstants
     {
         "calendar:read",
         "calendar:propose",
+        "calendar:write",
         "tasks:read",
         "tasks:propose",
+        "tasks:write",
         "vault:read",
         "notes:read",
+        "notes:write",
         "university:read",
         "university:propose",
+        "university:write",
     };
 }

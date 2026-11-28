@@ -69,7 +69,8 @@ public sealed record UniversityItemNotesTreeDto(
     string Title,
     int? SequenceNumber,
     NoteSummaryDto? Note,
-    IReadOnlyList<AttachmentDto> Artifacts);
+    IReadOnlyList<AttachmentDto> Artifacts,
+    IReadOnlyList<NoteSummaryDto>? Notes = null);
 
 public sealed record UniversityActivityNotesTreeDto(
     Guid Id,
@@ -133,7 +134,8 @@ public sealed record CreateNoteRequest(
     Guid? FolderId = null,
     string? Content = null,
     bool AllowAgentRead = true,
-    Guid? UniversityCourseId = null);
+    Guid? UniversityCourseId = null,
+    Guid? UniversityActivityItemId = null);
 
 public sealed record UpdateNoteRequest(
     string? Title = null,

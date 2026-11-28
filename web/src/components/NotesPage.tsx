@@ -164,7 +164,7 @@ export function NotesPage({
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState<NoteSearchMode>('titles');
-  const [activeTag, setActiveTag] = useState<string | null>(null);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [searchResults, setSearchResults] = useState<NoteSummary[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchRefreshTick, setSearchRefreshTick] = useState(0);
@@ -545,10 +545,10 @@ export function NotesPage({
     };
   }, [clearSaveTimer, enqueueNoteTask]);
 
-  // Debounced search & tag filter
+  // Debounced search & multi-tag filter
   useEffect(() => {
     const trimmed = searchQuery.trim();
-    if (!trimmed && !activeTag) {
+    if (!trimmed && selectedTags.length === 0) {
       setSearchResults(null);
       setSearching(false);
       return;
@@ -557,11 +557,35 @@ export function NotesPage({
     let cancelled = false;
     setSearching(true);
     const timer = window.setTimeout(() => {
-      void searchNotes({
-        q: trimmed || undefined,
-        searchIn: trimmed ? searchMode : undefined,
-        tag: activeTag ?? undefined,
-      })
+      const run = async () => {
+        if (selectedTags.length > 0) {
+          const perTagResults = await Promise.all(
+            selectedTags.map((tag) =>
+              searchNotes({
+                q: searchMode !== 'tags' && trimmed ? trimmed : undefined,
+                searchIn: searchMode !== 'tags' && trimmed ? searchMode : undefined,
+                tag,
+              }),
+            ),
+          );
+          const merged = new Map<string, NoteSummary>();
+          for (const list of perTagResults) {
+            for (const note of list) {
+              merged.set(note.id, note);
+            }
+          }
+          return Array.from(merged.values()).sort((a, b) =>
+            b.updatedAt.localeCompare(a.updatedAt),
+          );
+        }
+
+        return searchNotes({
+          q: trimmed || undefined,
+          searchIn: trimmed ? searchMode : undefined,
+        });
+      };
+
+      void run()
         .then((res) => {
           if (!cancelled) setSearchResults(res);
         })
@@ -577,7 +601,7 @@ export function NotesPage({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [activeTag, searchMode, searchQuery, searchRefreshTick]);
+  }, [selectedTags, searchMode, searchQuery, searchRefreshTick]);
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => {
@@ -773,26 +797,6 @@ export function NotesPage({
     }
   };
 
-  const handleOpenUniversityItemNote = async (itemId: string) => {
-    flushCurrentNote(false);
-    try {
-      const detail = await openLinkedNote({
-        kind: 'university_item',
-        universityActivityItemId: itemId,
-      });
-      latestVersionByNoteRef.current.set(detail.id, detail.version);
-      await refreshTree();
-      await openNote(detail.id);
-      if (modeRef.current === 'reading') {
-        switchMode('live');
-      }
-    } catch (err) {
-      onAnnounce(
-        err instanceof Error ? err.message : 'Could not open university note',
-      );
-    }
-  };
-
   const handleUploadSidebarArtifact = async (
     file: File,
     owner: Omit<UploadAttachmentOptions, 'kind'>,
@@ -909,6 +913,36 @@ export function NotesPage({
       onAnnounce(`Created note "${created.title}"`);
     } catch (err) {
       onAnnounce(err instanceof Error ? err.message : 'Could not create note');
+    }
+  };
+
+  const handleCreateUniversityItemNote = async (itemId: string) => {
+    flushCurrentNote(false);
+    try {
+      const created = await createNote({
+        title: 'Untitled',
+        universityActivityItemId: itemId,
+        content: '',
+      });
+      latestVersionByNoteRef.current.set(created.id, created.version);
+      await refreshTree();
+      setSelectedNoteId(created.id);
+      setActiveNote(created);
+      activeNoteRef.current = created;
+      setDraftTitle(created.title);
+      draftTitleRef.current = created.title;
+      setDraftContent(created.content);
+      draftContentRef.current = created.content;
+      dirtyRef.current = false;
+      conflictRef.current = false;
+      setSaveState('idle');
+      setConflictNote(null);
+      if (modeRef.current === 'reading') {
+        switchMode('live');
+      }
+      onAnnounce(`Created note "${created.title}"`);
+    } catch (err) {
+      onAnnounce(err instanceof Error ? err.message : 'Could not create lecture note');
     }
   };
 
@@ -1251,8 +1285,14 @@ export function NotesPage({
         for (const a of c.artifacts) addPdf(a, cl);
         for (const act of c.activities) {
           for (const item of act.items) {
-            if (item.note) {
-              noteOpts.push({ id: item.note.id, label: `${cl} › ${item.title}` });
+            const iNotes =
+              item.notes && item.notes.length > 0
+                ? item.notes
+                : item.note
+                  ? [item.note]
+                  : [];
+            for (const n of iNotes) {
+              noteOpts.push({ id: n.id, label: `${cl} › ${item.title} · ${n.title}` });
             }
             for (const a of item.artifacts) addPdf(a, `${cl} › ${item.title}`);
           }
@@ -1610,7 +1650,7 @@ export function NotesPage({
           tags={tags}
           searchQuery={searchQuery}
           searchMode={searchMode}
-          activeTag={activeTag}
+          selectedTags={selectedTags}
           searchResults={searchResults}
           searching={searching}
           selectedNoteId={selectedNoteId}
@@ -1619,10 +1659,10 @@ export function NotesPage({
           }}
           onSearchChange={setSearchQuery}
           onSearchModeChange={setSearchMode}
-          onSelectTag={setActiveTag}
+          onChangeSelectedTags={setSelectedTags}
           onSelectNote={(id) => void openNote(id)}
           onSelectSearchResult={handleSelectSearchResult}
-          onOpenUniversityItemNote={handleOpenUniversityItemNote}
+          onCreateUniversityItemNote={handleCreateUniversityItemNote}
           onViewPdf={handleViewPdf}
           onOpenNoteSplit={handleOpenNoteSplit}
           onCreateCourseNote={handleCreateCourseNote}

@@ -338,5 +338,349 @@ public sealed class ChatEndpointsTests
         Assert.NotNull(threadsAfter);
         Assert.Empty(threadsAfter);
     }
+
+    [Fact]
+    public async Task ChatStream_VisionAutoRouting_SwitchesForImageTurn_AndDowngradesHistoryForTurn2NonVision()
+    {
+        var seenRequests = new List<(string Url, string Body)>();
+        var handler = new FakeOpenAiHandler((req, body, idx) =>
+        {
+            seenRequests.Add((req.RequestUri?.ToString() ?? string.Empty, body));
+            return idx == 0
+                ? SseResponse("""{"choices":[{"delta":{"content":"I see a timetable."}}]}""")
+                : SseResponse("""{"choices":[{"delta":{"content":"Follow-up on text model."}}]}""");
+        });
+
+        await using var baseFactory = new TestAppFactory();
+        using var client = CreateChatClient(baseFactory, handler);
+        await SetupOwnerAsync(client);
+
+        var pText = await (await client.PostAsJsonAsync(
+            "/api/ai/providers",
+            new CreateAiProviderRequest("FastText", "https://text.example.test/v1", "sk-text")))
+            .Content.ReadFromJsonAsync<AiProviderDto>();
+        Assert.NotNull(pText);
+        var mText = await (await client.PostAsJsonAsync(
+            "/api/ai/models",
+            new CreateAiModelRequest(pText.Id, "fast-text-1", "Fast Text", SupportsVision: false)))
+            .Content.ReadFromJsonAsync<AiModelDto>();
+        Assert.NotNull(mText);
+
+        var pVision = await (await client.PostAsJsonAsync(
+            "/api/ai/providers",
+            new CreateAiProviderRequest("VisionProv", "https://vision.example.test/v1", "sk-vision")))
+            .Content.ReadFromJsonAsync<AiProviderDto>();
+        Assert.NotNull(pVision);
+        var mVision = await (await client.PostAsJsonAsync(
+            "/api/ai/models",
+            new CreateAiModelRequest(pVision.Id, "vision-pro", "Vision Pro", SupportsVision: true)))
+            .Content.ReadFromJsonAsync<AiModelDto>();
+        Assert.NotNull(mVision);
+
+        await client.PutAsJsonAsync(
+            "/api/ai/defaults",
+            new UpdateAiDefaultsRequest(mText.Id, mVision.Id, "duckduckgo", null, null, false));
+
+        // Upload a tiny valid PNG header
+        using var imgForm = new MultipartFormDataContent();
+        using var imgContent = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+        imgContent.Headers.ContentType = MediaTypeHeaderValue.Parse("image/png");
+        imgForm.Add(imgContent, "file", "timetable.png");
+        var uploadRes = await client.PostAsync("/api/chat/attachments", imgForm);
+        Assert.Equal(HttpStatusCode.Created, uploadRes.StatusCode);
+        var imgAtt = await uploadRes.Content.ReadFromJsonAsync<ChatAttachmentDto>();
+        Assert.NotNull(imgAtt);
+
+        // Turn 1: sends image while non-vision model selected → auto-routes to Vision Pro
+        var res1 = await client.PostAsJsonAsync(
+            "/api/chat/stream",
+            new ChatStreamRequest(
+                [new ChatMessageInput("user", "Read this timetable")],
+                ModelId: mText.Id,
+                AttachmentIds: [imgAtt.Id]));
+        Assert.Equal(HttpStatusCode.OK, res1.StatusCode);
+        var sse1 = await res1.Content.ReadAsStringAsync();
+        Assert.Contains("Switched to Vision Pro", sse1, StringComparison.Ordinal);
+        Assert.Single(seenRequests);
+        Assert.StartsWith("https://vision.example.test/v1", seenRequests[0].Url, StringComparison.Ordinal);
+        Assert.Contains("image_url", seenRequests[0].Body, StringComparison.Ordinal);
+        Assert.Contains("data:image/png;base64,", seenRequests[0].Body, StringComparison.Ordinal);
+
+        var threads = await client.GetFromJsonAsync<List<ChatThreadSummaryDto>>("/api/chat/threads");
+        Assert.NotNull(threads);
+        var threadId = threads[0].Id;
+        var detail1 = await client.GetFromJsonAsync<ChatThreadDetailDto>($"/api/chat/threads/{threadId}");
+        Assert.NotNull(detail1);
+        Assert.Equal(mText.Id, detail1.LastModelId); // LastModelId keeps user's chosen model!
+
+        // Turn 2: text-only follow-up on text model → no image_url, uses text placeholder instead
+        var res2 = await client.PostAsJsonAsync(
+            "/api/chat/stream",
+            new ChatStreamRequest(
+                [
+                    new ChatMessageInput("user", "Read this timetable"),
+                    new ChatMessageInput("assistant", "I see a timetable."),
+                    new ChatMessageInput("user", "What time is Friday lab?"),
+                ],
+                ThreadId: threadId,
+                ModelId: mText.Id));
+        Assert.Equal(HttpStatusCode.OK, res2.StatusCode);
+        Assert.Equal(2, seenRequests.Count);
+        Assert.StartsWith("https://text.example.test/v1", seenRequests[1].Url, StringComparison.Ordinal);
+        Assert.DoesNotContain("image_url", seenRequests[1].Body, StringComparison.Ordinal);
+        Assert.Contains("[Image attached: timetable.png]", seenRequests[1].Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ChatStream_ImageWithoutVisionModel_ReturnsBadRequest()
+    {
+        var handler = new FakeOpenAiHandler((_, _, _) => SseResponse("""{"choices":[{"delta":{"content":"ok"}}]}"""));
+        await using var baseFactory = new TestAppFactory();
+        using var client = CreateChatClient(baseFactory, handler);
+        await SetupOwnerAsync(client);
+
+        var p = await (await client.PostAsJsonAsync(
+            "/api/ai/providers",
+            new CreateAiProviderRequest("TextOnly", "https://text.example.test/v1", "sk-1")))
+            .Content.ReadFromJsonAsync<AiProviderDto>();
+        Assert.NotNull(p);
+        var m = await (await client.PostAsJsonAsync(
+            "/api/ai/models",
+            new CreateAiModelRequest(p.Id, "text-1", "Text 1", SupportsVision: false)))
+            .Content.ReadFromJsonAsync<AiModelDto>();
+        Assert.NotNull(m);
+
+        using var imgForm = new MultipartFormDataContent();
+        using var imgContent = new ByteArrayContent([0x89, 0x50, 0x4E, 0x47]);
+        imgContent.Headers.ContentType = MediaTypeHeaderValue.Parse("image/png");
+        imgForm.Add(imgContent, "file", "shot.png");
+        var imgAtt = await (await client.PostAsync("/api/chat/attachments", imgForm)).Content.ReadFromJsonAsync<ChatAttachmentDto>();
+        Assert.NotNull(imgAtt);
+
+        var res = await client.PostAsJsonAsync(
+            "/api/chat/stream",
+            new ChatStreamRequest([new ChatMessageInput("user", "What is this?")], AttachmentIds: [imgAtt.Id]));
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var errBody = await res.Content.ReadAsStringAsync();
+        Assert.Contains("vision", errBody, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ChatStream_InvalidOrCrossUserAttachmentIds_ReturnsBadRequest()
+    {
+        var handler = new FakeOpenAiHandler((_, _, _) => SseResponse("""{"choices":[{"delta":{"content":"ok"}}]}"""));
+        await using var baseFactory = new TestAppFactory();
+        using var client = CreateChatClient(baseFactory, handler);
+        await SetupOwnerAsync(client);
+
+        var p = await (await client.PostAsJsonAsync(
+            "/api/ai/providers",
+            new CreateAiProviderRequest("P", "https://text.example.test/v1", "sk-1")))
+            .Content.ReadFromJsonAsync<AiProviderDto>();
+        Assert.NotNull(p);
+        await client.PostAsJsonAsync(
+            "/api/ai/models",
+            new CreateAiModelRequest(p.Id, "m1", "M1", SupportsVision: false));
+
+        var res = await client.PostAsJsonAsync(
+            "/api/chat/stream",
+            new ChatStreamRequest(
+                [new ChatMessageInput("user", "Hello")],
+                AttachmentIds: [Guid.NewGuid()]));
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Empty(handler.RecordedRequests);
+    }
+
+    [Fact]
+    public async Task ChatStream_CourseSetupTools_QueryIcsAndBatchCreate()
+    {
+        string? capturedIcsId = null;
+        string? capturedCourseId = null;
+        string? capturedActivityId = null;
+
+        var handler = new FakeOpenAiHandler((_, body, idx) =>
+        {
+            if (idx == 0)
+            {
+                using var reqDoc = JsonDocument.Parse(body);
+                var sysPrompt = reqDoc.RootElement.GetProperty("messages")[0].GetProperty("content").GetString() ?? string.Empty;
+                var marker = "- `";
+                var start = sysPrompt.IndexOf(marker, StringComparison.Ordinal);
+                Assert.True(start >= 0, "Expected attachment manifest in system prompt");
+                capturedIcsId = sysPrompt.Substring(start + marker.Length, 36);
+                return SseResponse(
+                    $$$"""{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"query_chat_ics","arguments":"{\"attachmentId\":\"{{{capturedIcsId}}}\",\"query\":\"AGI\"}"}}]}}]}""");
+            }
+
+            if (idx == 1)
+            {
+                Assert.Contains("IE220", body, StringComparison.Ordinal);
+                return SseResponse(
+                    """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c2","type":"function","function":{"name":"create_course","arguments":"{\"name\":\"AGI\",\"code\":\"BMEAGI\",\"semester\":\"2026 Fall\"}"}}]}}]}""");
+            }
+
+            if (idx == 2)
+            {
+                using var doc = JsonDocument.Parse(body);
+                var lastContent = doc.RootElement.GetProperty("messages").EnumerateArray().Last().GetProperty("content").GetString()!;
+                using var courseDoc = JsonDocument.Parse(lastContent);
+                capturedCourseId = courseDoc.RootElement.GetProperty("id").GetString();
+                return SseResponse(
+                    $$$"""{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c3","type":"function","function":{"name":"create_activity","arguments":"{\"courseId\":\"{{{capturedCourseId}}}\",\"activityType\":\"lecture\",\"title\":\"Lectures\"}"}}]}}]}""");
+            }
+
+            if (idx == 3)
+            {
+                using var doc = JsonDocument.Parse(body);
+                var lastContent = doc.RootElement.GetProperty("messages").EnumerateArray().Last().GetProperty("content").GetString()!;
+                using var actDoc = JsonDocument.Parse(lastContent);
+                capturedActivityId = actDoc.RootElement.GetProperty("id").GetString();
+                return SseResponse(
+                    $$$"""{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c4","type":"function","function":{"name":"create_activity_items","arguments":"{\"activityId\":\"{{{capturedActivityId}}}\",\"items\":[{\"title\":\"Lecture 1\",\"theme\":\"Intro\",\"sequenceNumber\":1,\"startAt\":\"2026-09-08T10:15:00Z\",\"endAt\":\"2026-09-08T12:00:00Z\",\"location\":\"IE220\"},{\"title\":\"Lecture 2\",\"theme\":\"Search\",\"sequenceNumber\":2,\"startAt\":\"2026-09-15T10:15:00Z\",\"endAt\":\"2026-09-15T12:00:00Z\",\"location\":\"IE220\"}]}"}}]}}]}""");
+            }
+
+            return SseResponse("""{"choices":[{"delta":{"content":"Course AGI set up with 2 lectures."}}]}""");
+        });
+
+        await using var baseFactory = new TestAppFactory();
+        using var client = CreateChatClient(baseFactory, handler);
+        await SetupOwnerAsync(client);
+
+        var p = await (await client.PostAsJsonAsync(
+            "/api/ai/providers",
+            new CreateAiProviderRequest("P", "https://text.example.test/v1", "sk-1")))
+            .Content.ReadFromJsonAsync<AiProviderDto>();
+        Assert.NotNull(p);
+        await client.PostAsJsonAsync(
+            "/api/ai/models",
+            new CreateAiModelRequest(p.Id, "m1", "M1", SupportsVision: false));
+
+        const string ics = """
+            BEGIN:VCALENDAR
+            VERSION:2.0
+            X-WR-TIMEZONE:Europe/Budapest
+            BEGIN:VEVENT
+            UID:agi1
+            DTSTART:20260908T101500Z
+            DTEND:20260908T120000Z
+            LOCATION:IE220
+            SUMMARY:AGI Lecture
+            END:VEVENT
+            END:VCALENDAR
+            """;
+
+        using var icsForm = new MultipartFormDataContent();
+        using var icsBytes = new ByteArrayContent(Encoding.UTF8.GetBytes(ics));
+        icsBytes.Headers.ContentType = MediaTypeHeaderValue.Parse("text/calendar");
+        icsForm.Add(icsBytes, "file", "Neptun.ics");
+        var icsAtt = await (await client.PostAsync("/api/chat/attachments", icsForm)).Content.ReadFromJsonAsync<ChatAttachmentDto>();
+        Assert.NotNull(icsAtt);
+
+        var res = await client.PostAsJsonAsync(
+            "/api/chat/stream",
+            new ChatStreamRequest(
+                [new ChatMessageInput("user", "Set up AGI from Neptun.ics")],
+                AttachmentIds: [icsAtt.Id]));
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var sse = await res.Content.ReadAsStringAsync();
+        Assert.Contains("\"type\":\"mutation\"", sse, StringComparison.Ordinal);
+        Assert.Contains("Course AGI set up with 2 lectures.", sse, StringComparison.Ordinal);
+
+        var uni = await client.GetFromJsonAsync<UniversityWorkspaceResponse>("/api/university/workspace");
+        Assert.NotNull(uni);
+        var createdCourse = Assert.Single(uni.Courses, c => c.Code == "BMEAGI");
+        Assert.Equal(2, createdCourse.Activities[0].Items.Count);
+    }
+
+    [Fact]
+    public async Task ChatStream_PreservesGeminiThoughtSignatureAcrossToolRounds()
+    {
+        var handler = new FakeOpenAiHandler((_, body, idx) =>
+        {
+            if (idx == 0)
+            {
+                return SseResponse(
+                    """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_g1","type":"function","extra_content":{"google":{"thought_signature":"sig_abc_123"}},"function":{"name":"get_day","arguments":"{}"}}]}}]}""");
+            }
+
+            // Round 2 MUST echo back extra_content.google.thought_signature on the assistant tool call
+            Assert.Contains("sig_abc_123", body, StringComparison.Ordinal);
+            Assert.Contains("extra_content", body, StringComparison.Ordinal);
+            return SseResponse("""{"choices":[{"delta":{"content":"Today looks clear."}}]}""");
+        });
+
+        await using var baseFactory = new TestAppFactory();
+        using var client = CreateChatClient(baseFactory, handler);
+        await SetupOwnerAsync(client);
+
+        var p = await (await client.PostAsJsonAsync(
+            "/api/ai/providers",
+            new CreateAiProviderRequest("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "sk-g")))
+            .Content.ReadFromJsonAsync<AiProviderDto>();
+        Assert.NotNull(p);
+        await client.PostAsJsonAsync(
+            "/api/ai/models",
+            new CreateAiModelRequest(p.Id, "gemini-2.5-pro", "Gemini", SupportsVision: true));
+
+        var res = await client.PostAsJsonAsync(
+            "/api/chat/stream",
+            new ChatStreamRequest([new ChatMessageInput("user", "What is on my day today?")]));
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var sse = await res.Content.ReadAsStringAsync();
+        Assert.Contains("Today looks clear.", sse, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ChatStream_RespectsWebSearchToggleAndReadOnlyMode()
+    {
+        var handler = new FakeOpenAiHandler((_, body, idx) =>
+        {
+            if (idx == 0)
+            {
+                using var doc = JsonDocument.Parse(body);
+                var toolNames = doc.RootElement.GetProperty("tools")
+                    .EnumerateArray()
+                    .Select(t => t.GetProperty("function").GetProperty("name").GetString())
+                    .ToHashSet(StringComparer.Ordinal);
+
+                Assert.DoesNotContain("web_search", toolNames);
+                Assert.DoesNotContain("create_note", toolNames);
+                Assert.DoesNotContain("create_course", toolNames);
+                Assert.DoesNotContain("create_activity_items", toolNames);
+                Assert.Contains("get_day", toolNames);
+                Assert.Contains("fetch_url", toolNames);
+
+                // Even if the model tries to call a write tool anyway, server rejects it
+                return SseResponse(
+                    """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c_ro","type":"function","function":{"name":"create_note","arguments":"{\"title\":\"X\",\"content\":\"Y\"}"}}]}}]}""");
+            }
+
+            Assert.Contains("Read-only", body, StringComparison.OrdinalIgnoreCase);
+            return SseResponse("""{"choices":[{"delta":{"content":"Cannot write in read-only mode."}}]}""");
+        });
+
+        await using var baseFactory = new TestAppFactory();
+        using var client = CreateChatClient(baseFactory, handler);
+        await SetupOwnerAsync(client);
+
+        var p = await (await client.PostAsJsonAsync(
+            "/api/ai/providers",
+            new CreateAiProviderRequest("P", "https://text.example.test/v1", "sk-1")))
+            .Content.ReadFromJsonAsync<AiProviderDto>();
+        Assert.NotNull(p);
+        await client.PostAsJsonAsync(
+            "/api/ai/models",
+            new CreateAiModelRequest(p.Id, "m1", "M1", SupportsVision: false));
+
+        var res = await client.PostAsJsonAsync(
+            "/api/chat/stream",
+            new ChatStreamRequest(
+                [new ChatMessageInput("user", "Create a note")],
+                EnableWebSearch: false,
+                AllowWriteTools: false));
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var sse = await res.Content.ReadAsStringAsync();
+        Assert.Contains("Cannot write in read-only mode.", sse, StringComparison.Ordinal);
+    }
 }
 

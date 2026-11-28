@@ -1524,7 +1524,8 @@ public sealed class KnowledgeReadService(
 
         var itemNoteLookup = activeNotes
             .Where(n => n.UniversityActivityItemId.HasValue)
-            .ToDictionary(n => n.UniversityActivityItemId!.Value);
+            .GroupBy(n => n.UniversityActivityItemId!.Value)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(n => n.UpdatedAt).ToList());
 
         var courseArtifactsLookup = uniArtifacts
             .Where(a => !a.UniversityActivityItemId.HasValue && a.UniversityCourseId.HasValue && (!enforcePrivacy || a.AllowAgentRead))
@@ -1571,15 +1572,19 @@ public sealed class KnowledgeReadService(
                                     .ThenBy(i => i.CreatedAt)
                                     .Select(i =>
                                     {
-                                        NoteSummaryDto? noteDto = null;
+                                        var itemNotes = new List<NoteSummaryDto>();
                                         var itemHidden = false;
-                                        if (itemNoteLookup.TryGetValue(i.Id, out var linkedNote))
+                                        if (itemNoteLookup.TryGetValue(i.Id, out var linkedNotes))
                                         {
-                                            var eff = IsNoteAgentReadable(linkedNote, effectiveFolderAccess);
-                                            if (!eff) itemHidden = true;
-                                            if (!enforcePrivacy || eff)
+                                            var label = BuildItemLinkLabel(c, a, i);
+                                            foreach (var linkedNote in linkedNotes)
                                             {
-                                                noteDto = ToNoteSummaryDto(linkedNote, eff, null, BuildItemLinkLabel(c, a, i));
+                                                var eff = IsNoteAgentReadable(linkedNote, effectiveFolderAccess);
+                                                if (!eff) itemHidden = true;
+                                                if (!enforcePrivacy || eff)
+                                                {
+                                                    itemNotes.Add(ToNoteSummaryDto(linkedNote, eff, null, label));
+                                                }
                                             }
                                         }
 
@@ -1590,7 +1595,7 @@ public sealed class KnowledgeReadService(
                                                     ? rawArts.Select(AttachmentEndpoints.ToDto).ToList()
                                                     : []);
 
-                                        return new UniversityItemNotesTreeDto(i.Id, i.Title, i.SequenceNumber, noteDto, iArtifacts);
+                                        return new UniversityItemNotesTreeDto(i.Id, i.Title, i.SequenceNumber, itemNotes.FirstOrDefault(), iArtifacts, itemNotes);
                                     })
                                     .ToList();
 

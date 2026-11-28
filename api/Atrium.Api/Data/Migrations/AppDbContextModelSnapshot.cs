@@ -225,14 +225,21 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.Property<string>("AiApiKeyEncrypted").HasColumnType("text").HasColumnName("ai_api_key_encrypted");
             b.Property<string>("AiInferenceUrl").HasMaxLength(500).HasColumnType("character varying(500)").HasColumnName("ai_inference_url");
             b.Property<string>("AiModel").HasMaxLength(120).HasColumnType("character varying(120)").HasColumnName("ai_model");
+            b.Property<Guid?>("DefaultAiModelId").HasColumnType("uuid").HasColumnName("default_ai_model_id");
+            b.Property<Guid?>("DefaultVisionModelId").HasColumnType("uuid").HasColumnName("default_vision_model_id");
             b.Property<bool>("EventReminders").HasColumnType("boolean").HasColumnName("event_reminders");
             b.Property<bool>("MorningBrief").HasColumnType("boolean").HasColumnName("morning_brief");
             b.Property<bool>("RequireAgentApproval").HasColumnType("boolean").HasColumnName("require_agent_approval");
             b.Property<string>("Theme").IsRequired().HasMaxLength(16).HasColumnType("character varying(16)").HasColumnName("theme");
             b.Property<string>("TimeFormat").IsRequired().HasMaxLength(8).HasColumnType("character varying(8)").HasColumnName("time_format");
+            b.Property<string>("WebSearchApiKeyEncrypted").HasColumnType("text").HasColumnName("web_search_api_key_encrypted");
+            b.Property<string>("WebSearchProvider").HasMaxLength(32).HasColumnType("character varying(32)").HasColumnName("web_search_provider");
+            b.Property<string>("WebSearchUrl").HasMaxLength(500).HasColumnType("character varying(500)").HasColumnName("web_search_url");
             b.Property<string>("WeekStartsOn").IsRequired().HasMaxLength(16).HasColumnType("character varying(16)").HasColumnName("week_starts_on");
 
             b.HasKey("UserId");
+            b.HasIndex("DefaultAiModelId");
+            b.HasIndex("DefaultVisionModelId");
             b.ToTable("user_preferences", (string?)null);
         });
 
@@ -344,10 +351,7 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .HasDatabaseName("ix_notes_event_shared_unique")
                 .HasFilter("\"calendar_event_id\" IS NOT NULL AND \"calendar_occurrence_start_at\" IS NULL AND \"deleted_at\" IS NULL");
             b.HasIndex("FolderId");
-            b.HasIndex("UniversityActivityItemId")
-                .IsUnique()
-                .HasDatabaseName("ix_notes_uni_item_unique")
-                .HasFilter("\"university_activity_item_id\" IS NOT NULL AND \"deleted_at\" IS NULL");
+            b.HasIndex("UniversityActivityItemId");
             b.HasIndex("UniversityCourseId");
             b.HasIndex("CalendarEventId", "CalendarOccurrenceStartAt")
                 .IsUnique()
@@ -360,6 +364,7 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .HasDatabaseName("ix_notes_daily_date_unique")
                 .HasFilter("\"daily_date\" IS NOT NULL AND \"deleted_at\" IS NULL");
             b.HasIndex("UserId", "FolderId", "DeletedAt").HasDatabaseName("ix_notes_user_folder_deleted");
+            b.HasIndex("UserId", "UniversityActivityItemId", "DeletedAt").HasDatabaseName("ix_notes_user_uni_item");
             b.HasIndex("UserId", "UniversityCourseId", "DeletedAt").HasDatabaseName("ix_notes_user_uni_course");
             b.ToTable("notes", (string?)null);
         });
@@ -661,23 +666,181 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
             b.Property<Guid?>("CourseId").HasColumnType("uuid").HasColumnName("course_id");
             b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<Guid?>("LastModelId").HasColumnType("uuid").HasColumnName("last_model_id");
             b.Property<string>("Title").IsRequired().HasMaxLength(160).HasColumnType("character varying(160)").HasColumnName("title");
             b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone").HasColumnName("updated_at");
             b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
 
             b.HasKey("Id");
             b.HasIndex("CourseId");
+            b.HasIndex("LastModelId");
             b.HasIndex("UserId", "UpdatedAt").HasDatabaseName("ix_chat_threads_user_updated");
             b.ToTable("chat_threads", (string?)null);
         });
 
+        modelBuilder.Entity("Atrium.Api.Data.Entities.AiProvider", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<string>("ApiKeyEncrypted").HasColumnType("text").HasColumnName("api_key_encrypted");
+            b.Property<string>("BaseUrl").IsRequired().HasMaxLength(500).HasColumnType("character varying(500)").HasColumnName("base_url");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<string>("Name").IsRequired().HasMaxLength(80).HasColumnType("character varying(80)").HasColumnName("name");
+            b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone").HasColumnName("updated_at");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("UserId").HasDatabaseName("ix_ai_providers_user");
+            b.ToTable("ai_providers", (string?)null);
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.AiModel", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<string>("DisplayName").IsRequired().HasMaxLength(120).HasColumnType("character varying(120)").HasColumnName("display_name");
+            b.Property<string>("ModelId").IsRequired().HasMaxLength(160).HasColumnType("character varying(160)").HasColumnName("model_id");
+            b.Property<Guid>("ProviderId").HasColumnType("uuid").HasColumnName("provider_id");
+            b.Property<int>("SortOrder").ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(0).HasColumnName("sort_order");
+            b.Property<bool>("SupportsVision").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(false).HasColumnName("supports_vision");
+            b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone").HasColumnName("updated_at");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("ProviderId");
+            b.HasIndex("UserId", "ProviderId").HasDatabaseName("ix_ai_models_user_provider");
+            b.ToTable("ai_models", (string?)null);
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.ChatAttachment", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<string>("ContentType").IsRequired().HasMaxLength(120).HasColumnType("character varying(120)").HasColumnName("content_type");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<string>("ExtractedText").HasColumnType("text").HasColumnName("extracted_text");
+            b.Property<string>("FileName").IsRequired().HasMaxLength(255).HasColumnType("character varying(255)").HasColumnName("file_name");
+            b.Property<string>("Kind").IsRequired().HasMaxLength(24).HasColumnType("character varying(24)").HasColumnName("kind");
+            b.Property<Guid?>("MessageId").HasColumnType("uuid").HasColumnName("message_id");
+            b.Property<string>("MetadataJson").HasColumnType("text").HasColumnName("metadata_json");
+            b.Property<long>("SizeBytes").HasColumnType("bigint").HasColumnName("size_bytes");
+            b.Property<string>("StorageKey").IsRequired().HasMaxLength(500).HasColumnType("character varying(500)").HasColumnName("storage_key");
+            b.Property<Guid?>("ThreadId").HasColumnType("uuid").HasColumnName("thread_id");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("MessageId").HasDatabaseName("ix_chat_attachments_message");
+            b.HasIndex("ThreadId");
+            b.HasIndex("UserId", "ThreadId").HasDatabaseName("ix_chat_attachments_user_thread");
+            b.ToTable("chat_attachments", (string?)null);
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.UniversityQuiz", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<int>("AttemptCount").ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(0).HasColumnName("attempt_count");
+            b.Property<int?>("BestScore").HasColumnType("integer").HasColumnName("best_score");
+            b.Property<Guid>("CourseId").HasColumnType("uuid").HasColumnName("course_id");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<string>("Description").HasMaxLength(500).HasColumnType("character varying(500)").HasColumnName("description");
+            b.Property<DateTimeOffset?>("LastPlayedAt").HasColumnType("timestamp with time zone").HasColumnName("last_played_at");
+            b.Property<int?>("LastScore").HasColumnType("integer").HasColumnName("last_score");
+            b.Property<int>("QuestionCount").HasColumnType("integer").HasColumnName("question_count");
+            b.Property<string>("QuestionsJson").IsRequired().HasColumnType("text").HasColumnName("questions_json");
+            b.Property<string>("Title").IsRequired().HasMaxLength(200).HasColumnType("character varying(200)").HasColumnName("title");
+            b.Property<Guid?>("UniversityActivityItemId").HasColumnType("uuid").HasColumnName("university_activity_item_id");
+            b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone").HasColumnName("updated_at");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("CourseId");
+            b.HasIndex("UniversityActivityItemId");
+            b.HasIndex("UserId", "CourseId", "UniversityActivityItemId").HasDatabaseName("ix_university_quizzes_user_course_item");
+            b.ToTable("university_quizzes", (string?)null);
+        });
+
         modelBuilder.Entity("Atrium.Api.Data.Entities.UserPreferences", b =>
         {
+            b.HasOne("Atrium.Api.Data.Entities.AiModel", "DefaultAiModel")
+                .WithMany()
+                .HasForeignKey("DefaultAiModelId")
+                .OnDelete(DeleteBehavior.SetNull);
+            b.HasOne("Atrium.Api.Data.Entities.AiModel", "DefaultVisionModel")
+                .WithMany()
+                .HasForeignKey("DefaultVisionModelId")
+                .OnDelete(DeleteBehavior.SetNull);
             b.HasOne("Atrium.Api.Data.Entities.User", "User")
                 .WithOne("Preferences")
                 .HasForeignKey("Atrium.Api.Data.Entities.UserPreferences", "UserId")
                 .OnDelete(DeleteBehavior.Cascade)
                 .IsRequired();
+            b.Navigation("DefaultAiModel");
+            b.Navigation("DefaultVisionModel");
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.AiProvider", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.AiModel", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.AiProvider", "Provider")
+                .WithMany("Models")
+                .HasForeignKey("ProviderId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("Provider");
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.ChatAttachment", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.ChatMessageEntity", "Message")
+                .WithMany("Attachments")
+                .HasForeignKey("MessageId")
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasOne("Atrium.Api.Data.Entities.ChatThread", "Thread")
+                .WithMany("Attachments")
+                .HasForeignKey("ThreadId")
+                .OnDelete(DeleteBehavior.Cascade);
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("Message");
+            b.Navigation("Thread");
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.UniversityQuiz", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.UniversityCourse", "Course")
+                .WithMany()
+                .HasForeignKey("CourseId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.HasOne("Atrium.Api.Data.Entities.UniversityActivityItem", "ActivityItem")
+                .WithMany()
+                .HasForeignKey("UniversityActivityItemId")
+                .OnDelete(DeleteBehavior.SetNull);
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("ActivityItem");
+            b.Navigation("Course");
             b.Navigation("User");
         });
 
@@ -703,13 +866,23 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .WithMany()
                 .HasForeignKey("CourseId")
                 .OnDelete(DeleteBehavior.SetNull);
+            b.HasOne("Atrium.Api.Data.Entities.AiModel", "LastModel")
+                .WithMany()
+                .HasForeignKey("LastModelId")
+                .OnDelete(DeleteBehavior.SetNull);
             b.HasOne("Atrium.Api.Data.Entities.User", "User")
                 .WithMany()
                 .HasForeignKey("UserId")
                 .OnDelete(DeleteBehavior.Cascade)
                 .IsRequired();
             b.Navigation("Course");
+            b.Navigation("LastModel");
             b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.AiProvider", b =>
+        {
+            b.Navigation("Models");
         });
 
         modelBuilder.Entity("Atrium.Api.Data.Entities.Attachment", b =>
@@ -717,8 +890,14 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.Navigation("TextChunks");
         });
 
+        modelBuilder.Entity("Atrium.Api.Data.Entities.ChatMessageEntity", b =>
+        {
+            b.Navigation("Attachments");
+        });
+
         modelBuilder.Entity("Atrium.Api.Data.Entities.ChatThread", b =>
         {
+            b.Navigation("Attachments");
             b.Navigation("Messages");
         });
 

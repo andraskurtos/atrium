@@ -46,10 +46,22 @@ builder.Services.AddSingleton<IAttachmentStorage, LocalDiskAttachmentStorage>();
 builder.Services.AddSingleton<IArtifactTextExtractor, DefaultArtifactTextExtractor>();
 builder.Services.AddScoped<ArtifactTextService>();
 builder.Services.AddScoped<KnowledgeReadService>();
+builder.Services.AddScoped<KnowledgeWriteService>();
+builder.Services.AddScoped<AiConfigService>();
+builder.Services.AddScoped<ChatAttachmentService>();
+builder.Services.AddSingleton<SafeHttpFetcher>();
+builder.Services.AddScoped<WebToolsService>();
 builder.Services.AddScoped<OpenAiChatService>();
 builder.Services.AddHttpClient(OpenAiChatService.HttpClientName, client =>
 {
     client.Timeout = TimeSpan.FromMinutes(2);
+});
+builder.Services.AddHttpClient(SafeHttpFetcher.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(15);
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AllowAutoRedirect = false,
 });
 builder.Services.AddHostedService<ArtifactTextBackfillService>();
 builder.Services.AddHttpContextAccessor();
@@ -238,10 +250,12 @@ app.MapTokenEndpoints();
 app.MapHouseholdEndpoints();
 app.MapCalendarEndpoints();
 app.MapUniversityEndpoints();
+app.MapQuizEndpoints();
 app.MapDayEndpoints();
 app.MapNoteEndpoints();
 app.MapAttachmentEndpoints();
 app.MapKnowledgeEndpoints();
+app.MapAiConfigEndpoints();
 app.MapChatEndpoints();
 app.MapMcp("/mcp").RequireAuthorization(AuthConstants.AgentPatOnlyPolicy);
 

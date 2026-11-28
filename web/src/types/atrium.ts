@@ -115,6 +115,7 @@ export interface UniversityItemNotesTree {
   title: string;
   sequenceNumber: number | null;
   note: NoteSummary | null;
+  notes?: NoteSummary[];
   artifacts: AttachmentSummary[];
 }
 
@@ -325,12 +326,61 @@ export interface ChatCitation {
   pageLabel?: string | null;
 }
 
+export interface ChatAttachment {
+  id: string;
+  fileName: string;
+  contentType: string;
+  kind: 'image' | 'ics' | 'document';
+  sizeBytes: number;
+  summary?: string | null;
+  url: string;
+  createdAt: string;
+}
+
+export interface AiProvider {
+  id: string;
+  name: string;
+  baseUrl: string;
+  hasApiKey: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiModel {
+  id: string;
+  providerId: string;
+  providerName: string;
+  modelId: string;
+  displayName: string;
+  supportsVision: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type WebSearchProviderKind = 'duckduckgo' | 'tavily' | 'brave' | 'searxng';
+
+export interface WebSearchConfig {
+  provider: WebSearchProviderKind;
+  url?: string | null;
+  hasApiKey: boolean;
+}
+
+export interface AiConfig {
+  providers: AiProvider[];
+  models: AiModel[];
+  defaultModelId: string | null;
+  defaultVisionModelId: string | null;
+  webSearch: WebSearchConfig;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   reasoning?: string | null;
   citations?: ChatCitation[];
+  attachments?: ChatAttachment[];
   error?: boolean;
   createdAt?: string;
 }
@@ -347,11 +397,58 @@ export interface ChatThreadSummary {
 
 export interface ChatThreadDetail extends ChatThreadSummary {
   messages: ChatMessage[];
+  lastModelId?: string | null;
 }
 
 export interface ChatScope {
   courseId: string | null;
   courseLabel?: string | null;
+}
+
+export interface ChatMutationEvent {
+  domain: 'notes' | 'calendar' | 'tasks' | 'university';
+  id: string;
+  title: string;
+}
+
+export interface StudyGuideJob {
+  threadId: string | null;
+  status: 'generating' | 'done' | 'error';
+  statusText?: string | null;
+  error?: string | null;
+}
+
+export interface QuizQuestion {
+  prompt: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+  sourceReference?: string | null;
+}
+
+export interface UniversityQuizSummary {
+  id: string;
+  courseId: string;
+  universityActivityItemId: string | null;
+  title: string;
+  description: string | null;
+  questionCount: number;
+  attemptCount: number;
+  lastScore: number | null;
+  bestScore: number | null;
+  lastPlayedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UniversityQuizDetail extends UniversityQuizSummary {
+  questions: QuizQuestion[];
+}
+
+export interface QuizGenerateOptions {
+  questionCount: number;
+  difficulty: 'mixed' | 'easy' | 'medium' | 'hard';
+  customInstructions: string;
 }
 
 export interface AgentToken {

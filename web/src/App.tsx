@@ -30,6 +30,7 @@ import {
 } from './data/mockData';
 import { useApiHealth } from './hooks/useApiHealth';
 import { useTheme } from './hooks/useTheme';
+import { getAiConfig } from './lib/aiConfigClient';
 import {
   changePassword,
   clearAccessToken,
@@ -113,9 +114,11 @@ import {
 import type {
   AccountPreferences,
   AgentToken,
+  AiConfig,
   AppView,
   CalendarEvent,
   CaptureKind,
+  ChatAttachment,
   ChatMessage,
   ChatScope,
   ChatThreadSummary,
@@ -125,9 +128,13 @@ import type {
   InviteItem,
   MobileTab,
   PendingNoteTarget,
+  QuizGenerateOptions,
   RecurrenceScope,
   SessionItem,
+  StudyGuideJob,
   UniversityAttendanceStatus,
+  UniversityCourseActivity,
+  UniversityActivityItem,
   UpdatePreferencesPayload,
   UniversityCourse,
   UserCalendar,
@@ -687,6 +694,10 @@ export function App() {
   };
 
   // Collapsible & Fullscreenable AI Chat Sidebar with persisted history
+  const [aiConfig, setAiConfig] = useState<AiConfig | null>(null);
+  const [selectedChatModelId, setSelectedChatModelId] = useState<string | null>(null);
+  const [chatEnableWebSearch, setChatEnableWebSearch] = useState(true);
+  const [chatAllowWriteTools, setChatAllowWriteTools] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isChatFullscreen, setIsChatFullscreen] = useState(false);
   const [chatScope, setChatScope] = useState<ChatScope>({ courseId: null });
@@ -696,11 +707,82 @@ export function App() {
   const [loadingChatThread, setLoadingChatThread] = useState(false);
   const [chatStreaming, setChatStreaming] = useState(false);
   const [chatStatusText, setChatStatusText] = useState<string | null>(null);
+  const [notesRefreshKey, setNotesRefreshKey] = useState(0);
+  const [quizRefreshKey, setQuizRefreshKey] = useState(0);
+  const [studyGuideJobs, setStudyGuideJobs] = useState<Record<string, StudyGuideJob>>({});
+  const [quizJobs, setQuizJobs] = useState<Record<string, StudyGuideJob>>({});
   const chatAbortRef = useRef<AbortController | null>(null);
+  const activeChatThreadIdRef = useRef<string | null>(null);
+  const bgStreamsRef = useRef<
+    Record<
+      string,
+      {
+        assistantId: string;
+        content: string;
+        reasoning: string;
+        statusText: string | null;
+        streaming: boolean;
+        error?: boolean;
+      }
+    >
+  >({});
 
-  const isAiConfigured = Boolean(
-    preferences.aiInferenceUrl?.trim() && preferences.aiModel?.trim(),
-  );
+  activeChatThreadIdRef.current = activeChatThreadId;
+
+  const syncBgStreamToChat = useCallback((threadId: string) => {
+    if (activeChatThreadIdRef.current !== threadId) return;
+    const live = bgStreamsRef.current[threadId];
+    if (!live) return;
+    setChatStreaming(live.streaming);
+    setChatStatusText(live.statusText);
+    setChatMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === live.assistantId);
+      const nextMsg: ChatMessage = {
+        id: live.assistantId,
+        role: 'assistant',
+        content: live.content,
+        reasoning: live.reasoning,
+        error: live.error,
+      };
+      if (idx >= 0) {
+        const copy = prev.slice();
+        copy[idx] = nextMsg;
+        return copy;
+      }
+      return [...prev, nextMsg];
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!profile) {
+      setAiConfig(null);
+      setSelectedChatModelId(null);
+      return;
+    }
+    void getAiConfig()
+      .then((cfg) => {
+        setAiConfig(cfg);
+        setSelectedChatModelId((prev) =>
+          prev && cfg.models.some((m) => m.id === prev)
+            ? prev
+            : cfg.defaultModelId ?? cfg.models[0]?.id ?? null,
+        );
+      })
+      .catch(() => undefined);
+  }, [profile]);
+
+  const handleAiConfigChange = useCallback((next: AiConfig) => {
+    setAiConfig(next);
+    setSelectedChatModelId((prev) =>
+      prev && next.models.some((m) => m.id === prev)
+        ? prev
+        : next.defaultModelId ?? next.models[0]?.id ?? null,
+    );
+  }, []);
+
+  const isAiConfigured = aiConfig !== null
+    ? aiConfig.models.length > 0
+    : Boolean(preferences.aiInferenceUrl?.trim() && preferences.aiModel?.trim());
 
   const refreshChatThreads = useCallback(async () => {
     try {
@@ -741,12 +823,34 @@ export function App() {
     setLoadingChatThread(true);
     try {
       const detail = await getChatThread(threadId);
+      activeChatThreadIdRef.current = detail.id;
       setActiveChatThreadId(detail.id);
       setChatScope({
         courseId: detail.courseId,
         courseLabel: detail.courseLabel ?? null,
       });
-      setChatMessages(detail.messages);
+      const live = bgStreamsRef.current[detail.id];
+      if (live && live.streaming) {
+        setChatMessages([
+          ...detail.messages,
+          {
+            id: live.assistantId,
+            role: 'assistant',
+            content: live.content,
+            reasoning: live.reasoning,
+            error: live.error,
+          },
+        ]);
+        setChatStreaming(true);
+        setChatStatusText(live.statusText);
+      } else {
+        setChatMessages(detail.messages);
+        setChatStreaming(false);
+        setChatStatusText(null);
+      }
+      if (detail.lastModelId) {
+        setSelectedChatModelId(detail.lastModelId);
+      }
     } catch {
       announce('Could not load chat conversation');
     } finally {
@@ -771,7 +875,7 @@ export function App() {
   );
 
   const handleSendChat = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, attachments: ChatAttachment[] = []) => {
       if (chatStreaming) return;
       const scopeCourseId = chatScope.courseId;
       const targetThreadId = activeChatThreadId;
@@ -779,6 +883,7 @@ export function App() {
         id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         role: 'user',
         content: prompt,
+        attachments: attachments.length > 0 ? attachments : undefined,
       };
       const assistantId = `a_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const assistantMsg: ChatMessage = {
@@ -807,6 +912,10 @@ export function App() {
           messages: historyPayload,
           courseId: scopeCourseId,
           threadId: targetThreadId,
+          modelId: selectedChatModelId,
+          attachmentIds: attachments.map((a) => a.id),
+          enableWebSearch: chatEnableWebSearch,
+          allowWriteTools: chatAllowWriteTools,
           signal: controller.signal,
           onThread: (thread) => {
             setActiveChatThreadId(thread.id);
@@ -839,6 +948,19 @@ export function App() {
                 m.id === assistantId ? { ...m, citations } : m,
               ),
             );
+          },
+          onMutation: (mutation) => {
+            if (mutation.domain === 'notes') {
+              setNotesRefreshKey((k) => k + 1);
+            } else if (mutation.domain === 'tasks') {
+              void loadDayData(selectedDateKey);
+            } else if (mutation.domain === 'calendar') {
+              void loadCalendarData(calendarViewYearRef.current);
+            } else if (mutation.domain === 'university') {
+              void loadUniversityData();
+              void loadCalendarData(calendarViewYearRef.current);
+              setQuizRefreshKey((k) => k + 1);
+            }
           },
           onError: (message) => {
             setChatMessages((prev) =>
@@ -873,11 +995,388 @@ export function App() {
     },
     [
       activeChatThreadId,
+      chatAllowWriteTools,
+      chatEnableWebSearch,
       chatMessages,
       chatScope.courseId,
       chatStreaming,
+      loadCalendarData,
+      loadDayData,
+      loadUniversityData,
       refreshChatThreads,
+      selectedChatModelId,
+      selectedDateKey,
     ],
+  );
+
+  const handleGenerateStudyGuide = useCallback(
+    async (
+      course: UniversityCourse,
+      activity: UniversityCourseActivity,
+      item: UniversityActivityItem,
+    ) => {
+      if (!isAiConfigured) {
+        announce('Configure AI Assistant in Account settings first');
+        return;
+      }
+
+      const courseLabel = course.code ? `${course.code} · ${course.name}` : course.name;
+      const actLabel = activity.title || activity.activityType;
+      const prompt = [
+        `Create a comprehensive, rich Markdown study guide for the lecture "${item.title}" (${actLabel}) in course "${courseLabel}".`,
+        `Target universityActivityItemId: ${item.id}`,
+        '',
+        'Steps:',
+        `1. Inspect any existing notes and uploaded slides/PDFs for this lecture (call list_artifacts with universityActivityItemId="${item.id}", read_artifact_text on relevant files, and search_knowledge/read_note if helpful).`,
+        `2. Create a new note attached to universityActivityItemId="${item.id}" using create_note titled "Study Guide — ${item.title}".`,
+        '3. Format the note with rich Markdown: clear H1/H2/H3 headings, concise bullet summaries, Obsidian callouts (> [!note] Key Concept, > [!tip] Exam Tip, > [!warning] Common Pitfall), GFM comparison/summary tables, syntax-highlighted fenced code blocks, LaTeX math ($...$ / $$...$$) where relevant, and a short Self-Check Questions section.',
+        '4. If any PDF slides on this lecture contain important diagrams or architecture figures, call extract_pdf_images(attachmentId, noteId, pages=[...]) with the specific 1-based slide numbers (up to 6 slides), then call update_note to embed the returned ![caption](/api/attachments/...) Markdown images directly in the relevant sections. Never leave placeholder comments like <!-- FIGURE: ... --> in the note.',
+        '5. Finish with a brief summary of what you created.',
+      ].join('\n');
+
+      setStudyGuideJobs((prev) => ({
+        ...prev,
+        [item.id]: {
+          threadId: null,
+          status: 'generating',
+          statusText: 'Starting study guide…',
+        },
+      }));
+      announce(`Generating study guide for ${item.title} in background`);
+      let liveThreadId: string | null = null;
+      const bgAssistantId = `bg_sg_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+      try {
+        await streamChat({
+          messages: [{ role: 'user', content: prompt }],
+          courseId: course.id,
+          modelId: selectedChatModelId,
+          allowWriteTools: true,
+          onThread: (thread) => {
+            liveThreadId = thread.id;
+            bgStreamsRef.current[thread.id] = {
+              assistantId: bgAssistantId,
+              content: '',
+              reasoning: '',
+              statusText: 'Starting study guide…',
+              streaming: true,
+            };
+            setStudyGuideJobs((prev) => ({
+              ...prev,
+              [item.id]: {
+                ...(prev[item.id] ?? { status: 'generating' }),
+                threadId: thread.id,
+              },
+            }));
+            setChatThreads((prev) => {
+              const without = prev.filter((t) => t.id !== thread.id);
+              return [thread, ...without];
+            });
+            syncBgStreamToChat(thread.id);
+          },
+          onStatus: (status) => {
+            setStudyGuideJobs((prev) => ({
+              ...prev,
+              [item.id]: {
+                ...(prev[item.id] ?? { threadId: null, status: 'generating' }),
+                statusText: status,
+              },
+            }));
+            if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+              bgStreamsRef.current[liveThreadId].statusText = status;
+              syncBgStreamToChat(liveThreadId);
+            }
+          },
+          onReasoning: (reasoningDelta) => {
+            if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+              bgStreamsRef.current[liveThreadId].reasoning += reasoningDelta;
+              syncBgStreamToChat(liveThreadId);
+            }
+          },
+          onDelta: (delta) => {
+            if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+              bgStreamsRef.current[liveThreadId].statusText = null;
+              bgStreamsRef.current[liveThreadId].content += delta;
+              syncBgStreamToChat(liveThreadId);
+            }
+          },
+          onMutation: (mutation) => {
+            if (mutation.domain === 'notes') {
+              setNotesRefreshKey((k) => k + 1);
+            }
+          },
+          onError: (message) => {
+            setStudyGuideJobs((prev) => ({
+              ...prev,
+              [item.id]: {
+                ...(prev[item.id] ?? { threadId: null }),
+                status: 'error',
+                error: message,
+              },
+            }));
+            if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+              bgStreamsRef.current[liveThreadId].streaming = false;
+              bgStreamsRef.current[liveThreadId].statusText = null;
+              bgStreamsRef.current[liveThreadId].error = true;
+              if (!bgStreamsRef.current[liveThreadId].content) {
+                bgStreamsRef.current[liveThreadId].content = message;
+              }
+              syncBgStreamToChat(liveThreadId);
+            }
+            announce(`Study guide failed: ${message}`);
+          },
+          onDone: () => {
+            setStudyGuideJobs((prev) => {
+              const current = prev[item.id];
+              if (current?.status === 'error') return prev;
+              return {
+                ...prev,
+                [item.id]: {
+                  ...(current ?? { threadId: null }),
+                  status: 'done',
+                  statusText: null,
+                },
+              };
+            });
+            if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+              bgStreamsRef.current[liveThreadId].streaming = false;
+              bgStreamsRef.current[liveThreadId].statusText = null;
+              syncBgStreamToChat(liveThreadId);
+              delete bgStreamsRef.current[liveThreadId];
+            }
+            setNotesRefreshKey((k) => k + 1);
+            void refreshChatThreads();
+            announce(`Study guide ready for ${item.title}`);
+          },
+        });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Study guide generation failed.';
+        if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+          bgStreamsRef.current[liveThreadId].streaming = false;
+          bgStreamsRef.current[liveThreadId].statusText = null;
+          bgStreamsRef.current[liveThreadId].error = true;
+          if (!bgStreamsRef.current[liveThreadId].content) {
+            bgStreamsRef.current[liveThreadId].content = message;
+          }
+          syncBgStreamToChat(liveThreadId);
+          delete bgStreamsRef.current[liveThreadId];
+        }
+        setStudyGuideJobs((prev) => ({
+          ...prev,
+          [item.id]: {
+            ...(prev[item.id] ?? { threadId: null }),
+            status: 'error',
+            error: message,
+          },
+        }));
+        announce(`Study guide failed: ${message}`);
+      }
+    },
+    [announce, isAiConfigured, refreshChatThreads, selectedChatModelId, syncBgStreamToChat],
+  );
+
+  const handleOpenStudyGuideThread = useCallback(
+    async (itemId: string) => {
+      const job = studyGuideJobs[itemId];
+      setIsChatOpen(true);
+      if (job?.threadId) {
+        await handleSelectChatThread(job.threadId);
+      }
+    },
+    [handleSelectChatThread, studyGuideJobs],
+  );
+
+  const handleGenerateQuiz = useCallback(
+    async (
+      course: UniversityCourse,
+      activity: UniversityCourseActivity | null,
+      item: UniversityActivityItem | null,
+      options: QuizGenerateOptions,
+    ) => {
+      if (!isAiConfigured) {
+        announce('Configure AI Assistant in Account settings first');
+        return;
+      }
+
+      const jobKey = item ? item.id : `course:${course.id}`;
+      const courseLabel = course.code ? `${course.code} · ${course.name}` : course.name;
+      const targetTitle = item
+        ? `${item.title} (${activity?.title || activity?.activityType || 'Lecture'})`
+        : `the entire course "${courseLabel}"`;
+
+      const prompt = [
+        `Generate a playable multiple-choice quiz for ${targetTitle} in course "${courseLabel}".`,
+        item
+          ? `Target universityActivityItemId: ${item.id} (courseId: ${course.id})`
+          : `Target courseId: ${course.id} (leave universityActivityItemId empty for a whole-course quiz)`,
+        `Requested question count: ${options.questionCount}`,
+        `Requested difficulty: ${options.difficulty}`,
+        options.customInstructions
+          ? `\nUser's custom content & focus instructions:\n${options.customInstructions}`
+          : '',
+        '',
+        'Required steps (do not skip):',
+        item
+          ? `1. Read the lecture's materials first: call list_artifacts(universityActivityItemId="${item.id}"), read_artifact_text on relevant slides/PDFs, and search_knowledge / read_note for any linked notes.`
+          : `1. Read the course's materials first: call get_course(courseId="${course.id}"), list_artifacts(universityCourseId="${course.id}"), and read_artifact_text / read_note / search_knowledge across the lectures.`,
+        '2. Call the `create_quiz` tool with a concise title, short description, and the exact requested number of well-crafted multiple-choice questions.',
+        '3. Every question MUST have: `prompt` (clear question; supports Markdown and LaTeX $...$), `options` (4 distinct, plausible choices), `correctIndex` (0-based integer), `explanation` (clear explanation of why the correct option is right and why key distractors are wrong), and optional `sourceReference` (slide/page or note title).',
+        '4. Finish with a brief confirmation of the quiz title and question count.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      setQuizJobs((prev) => ({
+        ...prev,
+        [jobKey]: {
+          threadId: null,
+          status: 'generating',
+          statusText: 'Starting quiz generation…',
+        },
+      }));
+      announce(`Generating quiz for ${item ? item.title : course.name} in background`);
+      let liveThreadId: string | null = null;
+      const bgAssistantId = `bg_qz_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+      try {
+        await streamChat({
+          messages: [{ role: 'user', content: prompt }],
+          courseId: course.id,
+          modelId: selectedChatModelId,
+          allowWriteTools: true,
+          enableWebSearch: false,
+          onThread: (thread) => {
+            liveThreadId = thread.id;
+            bgStreamsRef.current[thread.id] = {
+              assistantId: bgAssistantId,
+              content: '',
+              reasoning: '',
+              statusText: 'Starting quiz generation…',
+              streaming: true,
+            };
+            setQuizJobs((prev) => ({
+              ...prev,
+              [jobKey]: {
+                ...(prev[jobKey] ?? { status: 'generating' }),
+                threadId: thread.id,
+              },
+            }));
+            setChatThreads((prev) => {
+              const without = prev.filter((t) => t.id !== thread.id);
+              return [thread, ...without];
+            });
+            syncBgStreamToChat(thread.id);
+          },
+          onStatus: (status) => {
+            setQuizJobs((prev) => ({
+              ...prev,
+              [jobKey]: {
+                ...(prev[jobKey] ?? { threadId: null, status: 'generating' }),
+                statusText: status,
+              },
+            }));
+            if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+              bgStreamsRef.current[liveThreadId].statusText = status;
+              syncBgStreamToChat(liveThreadId);
+            }
+          },
+          onReasoning: (reasoningDelta) => {
+            if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+              bgStreamsRef.current[liveThreadId].reasoning += reasoningDelta;
+              syncBgStreamToChat(liveThreadId);
+            }
+          },
+          onDelta: (delta) => {
+            if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+              bgStreamsRef.current[liveThreadId].statusText = null;
+              bgStreamsRef.current[liveThreadId].content += delta;
+              syncBgStreamToChat(liveThreadId);
+            }
+          },
+          onMutation: () => {
+            setQuizRefreshKey((k) => k + 1);
+          },
+          onError: (message) => {
+            setQuizJobs((prev) => ({
+              ...prev,
+              [jobKey]: {
+                ...(prev[jobKey] ?? { threadId: null }),
+                status: 'error',
+                error: message,
+              },
+            }));
+            if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+              bgStreamsRef.current[liveThreadId].streaming = false;
+              bgStreamsRef.current[liveThreadId].statusText = null;
+              bgStreamsRef.current[liveThreadId].error = true;
+              if (!bgStreamsRef.current[liveThreadId].content) {
+                bgStreamsRef.current[liveThreadId].content = message;
+              }
+              syncBgStreamToChat(liveThreadId);
+            }
+            announce(`Quiz generation failed: ${message}`);
+          },
+          onDone: () => {
+            setQuizJobs((prev) => {
+              const current = prev[jobKey];
+              if (current?.status === 'error') return prev;
+              return {
+                ...prev,
+                [jobKey]: {
+                  ...(current ?? { threadId: null }),
+                  status: 'done',
+                  statusText: null,
+                },
+              };
+            });
+            if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+              bgStreamsRef.current[liveThreadId].streaming = false;
+              bgStreamsRef.current[liveThreadId].statusText = null;
+              syncBgStreamToChat(liveThreadId);
+              delete bgStreamsRef.current[liveThreadId];
+            }
+            setQuizRefreshKey((k) => k + 1);
+            void refreshChatThreads();
+            announce(`Quiz ready for ${item ? item.title : course.name}`);
+          },
+        });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Quiz generation failed.';
+        if (liveThreadId && bgStreamsRef.current[liveThreadId]) {
+          bgStreamsRef.current[liveThreadId].streaming = false;
+          bgStreamsRef.current[liveThreadId].statusText = null;
+          bgStreamsRef.current[liveThreadId].error = true;
+          if (!bgStreamsRef.current[liveThreadId].content) {
+            bgStreamsRef.current[liveThreadId].content = message;
+          }
+          syncBgStreamToChat(liveThreadId);
+          delete bgStreamsRef.current[liveThreadId];
+        }
+        setQuizJobs((prev) => ({
+          ...prev,
+          [jobKey]: {
+            ...(prev[jobKey] ?? { threadId: null }),
+            status: 'error',
+            error: message,
+          },
+        }));
+        announce(`Quiz generation failed: ${message}`);
+      }
+    },
+    [announce, isAiConfigured, refreshChatThreads, selectedChatModelId, syncBgStreamToChat],
+  );
+
+  const handleOpenQuizThread = useCallback(
+    async (jobKey: string) => {
+      const job = quizJobs[jobKey];
+      setIsChatOpen(true);
+      if (job?.threadId) {
+        await handleSelectChatThread(job.threadId);
+      }
+    },
+    [handleSelectChatThread, quizJobs],
   );
 
   const handleChangePassword = async (
@@ -1562,6 +2061,7 @@ export function App() {
         <AccountPage
           profile={profile}
           preferences={preferences}
+          aiConfig={aiConfig}
           theme={theme}
           agentTokens={agentTokens}
           sessions={sessions}
@@ -1573,6 +2073,7 @@ export function App() {
           onBackToDashboard={() => navigateTo('dashboard')}
           onUpdateProfile={handleUpdateProfile}
           onUpdatePreferences={handleUpdatePreferences}
+          onAiConfigChange={handleAiConfigChange}
           onSetTheme={setTheme}
           onChangePassword={handleChangePassword}
           onCreateToken={handleCreateToken}
@@ -1620,6 +2121,21 @@ export function App() {
               navigateTo('notes');
             }}
             onAskAboutCourse={handleOpenCourseChat}
+            notesRefreshKey={notesRefreshKey}
+            isAiConfigured={isAiConfigured}
+            studyGuideJobs={studyGuideJobs}
+            onGenerateStudyGuide={(course, activity, item) =>
+              void handleGenerateStudyGuide(course, activity, item)
+            }
+            onOpenStudyGuideThread={(itemId) =>
+              void handleOpenStudyGuideThread(itemId)
+            }
+            quizRefreshKey={quizRefreshKey}
+            quizJobs={quizJobs}
+            onGenerateQuiz={(course, activity, item, opts) =>
+              void handleGenerateQuiz(course, activity, item, opts)
+            }
+            onOpenQuizThread={(jobKey) => void handleOpenQuizThread(jobKey)}
             onAnnounce={announce}
           />
 
@@ -1971,7 +2487,15 @@ export function App() {
         isFullscreen={isChatFullscreen}
         scope={chatScope}
         isConfigured={isAiConfigured}
-        modelLabel={preferences.aiModel}
+        modelLabel={
+          aiConfig?.models.find((m) => m.id === selectedChatModelId)?.displayName ??
+          preferences.aiModel
+        }
+        models={aiConfig?.models ?? []}
+        selectedModelId={selectedChatModelId}
+        defaultVisionModelId={aiConfig?.defaultVisionModelId ?? null}
+        enableWebSearch={chatEnableWebSearch}
+        allowWriteTools={chatAllowWriteTools}
         messages={chatMessages}
         threads={chatThreads}
         activeThreadId={activeChatThreadId}
@@ -1991,7 +2515,10 @@ export function App() {
         onNewChat={handleNewChat}
         onSelectThread={(id) => void handleSelectChatThread(id)}
         onDeleteThread={(id) => void handleDeleteChatThread(id)}
-        onSend={(prompt) => void handleSendChat(prompt)}
+        onSelectModel={(id) => setSelectedChatModelId(id)}
+        onToggleWebSearch={() => setChatEnableWebSearch((prev) => !prev)}
+        onToggleWriteTools={() => setChatAllowWriteTools((prev) => !prev)}
+        onSend={(prompt, attachments) => void handleSendChat(prompt, attachments)}
         onStop={handleStopChat}
         onOpenSettings={() => {
           setIsChatOpen(false);
