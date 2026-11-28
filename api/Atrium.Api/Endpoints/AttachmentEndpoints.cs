@@ -6,6 +6,7 @@ using Atrium.Api.Attachments;
 using Atrium.Api.Auth;
 using Atrium.Api.Data;
 using Atrium.Api.Data.Entities;
+using Atrium.Api.Knowledge;
 using Atrium.Api.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -37,6 +38,7 @@ public static class AttachmentEndpoints
             ClaimsPrincipal principal,
             AppDbContext db,
             IAttachmentStorage storage,
+            ArtifactTextService textService,
             IOptions<StorageOptions> storageOptions,
             CancellationToken ct) =>
         {
@@ -270,6 +272,12 @@ public static class AttachmentEndpoints
             db.Attachments.Add(entity);
             await db.SaveChangesAsync(ct);
 
+            if (kind == AttachmentKinds.Artifact)
+            {
+                uploadBuffer.Position = 0;
+                await textService.ExtractAndPersistAsync(entity, uploadBuffer, ct);
+            }
+
             return Results.Created($"/api/attachments/{entity.Id}", ToDto(entity));
         })
         .DisableAntiforgery()
@@ -459,7 +467,9 @@ public static class AttachmentEndpoints
             attachment.ContentType,
             attachment.SizeBytes,
             $"/api/attachments/{attachment.Id}",
-            attachment.CreatedAt);
+            attachment.CreatedAt,
+            attachment.TextExtractionStatus,
+            attachment.ExtractedPageCount);
     }
 
     public static string SanitizeFileName(string? rawFileName)

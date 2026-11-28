@@ -21,6 +21,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<Note> Notes => Set<Note>();
     public DbSet<NoteTag> NoteTags => Set<NoteTag>();
     public DbSet<Attachment> Attachments => Set<Attachment>();
+    public DbSet<AttachmentTextChunk> AttachmentTextChunks => Set<AttachmentTextChunk>();
+    public DbSet<ChatThread> ChatThreads => Set<ChatThread>();
+    public DbSet<ChatMessageEntity> ChatMessages => Set<ChatMessageEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -63,6 +66,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(p => p.RequireAgentApproval).HasColumnName("require_agent_approval");
             entity.Property(p => p.MorningBrief).HasColumnName("morning_brief");
             entity.Property(p => p.EventReminders).HasColumnName("event_reminders");
+            entity.Property(p => p.AiInferenceUrl).HasColumnName("ai_inference_url").HasMaxLength(500);
+            entity.Property(p => p.AiModel).HasColumnName("ai_model").HasMaxLength(120);
+            entity.Property(p => p.AiApiKeyEncrypted).HasColumnName("ai_api_key_encrypted").HasColumnType("text");
 
             entity.HasOne(p => p.User)
                 .WithOne(u => u.Preferences)
@@ -499,6 +505,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(a => a.CalendarEventId).HasColumnName("calendar_event_id");
             entity.Property(a => a.CalendarOccurrenceStartAt).HasColumnName("calendar_occurrence_start_at");
             entity.Property(a => a.AllowAgentRead).HasColumnName("allow_agent_read").HasDefaultValue(true);
+            entity.Property(a => a.TextExtractionStatus).HasColumnName("text_extraction_status").HasMaxLength(24).HasDefaultValue("pending").IsRequired();
+            entity.Property(a => a.ExtractedPageCount).HasColumnName("extracted_page_count");
+            entity.Property(a => a.TextExtractedAt).HasColumnName("text_extracted_at");
             entity.Property(a => a.CreatedAt).HasColumnName("created_at");
             entity.Property(a => a.DeletedAt).HasColumnName("deleted_at");
 
@@ -537,6 +546,36 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
+        modelBuilder.Entity<AttachmentTextChunk>(entity =>
+        {
+            entity.ToTable("attachment_text_chunks");
+            entity.HasKey(c => c.Id);
+            entity.Property(c => c.Id).HasColumnName("id");
+            entity.Property(c => c.AttachmentId).HasColumnName("attachment_id");
+            entity.Property(c => c.UserId).HasColumnName("user_id");
+            entity.Property(c => c.ChunkIndex).HasColumnName("chunk_index");
+            entity.Property(c => c.PageLabel).HasColumnName("page_label").HasMaxLength(64).IsRequired();
+            entity.Property(c => c.Content).HasColumnName("content").IsRequired();
+            entity.Property(c => c.CharCount).HasColumnName("char_count");
+            entity.Property(c => c.CreatedAt).HasColumnName("created_at");
+
+            entity.HasIndex(c => new { c.AttachmentId, c.ChunkIndex })
+                .IsUnique()
+                .HasDatabaseName("ix_attachment_text_chunks_attachment_chunk");
+            entity.HasIndex(c => new { c.UserId, c.AttachmentId })
+                .HasDatabaseName("ix_attachment_text_chunks_user_attachment");
+
+            entity.HasOne(c => c.Attachment)
+                .WithMany(a => a.TextChunks)
+                .HasForeignKey(c => c.AttachmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(c => c.User)
+                .WithMany()
+                .HasForeignKey(c => c.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<NoteTag>(entity =>
         {
             entity.ToTable("note_tags");
@@ -556,6 +595,58 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasOne(t => t.User)
                 .WithMany()
                 .HasForeignKey(t => t.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ChatThread>(entity =>
+        {
+            entity.ToTable("chat_threads");
+            entity.HasKey(t => t.Id);
+            entity.Property(t => t.Id).HasColumnName("id");
+            entity.Property(t => t.UserId).HasColumnName("user_id");
+            entity.Property(t => t.CourseId).HasColumnName("course_id");
+            entity.Property(t => t.Title).HasColumnName("title").HasMaxLength(160).IsRequired();
+            entity.Property(t => t.CreatedAt).HasColumnName("created_at");
+            entity.Property(t => t.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(t => new { t.UserId, t.UpdatedAt })
+                .HasDatabaseName("ix_chat_threads_user_updated");
+
+            entity.HasOne(t => t.User)
+                .WithMany()
+                .HasForeignKey(t => t.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(t => t.Course)
+                .WithMany()
+                .HasForeignKey(t => t.CourseId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<ChatMessageEntity>(entity =>
+        {
+            entity.ToTable("chat_messages");
+            entity.HasKey(m => m.Id);
+            entity.Property(m => m.Id).HasColumnName("id");
+            entity.Property(m => m.ThreadId).HasColumnName("thread_id");
+            entity.Property(m => m.UserId).HasColumnName("user_id");
+            entity.Property(m => m.Role).HasColumnName("role").HasMaxLength(16).IsRequired();
+            entity.Property(m => m.Content).HasColumnName("content").HasColumnType("text").IsRequired();
+            entity.Property(m => m.Reasoning).HasColumnName("reasoning").HasColumnType("text");
+            entity.Property(m => m.CitationsJson).HasColumnName("citations_json").HasColumnType("text");
+            entity.Property(m => m.CreatedAt).HasColumnName("created_at");
+
+            entity.HasIndex(m => new { m.ThreadId, m.CreatedAt })
+                .HasDatabaseName("ix_chat_messages_thread_created");
+
+            entity.HasOne(m => m.Thread)
+                .WithMany(t => t.Messages)
+                .HasForeignKey(m => m.ThreadId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(m => m.User)
+                .WithMany()
+                .HasForeignKey(m => m.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

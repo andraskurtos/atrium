@@ -48,7 +48,7 @@ import type {
   UniversityCourseStatus,
   UserCalendar,
 } from '../types/atrium';
-import { ArrowLeftIcon, CloseIcon, GraduationCapIcon, PlusIcon } from './Icons';
+import { ArrowLeftIcon, ChatIcon, CloseIcon, GraduationCapIcon, PlusIcon } from './Icons';
 import { TimeInput } from './TimeInput';
 import { UniversityCalendarCard } from './UniversityCalendarCard';
 
@@ -99,6 +99,7 @@ interface UniversityPageProps {
   onToggleCalendarVisibility: (calendar: UserCalendar) => Promise<void>;
   onExportIcs: (calendar: UserCalendar) => Promise<void>;
   onOpenLinkedNote?: (target: PendingNoteTarget) => void;
+  onAskAboutCourse?: (course: UniversityCourse) => void;
   onAnnounce?: (message: string) => void;
 }
 
@@ -350,6 +351,7 @@ export function UniversityPage({
   onToggleCalendarVisibility,
   onExportIcs,
   onOpenLinkedNote,
+  onAskAboutCourse,
   onAnnounce,
 }: UniversityPageProps) {
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(
@@ -1345,6 +1347,16 @@ export function UniversityPage({
                 </div>
 
                 <div className="uni-detail-actions">
+                  {onAskAboutCourse && (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-compact"
+                      onClick={() => onAskAboutCourse(selectedCourse)}
+                    >
+                      <ChatIcon />
+                      <span>Ask about this course</span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="btn btn-secondary btn-compact"

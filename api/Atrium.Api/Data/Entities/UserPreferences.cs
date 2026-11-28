@@ -9,6 +9,9 @@ public sealed class UserPreferences
     public bool RequireAgentApproval { get; set; } = true;
     public bool MorningBrief { get; set; } = true;
     public bool EventReminders { get; set; } = true;
+    public string? AiInferenceUrl { get; set; }
+    public string? AiModel { get; set; }
+    public string? AiApiKeyEncrypted { get; set; }
 
     public User User { get; set; } = null!;
 }

@@ -16,6 +16,9 @@ public sealed class Attachment
     public Guid? CalendarEventId { get; set; }
     public DateTimeOffset? CalendarOccurrenceStartAt { get; set; }
     public bool AllowAgentRead { get; set; } = true;
+    public string TextExtractionStatus { get; set; } = "pending";
+    public int? ExtractedPageCount { get; set; }
+    public DateTimeOffset? TextExtractedAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? DeletedAt { get; set; }
 
@@ -24,5 +27,6 @@ public sealed class Attachment
     public UniversityCourse? UniversityCourse { get; set; }
     public UniversityActivityItem? UniversityActivityItem { get; set; }
     public CalendarEvent? CalendarEvent { get; set; }
+    public ICollection<AttachmentTextChunk> TextChunks { get; } = [];
 }
 

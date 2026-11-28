@@ -9,7 +9,7 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
       workbox: {
-        navigateFallbackDenylist: [/^\/api/],
+        navigateFallbackDenylist: [/^\/api/, /^\/mcp/],
       },
       manifest: {
         name: 'Atrium',
@@ -45,6 +45,10 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+      },
+      '/mcp': {
         target: 'http://localhost:5000',
         changeOrigin: true,
       },

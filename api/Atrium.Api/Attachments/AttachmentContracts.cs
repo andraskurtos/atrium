@@ -6,6 +6,15 @@ public static class AttachmentKinds
     public const string InlineImage = "inline_image";
 }
 
+public static class AttachmentExtractionStatuses
+{
+    public const string Pending = "pending";
+    public const string Completed = "completed";
+    public const string Empty = "empty";
+    public const string Unsupported = "unsupported";
+    public const string Failed = "failed";
+}
+
 public sealed record AttachmentDto(
     Guid Id,
     string Kind,
@@ -13,5 +22,7 @@ public sealed record AttachmentDto(
     string ContentType,
     long SizeBytes,
     string Url,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    string TextExtractionStatus = AttachmentExtractionStatuses.Pending,
+    int? ExtractedPageCount = null);
 

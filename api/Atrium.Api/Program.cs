@@ -1,10 +1,13 @@
 using System.Text;
 using System.Threading.RateLimiting;
 using Atrium.Api.Auth;
+using Atrium.Api.Chat;
 using Atrium.Api.Data;
 using Atrium.Api.Data.Entities;
 using Atrium.Api.Endpoints;
 using Atrium.Api.Health;
+using Atrium.Api.Knowledge;
+using Atrium.Api.Mcp;
 using Atrium.Api.Storage;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -38,7 +41,22 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<IDatabaseHealthCheck, EfDatabaseHealthCheck>();
 builder.Services.AddSingleton<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddSingleton<JwtTokenService>();
+builder.Services.AddSingleton<SecretProtector>();
 builder.Services.AddSingleton<IAttachmentStorage, LocalDiskAttachmentStorage>();
+builder.Services.AddSingleton<IArtifactTextExtractor, DefaultArtifactTextExtractor>();
+builder.Services.AddScoped<ArtifactTextService>();
+builder.Services.AddScoped<KnowledgeReadService>();
+builder.Services.AddScoped<OpenAiChatService>();
+builder.Services.AddHttpClient(OpenAiChatService.HttpClientName, client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(2);
+});
+builder.Services.AddHostedService<ArtifactTextBackfillService>();
+builder.Services.AddHttpContextAccessor();
+builder.Services
+    .AddMcpServer()
+    .WithHttpTransport(options => options.Stateless = true)
+    .WithTools<AtriumMcpTools>();
 
 builder.Services
     .AddAuthentication(options =>
@@ -122,6 +140,12 @@ builder.Services.AddAuthorizationBuilder()
     {
         policy.AddAuthenticationSchemes(AuthConstants.CompositeScheme);
         policy.RequireAuthenticatedUser();
+    })
+    .AddPolicy(AuthConstants.AgentPatOnlyPolicy, policy =>
+    {
+        policy.AddAuthenticationSchemes(AuthConstants.PatScheme);
+        policy.RequireAuthenticatedUser();
+        policy.RequireClaim(AuthConstants.AuthTypeClaim, AuthConstants.PatAuthType);
     });
 
 builder.Services.AddRateLimiter(options =>
@@ -217,6 +241,9 @@ app.MapUniversityEndpoints();
 app.MapDayEndpoints();
 app.MapNoteEndpoints();
 app.MapAttachmentEndpoints();
+app.MapKnowledgeEndpoints();
+app.MapChatEndpoints();
+app.MapMcp("/mcp").RequireAuthorization(AuthConstants.AgentPatOnlyPolicy);
 
 var configuredDistPath = builder.Configuration["Atrium:WebDistPath"];
 var resolvedDistPath = !string.IsNullOrWhiteSpace(configuredDistPath)
@@ -236,7 +263,8 @@ if (!string.IsNullOrWhiteSpace(resolvedDistPath) && Directory.Exists(resolvedDis
     {
         app.MapFallback(async context =>
         {
-            if (context.Request.Path.StartsWithSegments("/api"))
+            if (context.Request.Path.StartsWithSegments("/api")
+                || context.Request.Path.StartsWithSegments("/mcp"))
             {
                 context.Response.StatusCode = StatusCodes.Status404NotFound;
                 return;

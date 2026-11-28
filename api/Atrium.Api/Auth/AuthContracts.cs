@@ -49,7 +49,10 @@ public sealed record PreferencesDto(
     string TimeFormat,
     bool RequireAgentApproval,
     bool MorningBrief,
-    bool EventReminders);
+    bool EventReminders,
+    string? AiInferenceUrl = null,
+    string? AiModel = null,
+    bool HasAiApiKey = false);
 
 public sealed record AccountMeResponse(
     UserDto User,
@@ -69,7 +72,11 @@ public sealed record UpdatePreferencesRequest(
     string TimeFormat,
     bool RequireAgentApproval,
     bool MorningBrief,
-    bool EventReminders);
+    bool EventReminders,
+    string? AiInferenceUrl = null,
+    string? AiModel = null,
+    string? AiApiKey = null,
+    bool ClearAiApiKey = false);
 
 public sealed record ChangePasswordRequest(
     string CurrentPassword,
@@ -165,7 +172,10 @@ public static class AuthMappings
             prefs.TimeFormat,
             prefs.RequireAgentApproval,
             prefs.MorningBrief,
-            prefs.EventReminders);
+            prefs.EventReminders,
+            prefs.AiInferenceUrl,
+            prefs.AiModel,
+            !string.IsNullOrWhiteSpace(prefs.AiApiKeyEncrypted));
     }
 
     public static InviteDto ToInviteDto(Invite invite, DateTimeOffset now)
