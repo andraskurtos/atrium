@@ -1,6 +1,7 @@
 import type { MobileTab } from '../types/atrium';
 import {
   CalendarIcon,
+  ChatIcon,
   GraduationCapIcon,
   NoteIcon,
   StreamIcon,
@@ -8,12 +9,16 @@ import {
 
 interface MobileTabBarProps {
   activeTab: MobileTab;
+  isChatOpen?: boolean;
   onSelectTab: (tab: MobileTab) => void;
+  onToggleChat?: () => void;
 }
 
 export function MobileTabBar({
   activeTab,
+  isChatOpen = false,
   onSelectTab,
+  onToggleChat,
 }: MobileTabBarProps) {
   const tabs: { id: MobileTab; label: string; icon: typeof StreamIcon }[] = [
     { id: 'stream', label: 'Day', icon: StreamIcon },
@@ -26,7 +31,7 @@ export function MobileTabBar({
     <nav className="mobile-tabbar" aria-label="Mobile sections">
       {tabs.map((tab) => {
         const Icon = tab.icon;
-        const isActive = activeTab === tab.id;
+        const isActive = !isChatOpen && activeTab === tab.id;
         return (
           <button
             key={tab.id}
@@ -43,6 +48,20 @@ export function MobileTabBar({
           </button>
         );
       })}
+      {onToggleChat && (
+        <button
+          id="mobile-tab-assistant"
+          type="button"
+          className={`mobile-tab-btn ${isChatOpen ? 'is-active' : ''}`}
+          aria-pressed={isChatOpen}
+          onClick={onToggleChat}
+        >
+          <span className="mobile-tab-icon-wrap">
+            <ChatIcon />
+          </span>
+          <span className="mobile-tab-label">Assistant</span>
+        </button>
+      )}
     </nav>
   );
 }

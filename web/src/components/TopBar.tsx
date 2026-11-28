@@ -78,9 +78,8 @@ export function TopBar({
           <button
             id="topbar-university-btn"
             type="button"
-            className={`btn btn-compact topbar-nav-pill ${
-              activeView === 'university' ? 'is-active' : 'btn-ghost'
-            }`}
+            className={`btn btn-compact topbar-nav-pill ${activeView === 'university' ? 'is-active' : 'btn-ghost'
+              }`}
             onClick={() =>
               onNavigate(activeView === 'university' ? 'dashboard' : 'university')
             }
@@ -94,9 +93,8 @@ export function TopBar({
           <button
             id="topbar-notes-btn"
             type="button"
-            className={`btn btn-compact topbar-nav-pill ${
-              activeView === 'notes' ? 'is-active' : 'btn-ghost'
-            }`}
+            className={`btn btn-compact topbar-nav-pill ${activeView === 'notes' ? 'is-active' : 'btn-ghost'
+              }`}
             onClick={() =>
               onNavigate(activeView === 'notes' ? 'dashboard' : 'notes')
             }
@@ -111,15 +109,15 @@ export function TopBar({
             <button
               id="topbar-chat-btn"
               type="button"
-              className={`btn btn-compact topbar-nav-pill ${
-                isChatOpen ? 'is-active' : 'btn-ghost'
-              }`}
+              className={`btn btn-compact topbar-chat-btn ${isChatOpen ? 'is-active' : 'btn-ghost'
+                }`}
               onClick={onToggleChat}
               aria-pressed={isChatOpen}
+              aria-label="Toggle AI Assistant"
               title="Toggle AI Assistant sidebar"
             >
               <ChatIcon />
-              <span className="topbar-nav-pill-label">Assistant</span>
+              <span className="topbar-chat-label">Assistant</span>
             </button>
           )}
 
@@ -149,9 +147,8 @@ export function TopBar({
           <button
             id="topbar-account-btn"
             type="button"
-            className={`account-pill-btn ${
-              activeView === 'account' ? 'is-active' : ''
-            }`}
+            className={`account-pill-btn ${activeView === 'account' ? 'is-active' : ''
+              }`}
             onClick={() =>
               onNavigate(activeView === 'account' ? 'dashboard' : 'account')
             }

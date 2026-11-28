@@ -7,6 +7,7 @@ import {
 } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
+import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { downloadAttachment } from '../lib/attachmentsClient';
 import type { ChatCitation, ChatMessage, ChatScope } from '../types/atrium';
@@ -217,8 +218,15 @@ export function ChatSidebar({
                     <div className="chat-markdown-body">
                       {msg.content ? (
                         <ReactMarkdown
-                          remarkPlugins={[remarkMath]}
+                          remarkPlugins={[remarkGfm, remarkMath]}
                           rehypePlugins={[rehypeKatex]}
+                          components={{
+                            table: ({ children }) => (
+                              <div className="chat-table-scroll">
+                                <table>{children}</table>
+                              </div>
+                            ),
+                          }}
                         >
                           {msg.content}
                         </ReactMarkdown>

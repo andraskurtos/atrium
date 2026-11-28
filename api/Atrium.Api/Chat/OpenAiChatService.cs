@@ -58,6 +58,7 @@ public sealed partial class OpenAiChatService(
         var tools = BuildToolsSchema(courseId.HasValue);
         var endpointUrl = ResolveCompletionsUrl(inferenceBaseUrl);
         var client = httpClientFactory.CreateClient(HttpClientName);
+        var needsParagraphBreak = false;
 
         for (var round = 0; round < MaxToolRounds; round++)
         {
@@ -75,7 +76,18 @@ public sealed partial class OpenAiChatService(
                 payload["tool_choice"] = "auto";
             }
 
-            var roundResult = await SendStreamingRoundAsync(client, endpointUrl, apiKey, payload, writeEventAsync, ct);
+            async Task WriteRoundEventAsync(object evt)
+            {
+                if (needsParagraphBreak && evt is DeltaEvent)
+                {
+                    needsParagraphBreak = false;
+                    await writeEventAsync(new DeltaEvent("\n\n"));
+                }
+
+                await writeEventAsync(evt);
+            }
+
+            var roundResult = await SendStreamingRoundAsync(client, endpointUrl, apiKey, payload, WriteRoundEventAsync, ct);
 
             // If the provider rejected tool-calling on the first round, gracefully fall back to single-shot RAG
             if (!roundResult.Success
@@ -166,6 +178,10 @@ public sealed partial class OpenAiChatService(
             if (!string.IsNullOrEmpty(roundResult.AssistantText))
             {
                 assistantTurn["content"] = roundResult.AssistantText;
+                if (!roundResult.AssistantText.EndsWith("\n\n", StringComparison.Ordinal))
+                {
+                    needsParagraphBreak = true;
+                }
             }
 
             conversation.Add(assistantTurn);
@@ -194,6 +210,11 @@ public sealed partial class OpenAiChatService(
         }
 
         await writeEventAsync(new { type = "done" });
+    }
+
+    private sealed record DeltaEvent(string Text)
+    {
+        public string Type { get; } = "delta";
     }
 
     private sealed record AccumulatedToolCall(string Id, string Name, string Arguments);
@@ -297,7 +318,7 @@ public sealed partial class OpenAiChatService(
                         if (!string.IsNullOrEmpty(chunk))
                         {
                             assistantText.Append(chunk);
-                            await writeEventAsync(new { type = "delta", text = chunk });
+                            await writeEventAsync(new DeltaEvent(chunk));
                         }
                     }
 
@@ -390,7 +411,7 @@ public sealed partial class OpenAiChatService(
 
             if (calls.Count == 0 && !string.IsNullOrEmpty(text))
             {
-                await writeEventAsync(new { type = "delta", text });
+                await writeEventAsync(new DeltaEvent(text));
             }
 
             return new StreamRoundResult(true, HttpStatusCode.OK, null, text, calls);
@@ -693,6 +714,7 @@ public sealed partial class OpenAiChatService(
                 Answer questions using ONLY the notes, lectures, and uploaded artifacts of this course.
                 Use your tools (`search_knowledge`, `get_course`, `read_note`, `list_artifacts`, `read_artifact_text`) to look up exact content before answering.
                 Be concise, cite the note title or slide/page label when referencing material, and say clearly if the course materials do not contain the answer.
+                Format replies for a narrow sidebar: prefer short bullet lists or compact 2-3 column tables rather than wide multi-column tables.
                 """;
         }
 
@@ -701,6 +723,7 @@ public sealed partial class OpenAiChatService(
             You can read the user's daily checklist & daily note, calendar events, university courses, Markdown notes, and uploaded study artifacts (PDFs, slides, documents).
             Always use your read-only tools to look up real data before answering questions about the user's schedule, tasks, courses, notes, or files.
             Be concise, helpful, and cite the note title or file/page label when referencing knowledge base items.
+            Format replies for a narrow sidebar: prefer short bullet lists or compact 2-3 column tables rather than wide multi-column tables.
             """;
     }
 

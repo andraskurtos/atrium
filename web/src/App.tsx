@@ -1544,7 +1544,9 @@ export function App() {
 
           <MobileTabBar
             activeTab="university"
+            isChatOpen={isChatOpen}
             onSelectTab={handleSelectMobileTab}
+            onToggleChat={() => setIsChatOpen((prev) => !prev)}
           />
         </>
       ) : activeView === 'notes' ? (
@@ -1577,7 +1579,9 @@ export function App() {
 
           <MobileTabBar
             activeTab="notes"
+            isChatOpen={isChatOpen}
             onSelectTab={handleSelectMobileTab}
+            onToggleChat={() => setIsChatOpen((prev) => !prev)}
           />
         </>
       ) : (
@@ -1874,7 +1878,9 @@ export function App() {
 
           <MobileTabBar
             activeTab={mobileTab}
+            isChatOpen={isChatOpen}
             onSelectTab={handleSelectMobileTab}
+            onToggleChat={() => setIsChatOpen((prev) => !prev)}
           />
         </>
       )}
