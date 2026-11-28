@@ -577,7 +577,7 @@ print_summary() {
   printf '\n%sUseful commands (run inside %s):%s\n' "$C_BOLD" "$INSTALL_DIR" "$C_RESET"
   printf '  View logs:    %s logs -f\n' "$compose_prefix"
   printf '  Restart:      %s restart\n' "$compose_prefix"
-  printf '  Update:       git pull && %s up -d --build\n' "$compose_prefix"
+  printf '  Update:       ./scripts/update.sh\n'
   printf '  Stop:         %s down\n' "$compose_prefix"
   printf '  Backup now:   ./scripts/backup.sh\n'
   printf '  Daily timer:  ./scripts/backup.sh --install-timer\n'

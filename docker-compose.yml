@@ -46,7 +46,7 @@ services:
       Atrium__Auth__JwtSigningKey: ${ATRIUM_JWT_SECRET:-}
       ConnectionStrings__DefaultConnection: Host=postgres;Port=5432;Database=${POSTGRES_DB:-atrium};Username=${POSTGRES_USER:-atrium};Password=${POSTGRES_PASSWORD:-atrium_dev_password}
     volumes:
-      - atrium_uploads:/app/uploads
+      - ${ATRIUM_UPLOADS_PATH:-atrium_uploads}:/app/uploads
     ports:
       - "${API_BIND_ADDRESS:-0.0.0.0}:${API_PORT:-5000}:8080"
     healthcheck:

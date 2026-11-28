@@ -2,7 +2,27 @@
 
 Atrium stores persistent state in two places:
 1. **PostgreSQL** (`atrium-postgres` container, `atrium_pgdata` volume) — notes, courses, quizzes, calendar events, chat threads, and encrypted AI provider keys.
-2. **Uploads** (`atrium_uploads` Docker volume at `/app/uploads`, or `api/Atrium.Api/uploads` when running locally without the app container) — PDFs, extracted slide images, chat attachments, and note images.
+2. **Uploads** (`atrium_uploads` Docker volume at `/app/uploads`, a custom host path set via `ATRIUM_UPLOADS_PATH`, or `api/Atrium.Api/uploads` when running locally without the app container) — PDFs, extracted slide images, chat attachments, and note images.
+
+### Storing Uploads & Backups Outside the Repo
+
+Set these in `.env` to keep all persistent data outside your git checkout:
+
+```env
+ATRIUM_UPLOADS_PATH=/srv/atrium/uploads
+ATRIUM_BACKUP_DIR=/srv/atrium/backups
+```
+
+- When `ATRIUM_UPLOADS_PATH` is set, Docker Compose bind-mounts it to `/app/uploads`, `npm run prod`/`dev` passes it as `Atrium__Storage__UploadsPath`, and both `backup.sh` and `restore.sh` automatically use it.
+- If you bind-mount a host directory into Docker, make it writable by the container's non-root user (UID `1654`):
+  ```bash
+  sudo mkdir -p /srv/atrium/uploads /srv/atrium/backups
+  sudo chown -R 1654:1654 /srv/atrium/uploads
+  ```
+
+### Safe Upgrades
+
+Run `./scripts/update.sh` (or `npm run update`) whenever you pull a new release — it automatically runs `backup.sh` before `git pull` and `docker compose up -d --build`, then verifies `/api/health`.
 
 > **Important (`.env` / `ATRIUM_JWT_SECRET`):** Stored AI provider and web search API keys are encrypted with AES-GCM using a key derived from `ATRIUM_JWT_SECRET` in `.env`. By default, `.env` is **not** bundled into backup archives so backups can be safely copied to other drives. Keep a separate secure copy of `.env` (for example in your password manager) if you want AI API keys to decrypt automatically after restoring onto a brand-new machine.
 
