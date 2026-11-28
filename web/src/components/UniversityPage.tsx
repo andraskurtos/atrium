@@ -40,6 +40,7 @@ import type {
   AttendanceSummary,
   NoteSummary,
   PendingNoteTarget,
+  StudyGuideJob,
   UniversityActivityItem,
   UniversityActivityType,
   UniversityAttendanceStatus,
@@ -100,6 +101,15 @@ interface UniversityPageProps {
   onExportIcs: (calendar: UserCalendar) => Promise<void>;
   onOpenLinkedNote?: (target: PendingNoteTarget) => void;
   onAskAboutCourse?: (course: UniversityCourse) => void;
+  notesRefreshKey?: number;
+  isAiConfigured?: boolean;
+  studyGuideJobs?: Record<string, StudyGuideJob>;
+  onGenerateStudyGuide?: (
+    course: UniversityCourse,
+    activity: UniversityCourseActivity,
+    item: UniversityActivityItem,
+  ) => void;
+  onOpenStudyGuideThread?: (itemId: string) => void;
   onAnnounce?: (message: string) => void;
 }
 
@@ -352,6 +362,11 @@ export function UniversityPage({
   onExportIcs,
   onOpenLinkedNote,
   onAskAboutCourse,
+  notesRefreshKey = 0,
+  isAiConfigured = false,
+  studyGuideJobs = {},
+  onGenerateStudyGuide,
+  onOpenStudyGuideThread,
   onAnnounce,
 }: UniversityPageProps) {
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(
@@ -361,6 +376,9 @@ export function UniversityPage({
   const [courseArtifacts, setCourseArtifacts] = useState<AttachmentSummary[]>(
     [],
   );
+  const [itemNotesMap, setItemNotesMap] = useState<
+    Record<string, NoteSummary[]>
+  >({});
   const [itemArtifactsMap, setItemArtifactsMap] = useState<
     Record<string, AttachmentSummary[]>
   >({});
@@ -375,6 +393,7 @@ export function UniversityPage({
     if (!selectedCourseId) {
       setCourseNotes([]);
       setCourseArtifacts([]);
+      setItemNotesMap({});
       setItemArtifactsMap({});
       return;
     }
@@ -387,25 +406,34 @@ export function UniversityPage({
           if (found) {
             setCourseNotes(found.notes);
             setCourseArtifacts(found.artifacts);
+            const notesMap: Record<string, NoteSummary[]> = {};
             const map: Record<string, AttachmentSummary[]> = {};
             for (const act of found.activities) {
               for (const item of act.items) {
+                notesMap[item.id] =
+                  item.notes && item.notes.length > 0
+                    ? item.notes
+                    : item.note
+                      ? [item.note]
+                      : [];
                 map[item.id] = item.artifacts;
               }
             }
+            setItemNotesMap(notesMap);
             setItemArtifactsMap(map);
             return;
           }
         }
         setCourseNotes([]);
         setCourseArtifacts([]);
+        setItemNotesMap({});
         setItemArtifactsMap({});
       })
       .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [courses, selectedCourseId]);
+  }, [courses, selectedCourseId, notesRefreshKey]);
 
   const handleUploadCourseArtifact = async (
     e: ChangeEvent<HTMLInputElement>,
@@ -1738,9 +1766,28 @@ export function UniversityPage({
                                       <p className="meta-text">{item.notes}</p>
                                     )}
 
-                                    {(itemArtifactsMap[item.id]?.length ?? 0) > 0 && (
+                                    {((itemNotesMap[item.id]?.length ?? 0) > 0 ||
+                                      (itemArtifactsMap[item.id]?.length ?? 0) > 0) && (
                                       <div className="uni-course-notes-list">
-                                        {itemArtifactsMap[item.id].map((art) => (
+                                        {(itemNotesMap[item.id] ?? []).map(
+                                          (note) => (
+                                            <button
+                                              key={note.id}
+                                              type="button"
+                                              className="btn btn-ghost btn-xs"
+                                              onClick={() =>
+                                                onOpenLinkedNote?.({
+                                                  kind: 'note_id',
+                                                  noteId: note.id,
+                                                })
+                                              }
+                                              title={`Open note: ${note.title}`}
+                                            >
+                                              📄 {note.title}
+                                            </button>
+                                          ),
+                                        )}
+                                        {(itemArtifactsMap[item.id] ?? []).map((art) => (
                                           <span
                                             key={art.id}
                                             className="notes-artifact-chip"
@@ -1828,6 +1875,70 @@ export function UniversityPage({
                                     </div>
 
                                     <div className="uni-item-row-actions">
+                                      {onGenerateStudyGuide && (() => {
+                                        const job = studyGuideJobs[item.id];
+                                        if (job?.status === 'generating') {
+                                          return (
+                                            <button
+                                              type="button"
+                                              className="btn btn-secondary btn-compact"
+                                              onClick={() =>
+                                                onOpenStudyGuideThread?.(item.id)
+                                              }
+                                              title={
+                                                job.statusText ||
+                                                'Generating study guide in background'
+                                              }
+                                            >
+                                              <span
+                                                className="status-dot"
+                                                data-state="checking"
+                                                aria-hidden="true"
+                                              />
+                                              <span>View progress</span>
+                                            </button>
+                                          );
+                                        }
+                                        return (
+                                          <>
+                                            {job?.status === 'done' &&
+                                              job.threadId && (
+                                                <button
+                                                  type="button"
+                                                  className="btn btn-secondary btn-compact"
+                                                  onClick={() =>
+                                                    onOpenStudyGuideThread?.(
+                                                      item.id,
+                                                    )
+                                                  }
+                                                  title="Open the study guide chat thread to refine or ask follow-up questions"
+                                                >
+                                                  <ChatIcon />
+                                                  <span>Follow up</span>
+                                                </button>
+                                              )}
+                                            <button
+                                              type="button"
+                                              className="btn btn-ghost btn-compact"
+                                              disabled={!isAiConfigured}
+                                              onClick={() =>
+                                                onGenerateStudyGuide(
+                                                  selectedCourse,
+                                                  activity,
+                                                  item,
+                                                )
+                                              }
+                                              title={
+                                                isAiConfigured
+                                                  ? `Generate a rich Markdown study guide for ${item.title}`
+                                                  : 'Configure AI Assistant in Account settings first'
+                                              }
+                                            >
+                                              <span>Study Guide</span>
+                                            </button>
+                                          </>
+                                        );
+                                      })()}
                                       {onOpenLinkedNote && (
                                         <button
                                           type="button"

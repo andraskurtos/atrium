@@ -344,10 +344,7 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .HasDatabaseName("ix_notes_event_shared_unique")
                 .HasFilter("\"calendar_event_id\" IS NOT NULL AND \"calendar_occurrence_start_at\" IS NULL AND \"deleted_at\" IS NULL");
             b.HasIndex("FolderId");
-            b.HasIndex("UniversityActivityItemId")
-                .IsUnique()
-                .HasDatabaseName("ix_notes_uni_item_unique")
-                .HasFilter("\"university_activity_item_id\" IS NOT NULL AND \"deleted_at\" IS NULL");
+            b.HasIndex("UniversityActivityItemId");
             b.HasIndex("UniversityCourseId");
             b.HasIndex("CalendarEventId", "CalendarOccurrenceStartAt")
                 .IsUnique()
@@ -360,6 +357,7 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .HasDatabaseName("ix_notes_daily_date_unique")
                 .HasFilter("\"daily_date\" IS NOT NULL AND \"deleted_at\" IS NULL");
             b.HasIndex("UserId", "FolderId", "DeletedAt").HasDatabaseName("ix_notes_user_folder_deleted");
+            b.HasIndex("UserId", "UniversityActivityItemId", "DeletedAt").HasDatabaseName("ix_notes_user_uni_item");
             b.HasIndex("UserId", "UniversityCourseId", "DeletedAt").HasDatabaseName("ix_notes_user_uni_course");
             b.ToTable("notes", (string?)null);
         });

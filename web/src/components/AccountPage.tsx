@@ -80,13 +80,14 @@ const COMMON_TIMEZONES = [
 
 const AVAILABLE_SCOPES = [
   'calendar:read',
-  'calendar:propose',
+  'calendar:write',
   'tasks:read',
-  'tasks:propose',
-  'vault:read',
+  'tasks:write',
   'notes:read',
+  'notes:write',
   'university:read',
-  'university:propose',
+  'university:write',
+  'vault:read',
 ];
 
 export function AccountPage({

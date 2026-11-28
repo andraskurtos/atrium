@@ -479,9 +479,9 @@ public static class NoteEndpoints
                 return Results.BadRequest(new { error = $"Note title must be 1–{MaxNoteTitleLength} characters." });
             }
 
-            if (request.FolderId.HasValue && request.UniversityCourseId.HasValue)
+            if (request.FolderId.HasValue && (request.UniversityCourseId.HasValue || request.UniversityActivityItemId.HasValue))
             {
-                return Results.BadRequest(new { error = "A note cannot belong to both a folder and a university course." });
+                return Results.BadRequest(new { error = "A note cannot belong to both a folder and a university course or lecture." });
             }
 
             var activeFolders = await db.NoteFolders
@@ -496,7 +496,26 @@ public static class NoteEndpoints
             }
 
             string? linkLabel = null;
-            if (request.UniversityCourseId.HasValue)
+            var resolvedCourseId = request.UniversityCourseId;
+            Guid? resolvedItemId = null;
+
+            if (request.UniversityActivityItemId.HasValue)
+            {
+                var item = await db.UniversityActivityItems
+                    .AsNoTracking()
+                    .Include(i => i.Course)
+                    .Include(i => i.Activity)
+                    .FirstOrDefaultAsync(i => i.Id == request.UniversityActivityItemId.Value && i.UserId == userId.Value, ct);
+                if (item is null)
+                {
+                    return Results.NotFound(new { error = "University activity item not found." });
+                }
+
+                resolvedCourseId = item.CourseId;
+                resolvedItemId = item.Id;
+                linkLabel = BuildItemLinkLabel(item.Course, item.Activity, item);
+            }
+            else if (request.UniversityCourseId.HasValue)
             {
                 var course = await db.UniversityCourses
                     .AsNoTracking()
@@ -515,7 +534,8 @@ public static class NoteEndpoints
                 Id = Guid.NewGuid(),
                 UserId = userId.Value,
                 FolderId = request.FolderId,
-                UniversityCourseId = request.UniversityCourseId,
+                UniversityCourseId = resolvedCourseId,
+                UniversityActivityItemId = resolvedItemId,
                 Title = title,
                 Content = content,
                 ContentHash = NoteFrontmatter.ComputeContentHash(content),
@@ -1332,7 +1352,8 @@ public static class NoteEndpoints
 
         var itemNoteLookup = activeNotes
             .Where(n => n.UniversityActivityItemId.HasValue)
-            .ToDictionary(n => n.UniversityActivityItemId!.Value);
+            .GroupBy(n => n.UniversityActivityItemId!.Value)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(n => n.UpdatedAt).ToList());
 
         var courseArtifactsLookup = uniArtifacts
             .Where(a => !a.UniversityActivityItemId.HasValue && a.UniversityCourseId.HasValue && (!isPat || a.AllowAgentRead))
@@ -1379,19 +1400,19 @@ public static class NoteEndpoints
                                     .ThenBy(i => i.CreatedAt)
                                     .Select(i =>
                                     {
-                                        NoteSummaryDto? noteDto = null;
+                                        var itemNotes = new List<NoteSummaryDto>();
                                         var itemHiddenFromAgent = false;
-                                        if (itemNoteLookup.TryGetValue(i.Id, out var linkedNote))
+                                        if (itemNoteLookup.TryGetValue(i.Id, out var linkedNotes))
                                         {
-                                            var eff = IsNoteAgentReadable(linkedNote, effectiveFolderAccess);
-                                            if (!eff) itemHiddenFromAgent = true;
-                                            if (!isPat || eff)
+                                            var label = BuildItemLinkLabel(c, a, i);
+                                            foreach (var linkedNote in linkedNotes)
                                             {
-                                                noteDto = ToSummaryDto(
-                                                    linkedNote,
-                                                    eff,
-                                                    null,
-                                                    BuildItemLinkLabel(c, a, i));
+                                                var eff = IsNoteAgentReadable(linkedNote, effectiveFolderAccess);
+                                                if (!eff) itemHiddenFromAgent = true;
+                                                if (!isPat || eff)
+                                                {
+                                                    itemNotes.Add(ToSummaryDto(linkedNote, eff, null, label));
+                                                }
                                             }
                                         }
 
@@ -1406,8 +1427,9 @@ public static class NoteEndpoints
                                             i.Id,
                                             i.Title,
                                             i.SequenceNumber,
-                                            noteDto,
-                                            iArtifacts);
+                                            itemNotes.FirstOrDefault(),
+                                            iArtifacts,
+                                            itemNotes);
                                     })
                                     .ToList();
 

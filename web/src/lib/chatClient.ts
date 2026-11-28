@@ -1,6 +1,7 @@
 import { ApiError, apiFetch, authenticatedRawFetch } from './authClient';
 import type {
   ChatCitation,
+  ChatMutationEvent,
   ChatThreadDetail,
   ChatThreadSummary,
 } from '../types/atrium';
@@ -15,6 +16,7 @@ export interface StreamChatOptions {
   onReasoning?: (text: string) => void;
   onDelta: (text: string) => void;
   onCitations?: (citations: ChatCitation[]) => void;
+  onMutation?: (mutation: ChatMutationEvent) => void;
   onError?: (message: string) => void;
   onDone?: () => void;
 }
@@ -25,6 +27,7 @@ type ChatSseEvent =
   | { type: 'reasoning'; text: string }
   | { type: 'delta'; text: string }
   | { type: 'citations'; citations: ChatCitation[] }
+  | ({ type: 'mutation' } & ChatMutationEvent)
   | { type: 'error'; message: string }
   | { type: 'done' };
 
@@ -107,6 +110,13 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
             break;
           case 'citations':
             options.onCitations?.(evt.citations);
+            break;
+          case 'mutation':
+            options.onMutation?.({
+              domain: evt.domain,
+              id: evt.id,
+              title: evt.title,
+            });
             break;
           case 'error':
             options.onError?.(evt.message);

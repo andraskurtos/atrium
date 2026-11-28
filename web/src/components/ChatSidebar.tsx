@@ -11,6 +11,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { downloadAttachment } from '../lib/attachmentsClient';
 import { formatRelativeTime } from '../lib/authClient';
+import { normalizeBlockMathFences } from '../lib/markdownUtils';
 import type {
   ChatCitation,
   ChatMessage,
@@ -368,7 +369,7 @@ export function ChatSidebar({
                                     ),
                                   }}
                                 >
-                                  {msg.content}
+                                  {normalizeBlockMathFences(msg.content)}
                                 </ReactMarkdown>
                               ) : (
                                 <span className="meta-text">

@@ -1107,17 +1107,25 @@ export function NotesSidebar({
                                                 {aOpen &&
                                                   act.items.map((item) => {
                                                     const iKey = `uni:item:${item.id}`;
-                                                    const hasArtifacts =
-                                                      item.artifacts.length > 0;
+                                                    const itemNotes =
+                                                      item.notes &&
+                                                      item.notes.length > 0
+                                                        ? item.notes
+                                                        : item.note
+                                                          ? [item.note]
+                                                          : [];
+                                                    const hasChildren =
+                                                      item.artifacts.length > 0 ||
+                                                      itemNotes.length > 1;
                                                     const iOpen =
                                                       isNodeExpanded(
                                                         iKey,
-                                                        hasArtifacts,
+                                                        hasChildren,
                                                       );
                                                     const isSelected =
-                                                      item.note !== null &&
+                                                      itemNotes.length === 1 &&
                                                       selectedNoteId ===
-                                                        item.note.id;
+                                                        itemNotes[0].id;
                                                     return (
                                                       <div
                                                         key={iKey}
@@ -1134,7 +1142,7 @@ export function NotesSidebar({
                                                           }}
                                                           {...fileDropProps(`item:${item.id}`, { universityActivityItemId: item.id })}
                                                         >
-                                                          {hasArtifacts ? (
+                                                          {hasChildren ? (
                                                             <button
                                                               type="button"
                                                               className={`notes-tree-chevron ${iOpen ? 'is-expanded' : ''}`}
@@ -1205,7 +1213,37 @@ export function NotesSidebar({
                                                             </button>
                                                           </div>
                                                         </div>
-                                                        {hasArtifacts &&
+                                                        {itemNotes.length > 1 &&
+                                                          iOpen &&
+                                                          itemNotes.map((n) => (
+                                                            <button
+                                                              key={n.id}
+                                                              type="button"
+                                                              className={`notes-tree-note-row ${
+                                                                selectedNoteId ===
+                                                                n.id
+                                                                  ? 'is-selected'
+                                                                  : ''
+                                                              }`}
+                                                              style={{
+                                                                paddingLeft:
+                                                                  '62px',
+                                                              }}
+                                                              onClick={() => {
+                                                                onSelectNote(
+                                                                  n.id,
+                                                                );
+                                                                onCloseMobile();
+                                                              }}
+                                                            >
+                                                              <NoteIcon className="notes-tree-icon" />
+                                                              <span className="notes-tree-note-title">
+                                                                {n.title}
+                                                              </span>
+                                                            </button>
+                                                          ))}
+                                                        {item.artifacts.length >
+                                                          0 &&
                                                           iOpen &&
                                                           item.artifacts.map(
                                                             (art) =>

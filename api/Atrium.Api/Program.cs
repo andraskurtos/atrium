@@ -46,6 +46,7 @@ builder.Services.AddSingleton<IAttachmentStorage, LocalDiskAttachmentStorage>();
 builder.Services.AddSingleton<IArtifactTextExtractor, DefaultArtifactTextExtractor>();
 builder.Services.AddScoped<ArtifactTextService>();
 builder.Services.AddScoped<KnowledgeReadService>();
+builder.Services.AddScoped<KnowledgeWriteService>();
 builder.Services.AddScoped<OpenAiChatService>();
 builder.Services.AddHttpClient(OpenAiChatService.HttpClientName, client =>
 {

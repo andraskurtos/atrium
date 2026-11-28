@@ -184,9 +184,15 @@ export function normalizeBlockMathFences(markdown: string): string {
     if (trimmed === '$$$') {
       return line.replace('$$$', '$$');
     }
-    if (trimmed.startsWith('$$$') && trimmed.endsWith('$$$') && trimmed.length > 6) {
-      return line.replace('$$$', '$$').replace(/\$\$\$(\s*)$/, '$$$$$1');
+
+    const singleLineBlockMatch = trimmed.match(/^(\${2,3})([\s\S]+?)\1$/);
+    if (singleLineBlockMatch) {
+      const expr = singleLineBlockMatch[2].trim();
+      if (expr.length > 0 && !expr.includes('$$')) {
+        return `\n$$\n${expr}\n$$\n`;
+      }
     }
+
     return line;
   });
 

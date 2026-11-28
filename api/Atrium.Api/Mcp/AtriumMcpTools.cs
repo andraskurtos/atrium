@@ -11,6 +11,7 @@ namespace Atrium.Api.Mcp;
 [McpServerToolType]
 public sealed class AtriumMcpTools(
     KnowledgeReadService knowledge,
+    KnowledgeWriteService writeService,
     IHttpContextAccessor httpContextAccessor)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -187,6 +188,253 @@ public sealed class AtriumMcpTools(
             scope,
             courseId,
             limit,
+            ct);
+        return ToToolResult(result);
+    }
+
+    [McpServerTool(Name = "create_note", ReadOnly = false, Destructive = false)]
+    [Description("Create a new Markdown note (general, in a folder, linked to a university course or lecture/activity item, linked to a calendar event, or daily). Requires notes:write scope.")]
+    public async Task<CallToolResult> CreateNoteAsync(
+        [Description("Note title.")] string title,
+        [Description("Markdown content (supports headings, GFM tables, callouts, code blocks, LaTeX math, and embedded images).")] string content,
+        [Description("Optional folder GUID.")] Guid? folderId = null,
+        [Description("Optional university course GUID.")] Guid? universityCourseId = null,
+        [Description("Optional university lecture/activity item GUID (supports multiple notes per lecture).")] Guid? universityActivityItemId = null,
+        [Description("Optional calendar event GUID.")] Guid? calendarEventId = null,
+        [Description("Optional ISO-8601 occurrence start timestamp for recurring calendar events.")] string? occurrenceStartAt = null,
+        [Description("Optional daily date in yyyy-MM-dd format.")] string? dailyDate = null,
+        CancellationToken ct = default)
+    {
+        var principal = GetPrincipal();
+        if (principal is null) return ErrorResult("Unauthorized.");
+
+        if (!TryParseOptionalDateTimeOffset(occurrenceStartAt, out var parsedOcc))
+        {
+            return ErrorResult("Invalid 'occurrenceStartAt' ISO-8601 timestamp.");
+        }
+
+        var result = await writeService.CreateNoteAsync(
+            principal,
+            enforceAgentRules: true,
+            title,
+            content,
+            folderId,
+            universityCourseId,
+            universityActivityItemId,
+            calendarEventId,
+            parsedOcc,
+            dailyDate,
+            ct);
+        return ToToolResult(result);
+    }
+
+    [McpServerTool(Name = "update_note", ReadOnly = false, Destructive = false)]
+    [Description("Update an existing agent-readable Markdown note's title and/or content. Requires notes:write scope.")]
+    public async Task<CallToolResult> UpdateNoteAsync(
+        [Description("Note GUID to update.")] Guid noteId,
+        [Description("Optional new title.")] string? title = null,
+        [Description("Optional new Markdown content.")] string? content = null,
+        CancellationToken ct = default)
+    {
+        var principal = GetPrincipal();
+        if (principal is null) return ErrorResult("Unauthorized.");
+
+        var result = await writeService.UpdateNoteAsync(principal, enforceAgentRules: true, noteId, title, content, ct);
+        return ToToolResult(result);
+    }
+
+    [McpServerTool(Name = "extract_pdf_images", ReadOnly = false, Destructive = false)]
+    [Description("Extract embedded figures/diagrams (>=120x120px) from a PDF artifact, attach them as inline images on a target note, and return Markdown embed snippets. Requires notes:write scope.")]
+    public async Task<CallToolResult> ExtractPdfImagesAsync(
+        [Description("Source PDF artifact attachment GUID.")] Guid attachmentId,
+        [Description("Target note GUID where the extracted images will be attached.")] Guid noteId,
+        [Description("Optional 1-based start page.")] int? startPage = null,
+        [Description("Optional 1-based end page.")] int? endPage = null,
+        [Description("Maximum images to extract (1-6, default 4).")] int maxImages = 4,
+        CancellationToken ct = default)
+    {
+        var principal = GetPrincipal();
+        if (principal is null) return ErrorResult("Unauthorized.");
+
+        var result = await writeService.ExtractPdfImagesAsync(
+            principal,
+            enforceAgentRules: true,
+            attachmentId,
+            noteId,
+            startPage,
+            endPage,
+            maxImages,
+            ct);
+        return ToToolResult(result);
+    }
+
+    [McpServerTool(Name = "create_checklist_item", ReadOnly = false, Destructive = false)]
+    [Description("Add a daily checklist task for a yyyy-MM-dd date (defaults to today). Requires tasks:write scope.")]
+    public async Task<CallToolResult> CreateChecklistItemAsync(
+        [Description("Checklist task title.")] string title,
+        [Description("Optional yyyy-MM-dd date. Defaults to today UTC.")] string? date = null,
+        [Description("Optional 24-hour HH:mm due time.")] string? dueTime = null,
+        CancellationToken ct = default)
+    {
+        var principal = GetPrincipal();
+        if (principal is null) return ErrorResult("Unauthorized.");
+
+        var result = await writeService.CreateChecklistItemAsync(principal, enforceAgentRules: true, date, title, dueTime, ct);
+        return ToToolResult(result);
+    }
+
+    [McpServerTool(Name = "toggle_checklist_item", ReadOnly = false, Destructive = false)]
+    [Description("Mark a daily checklist item as completed or incomplete. Requires tasks:write scope.")]
+    public async Task<CallToolResult> ToggleChecklistItemAsync(
+        [Description("Checklist item GUID.")] Guid itemId,
+        [Description("True to mark completed, false to mark open.")] bool isCompleted,
+        CancellationToken ct = default)
+    {
+        var principal = GetPrincipal();
+        if (principal is null) return ErrorResult("Unauthorized.");
+
+        var result = await writeService.ToggleChecklistItemAsync(principal, enforceAgentRules: true, itemId, isCompleted, ct);
+        return ToToolResult(result);
+    }
+
+    [McpServerTool(Name = "create_event", ReadOnly = false, Destructive = false)]
+    [Description("Create a new calendar event. Requires calendar:write scope.")]
+    public async Task<CallToolResult> CreateEventAsync(
+        [Description("Event title.")] string title,
+        [Description("ISO-8601 start timestamp.")] string startAt,
+        [Description("ISO-8601 end timestamp.")] string endAt,
+        [Description("Optional calendar GUID (defaults to user's default calendar).")] Guid? calendarId = null,
+        [Description("Whether this is an all-day event.")] bool isAllDay = false,
+        [Description("Optional location.")] string? location = null,
+        [Description("Optional description.")] string? description = null,
+        [Description("Optional RFC 5545 RRULE string.")] string? recurrenceRule = null,
+        CancellationToken ct = default)
+    {
+        var principal = GetPrincipal();
+        if (principal is null) return ErrorResult("Unauthorized.");
+
+        if (!TryParseOptionalDateTimeOffset(startAt, out var parsedStart) || !parsedStart.HasValue)
+        {
+            return ErrorResult("Valid ISO-8601 'startAt' is required.");
+        }
+
+        if (!TryParseOptionalDateTimeOffset(endAt, out var parsedEnd) || !parsedEnd.HasValue)
+        {
+            return ErrorResult("Valid ISO-8601 'endAt' is required.");
+        }
+
+        var result = await writeService.CreateEventAsync(
+            principal,
+            enforceAgentRules: true,
+            title,
+            parsedStart.Value,
+            parsedEnd.Value,
+            calendarId,
+            isAllDay,
+            location,
+            description,
+            recurrenceRule,
+            ct);
+        return ToToolResult(result);
+    }
+
+    [McpServerTool(Name = "create_course", ReadOnly = false, Destructive = false)]
+    [Description("Create a new university course. Requires university:write scope.")]
+    public async Task<CallToolResult> CreateCourseAsync(
+        [Description("Course name.")] string name,
+        [Description("Optional course code (e.g. CS410).")] string? code = null,
+        [Description("Optional semester (e.g. 2026 Fall).")] string? semester = null,
+        [Description("Optional instructor name.")] string? instructor = null,
+        [Description("Optional credits.")] decimal? credits = null,
+        [Description("Optional 6-digit hex color (e.g. #3b6ea5).")] string? color = null,
+        [Description("Optional course description.")] string? description = null,
+        CancellationToken ct = default)
+    {
+        var principal = GetPrincipal();
+        if (principal is null) return ErrorResult("Unauthorized.");
+
+        var result = await writeService.CreateCourseAsync(
+            principal,
+            enforceAgentRules: true,
+            name,
+            code,
+            semester,
+            instructor,
+            credits,
+            color,
+            description,
+            ct);
+        return ToToolResult(result);
+    }
+
+    [McpServerTool(Name = "create_activity", ReadOnly = false, Destructive = false)]
+    [Description("Add an activity group (lecture, practice, laboratory, homework_assignment, semester_assignment, midterm, exam) to a university course. Requires university:write scope.")]
+    public async Task<CallToolResult> CreateActivityAsync(
+        [Description("Owning university course GUID.")] Guid courseId,
+        [Description("Activity type: lecture, practice, laboratory, homework_assignment, semester_assignment, midterm, or exam.")] string activityType,
+        [Description("Optional custom title.")] string? title = null,
+        [Description("Optional default room/location.")] string? defaultLocation = null,
+        [Description("Optional minimum attendance count.")] int? minAttendanceCount = null,
+        [Description("Optional minimum attendance percent (0-100).")] decimal? minAttendancePercent = null,
+        [Description("Optional planned total session count.")] int? plannedTotalCount = null,
+        CancellationToken ct = default)
+    {
+        var principal = GetPrincipal();
+        if (principal is null) return ErrorResult("Unauthorized.");
+
+        var result = await writeService.CreateActivityAsync(
+            principal,
+            enforceAgentRules: true,
+            courseId,
+            activityType,
+            title,
+            defaultLocation,
+            minAttendanceCount,
+            minAttendancePercent,
+            plannedTotalCount,
+            ct);
+        return ToToolResult(result);
+    }
+
+    [McpServerTool(Name = "create_activity_item", ReadOnly = false, Destructive = false)]
+    [Description("Add a lecture, lab, assignment, or exam item to a university course activity (and optionally schedule it on the University calendar). Requires university:write scope.")]
+    public async Task<CallToolResult> CreateActivityItemAsync(
+        [Description("Owning university course activity GUID.")] Guid activityId,
+        [Description("Item title (e.g. Lecture 5).")] string title,
+        [Description("Optional topic/theme.")] string? theme = null,
+        [Description("Optional short summary notes.")] string? notes = null,
+        [Description("Optional sequence number.")] int? sequenceNumber = null,
+        [Description("Optional ISO-8601 start timestamp to schedule on the University calendar.")] string? startAt = null,
+        [Description("Optional ISO-8601 end timestamp.")] string? endAt = null,
+        [Description("Whether the scheduled event is all-day.")] bool isAllDay = false,
+        [Description("Optional room/location.")] string? location = null,
+        CancellationToken ct = default)
+    {
+        var principal = GetPrincipal();
+        if (principal is null) return ErrorResult("Unauthorized.");
+
+        if (!TryParseOptionalDateTimeOffset(startAt, out var parsedStart))
+        {
+            return ErrorResult("Invalid 'startAt' ISO-8601 timestamp.");
+        }
+
+        if (!TryParseOptionalDateTimeOffset(endAt, out var parsedEnd))
+        {
+            return ErrorResult("Invalid 'endAt' ISO-8601 timestamp.");
+        }
+
+        var result = await writeService.CreateActivityItemAsync(
+            principal,
+            enforceAgentRules: true,
+            activityId,
+            title,
+            theme,
+            notes,
+            sequenceNumber,
+            parsedStart,
+            parsedEnd,
+            isAllDay,
+            location,
             ct);
         return ToToolResult(result);
     }

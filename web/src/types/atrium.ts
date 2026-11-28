@@ -115,6 +115,7 @@ export interface UniversityItemNotesTree {
   title: string;
   sequenceNumber: number | null;
   note: NoteSummary | null;
+  notes?: NoteSummary[];
   artifacts: AttachmentSummary[];
 }
 
@@ -352,6 +353,19 @@ export interface ChatThreadDetail extends ChatThreadSummary {
 export interface ChatScope {
   courseId: string | null;
   courseLabel?: string | null;
+}
+
+export interface ChatMutationEvent {
+  domain: 'notes' | 'calendar' | 'tasks' | 'university';
+  id: string;
+  title: string;
+}
+
+export interface StudyGuideJob {
+  threadId: string | null;
+  status: 'generating' | 'done' | 'error';
+  statusText?: string | null;
+  error?: string | null;
 }
 
 export interface AgentToken {

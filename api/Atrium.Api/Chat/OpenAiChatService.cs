@@ -15,11 +15,12 @@ namespace Atrium.Api.Chat;
 public sealed partial class OpenAiChatService(
     IHttpClientFactory httpClientFactory,
     KnowledgeReadService knowledge,
+    KnowledgeWriteService writeService,
     AppDbContext db,
     ILogger<OpenAiChatService> logger)
 {
     public const string HttpClientName = "AtriumOpenAiChat";
-    private const int MaxToolRounds = 6;
+    private const int MaxToolRounds = 12;
     private const int MaxToolOutputChars = 24_000;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -222,7 +223,7 @@ public sealed partial class OpenAiChatService(
             foreach (var tc in roundResult.ToolCalls)
             {
                 await writeEventAsync(new { type = "status", message = DescribeToolStatus(tc.Name, courseName) });
-                var toolOutput = await ExecuteToolAsync(principal, userId, tc.Name, tc.Arguments, courseId, citations, ct);
+                var toolOutput = await ExecuteToolAsync(principal, userId, tc.Name, tc.Arguments, courseId, citations, writeEventAsync, ct);
                 if (toolOutput.Length > MaxToolOutputChars)
                 {
                     toolOutput = toolOutput[..MaxToolOutputChars] + "\n...[truncated]";
@@ -521,6 +522,7 @@ public sealed partial class OpenAiChatService(
         string argumentsJson,
         Guid? lockedCourseId,
         Dictionary<(string SourceType, Guid Id), ChatCitationDto> citations,
+        Func<object, Task> writeEventAsync,
         CancellationToken ct)
     {
         JsonDocument argsDoc;
@@ -546,6 +548,10 @@ public sealed partial class OpenAiChatService(
                     "read_note" => await RunReadNoteAsync(principal, root, lockedCourseId, citations, ct),
                     "list_artifacts" => await RunListArtifactsAsync(principal, userId, root, lockedCourseId, ct),
                     "read_artifact_text" => await RunReadArtifactTextAsync(principal, userId, root, lockedCourseId, citations, ct),
+                    "create_note" => await RunCreateNoteAsync(principal, userId, root, lockedCourseId, citations, writeEventAsync, ct),
+                    "update_note" => await RunUpdateNoteAsync(principal, userId, root, lockedCourseId, citations, writeEventAsync, ct),
+                    "extract_pdf_images" => await RunExtractPdfImagesAsync(principal, userId, root, lockedCourseId, ct),
+                    "create_activity_item" => await RunCreateActivityItemAsync(principal, userId, root, lockedCourseId, writeEventAsync, ct),
                     _ => JsonSerializer.Serialize(new { error = "Tool is not available in course-scoped chat." }, JsonOptions),
                 };
             }
@@ -578,9 +584,320 @@ public sealed partial class OpenAiChatService(
                 "list_artifacts" => await RunListArtifactsAsync(principal, userId, root, null, ct),
                 "read_artifact_text" => await RunReadArtifactTextAsync(principal, userId, root, null, citations, ct),
                 "search_knowledge" => await RunSearchKnowledgeAsync(principal, root, null, citations, ct),
+                "create_note" => await RunCreateNoteAsync(principal, userId, root, null, citations, writeEventAsync, ct),
+                "update_note" => await RunUpdateNoteAsync(principal, userId, root, null, citations, writeEventAsync, ct),
+                "extract_pdf_images" => await RunExtractPdfImagesAsync(principal, userId, root, null, ct),
+                "create_checklist_item" => await RunCreateChecklistItemAsync(principal, root, writeEventAsync, ct),
+                "toggle_checklist_item" => await RunToggleChecklistItemAsync(principal, root, writeEventAsync, ct),
+                "create_event" => await RunCreateEventAsync(principal, root, writeEventAsync, ct),
+                "create_course" => await RunCreateCourseAsync(principal, root, writeEventAsync, ct),
+                "create_activity" => await RunCreateActivityAsync(principal, root, writeEventAsync, ct),
+                "create_activity_item" => await RunCreateActivityItemAsync(principal, userId, root, null, writeEventAsync, ct),
                 _ => JsonSerializer.Serialize(new { error = $"Unknown tool: {toolName}" }, JsonOptions),
             };
         }
+    }
+
+    private async Task<string> RunCreateNoteAsync(
+        ClaimsPrincipal principal,
+        Guid userId,
+        JsonElement root,
+        Guid? lockedCourseId,
+        Dictionary<(string SourceType, Guid Id), ChatCitationDto> citations,
+        Func<object, Task> writeEventAsync,
+        CancellationToken ct)
+    {
+        var title = GetOptionalString(root, "title");
+        var content = GetOptionalString(root, "content");
+        var folderId = lockedCourseId.HasValue ? null : GetOptionalGuid(root, "folderId");
+        var courseId = lockedCourseId ?? GetOptionalGuid(root, "universityCourseId");
+        var itemId = GetOptionalGuid(root, "universityActivityItemId");
+        var eventId = lockedCourseId.HasValue ? null : GetOptionalGuid(root, "calendarEventId");
+        var occStart = lockedCourseId.HasValue ? null : GetOptionalDateTimeOffset(root, "occurrenceStartAt");
+        var dailyDate = lockedCourseId.HasValue ? null : GetOptionalString(root, "dailyDate");
+
+        if (lockedCourseId.HasValue && itemId.HasValue)
+        {
+            var belongs = await db.UniversityActivityItems.AnyAsync(
+                i => i.Id == itemId.Value && i.UserId == userId && i.CourseId == lockedCourseId.Value,
+                ct);
+            if (!belongs)
+            {
+                return JsonSerializer.Serialize(new { error = "Access denied: lecture item does not belong to the selected course." }, JsonOptions);
+            }
+        }
+
+        var result = await writeService.CreateNoteAsync(
+            principal,
+            false,
+            title,
+            content,
+            folderId,
+            courseId,
+            itemId,
+            eventId,
+            occStart,
+            dailyDate,
+            ct);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            citations[("note", result.Value.Id)] = new ChatCitationDto("note", result.Value.Id, result.Value.Title, result.Value.LinkLabel, null);
+            await writeEventAsync(new { type = "mutation", domain = "notes", id = result.Value.Id, title = result.Value.Title });
+        }
+
+        return SerializeResult(result);
+    }
+
+    private async Task<string> RunUpdateNoteAsync(
+        ClaimsPrincipal principal,
+        Guid userId,
+        JsonElement root,
+        Guid? lockedCourseId,
+        Dictionary<(string SourceType, Guid Id), ChatCitationDto> citations,
+        Func<object, Task> writeEventAsync,
+        CancellationToken ct)
+    {
+        var noteId = GetOptionalGuid(root, "noteId");
+        if (!noteId.HasValue) return JsonSerializer.Serialize(new { error = "noteId is required." }, JsonOptions);
+
+        if (lockedCourseId.HasValue)
+        {
+            var belongs = await db.Notes.AnyAsync(
+                n => n.Id == noteId.Value && n.UserId == userId && n.DeletedAt == null && n.UniversityCourseId == lockedCourseId.Value,
+                ct);
+            if (!belongs)
+            {
+                return JsonSerializer.Serialize(new { error = "Access denied: note does not belong to the selected course." }, JsonOptions);
+            }
+        }
+
+        var result = await writeService.UpdateNoteAsync(
+            principal,
+            false,
+            noteId.Value,
+            GetOptionalString(root, "title"),
+            GetOptionalString(root, "content"),
+            ct);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            citations[("note", result.Value.Id)] = new ChatCitationDto("note", result.Value.Id, result.Value.Title, result.Value.LinkLabel, null);
+            await writeEventAsync(new { type = "mutation", domain = "notes", id = result.Value.Id, title = result.Value.Title });
+        }
+
+        return SerializeResult(result);
+    }
+
+    private async Task<string> RunExtractPdfImagesAsync(
+        ClaimsPrincipal principal,
+        Guid userId,
+        JsonElement root,
+        Guid? lockedCourseId,
+        CancellationToken ct)
+    {
+        var attachmentId = GetOptionalGuid(root, "attachmentId");
+        var noteId = GetOptionalGuid(root, "noteId");
+        if (!attachmentId.HasValue || !noteId.HasValue)
+        {
+            return JsonSerializer.Serialize(new { error = "attachmentId and noteId are required." }, JsonOptions);
+        }
+
+        if (lockedCourseId.HasValue)
+        {
+            var noteInCourse = await db.Notes.AnyAsync(
+                n => n.Id == noteId.Value && n.UserId == userId && n.DeletedAt == null && n.UniversityCourseId == lockedCourseId.Value,
+                ct);
+            var attInCourse = await db.Attachments.AnyAsync(
+                a => a.Id == attachmentId.Value && a.UserId == userId && a.DeletedAt == null && a.UniversityCourseId == lockedCourseId.Value,
+                ct);
+            if (!noteInCourse || !attInCourse)
+            {
+                return JsonSerializer.Serialize(new { error = "Access denied: PDF or note does not belong to the selected course." }, JsonOptions);
+            }
+        }
+
+        var startPage = root.TryGetProperty("startPage", out var spEl) && spEl.TryGetInt32(out var sp) ? sp : (int?)null;
+        var endPage = root.TryGetProperty("endPage", out var epEl) && epEl.TryGetInt32(out var ep) ? ep : (int?)null;
+        var maxImages = GetOptionalInt(root, "maxImages", 4);
+
+        var result = await writeService.ExtractPdfImagesAsync(principal, false, attachmentId.Value, noteId.Value, startPage, endPage, maxImages, ct);
+        return SerializeResult(result);
+    }
+
+    private async Task<string> RunCreateChecklistItemAsync(
+        ClaimsPrincipal principal,
+        JsonElement root,
+        Func<object, Task> writeEventAsync,
+        CancellationToken ct)
+    {
+        var result = await writeService.CreateChecklistItemAsync(
+            principal,
+            false,
+            GetOptionalString(root, "date"),
+            GetOptionalString(root, "title"),
+            GetOptionalString(root, "dueTime"),
+            ct);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            await writeEventAsync(new { type = "mutation", domain = "tasks", id = result.Value.Id, title = result.Value.Title });
+        }
+
+        return SerializeResult(result);
+    }
+
+    private async Task<string> RunToggleChecklistItemAsync(
+        ClaimsPrincipal principal,
+        JsonElement root,
+        Func<object, Task> writeEventAsync,
+        CancellationToken ct)
+    {
+        var itemId = GetOptionalGuid(root, "itemId");
+        if (!itemId.HasValue) return JsonSerializer.Serialize(new { error = "itemId is required." }, JsonOptions);
+        var result = await writeService.ToggleChecklistItemAsync(
+            principal,
+            false,
+            itemId.Value,
+            GetOptionalBool(root, "isCompleted", true),
+            ct);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            await writeEventAsync(new { type = "mutation", domain = "tasks", id = result.Value.Id, title = result.Value.Title });
+        }
+
+        return SerializeResult(result);
+    }
+
+    private async Task<string> RunCreateEventAsync(
+        ClaimsPrincipal principal,
+        JsonElement root,
+        Func<object, Task> writeEventAsync,
+        CancellationToken ct)
+    {
+        var startAt = GetOptionalDateTimeOffset(root, "startAt");
+        var endAt = GetOptionalDateTimeOffset(root, "endAt");
+        if (!startAt.HasValue || !endAt.HasValue)
+        {
+            return JsonSerializer.Serialize(new { error = "startAt and endAt ISO-8601 timestamps are required." }, JsonOptions);
+        }
+
+        var result = await writeService.CreateEventAsync(
+            principal,
+            false,
+            GetOptionalString(root, "title"),
+            startAt.Value,
+            endAt.Value,
+            GetOptionalGuid(root, "calendarId"),
+            GetOptionalBool(root, "isAllDay", false),
+            GetOptionalString(root, "location"),
+            GetOptionalString(root, "description"),
+            GetOptionalString(root, "recurrenceRule"),
+            ct);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            await writeEventAsync(new { type = "mutation", domain = "calendar", id = result.Value.Id, title = result.Value.Title });
+        }
+
+        return SerializeResult(result);
+    }
+
+    private async Task<string> RunCreateCourseAsync(
+        ClaimsPrincipal principal,
+        JsonElement root,
+        Func<object, Task> writeEventAsync,
+        CancellationToken ct)
+    {
+        decimal? credits = root.TryGetProperty("credits", out var crEl) && crEl.TryGetDecimal(out var cr) ? cr : null;
+        var result = await writeService.CreateCourseAsync(
+            principal,
+            false,
+            GetOptionalString(root, "name"),
+            GetOptionalString(root, "code"),
+            GetOptionalString(root, "semester"),
+            GetOptionalString(root, "instructor"),
+            credits,
+            GetOptionalString(root, "color"),
+            GetOptionalString(root, "description"),
+            ct);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            await writeEventAsync(new { type = "mutation", domain = "university", id = result.Value.Id, title = result.Value.Name });
+        }
+
+        return SerializeResult(result);
+    }
+
+    private async Task<string> RunCreateActivityAsync(
+        ClaimsPrincipal principal,
+        JsonElement root,
+        Func<object, Task> writeEventAsync,
+        CancellationToken ct)
+    {
+        var courseId = GetOptionalGuid(root, "courseId");
+        if (!courseId.HasValue) return JsonSerializer.Serialize(new { error = "courseId is required." }, JsonOptions);
+        int? minCount = root.TryGetProperty("minAttendanceCount", out var mcEl) && mcEl.TryGetInt32(out var mc) ? mc : null;
+        decimal? minPct = root.TryGetProperty("minAttendancePercent", out var mpEl) && mpEl.TryGetDecimal(out var mp) ? mp : null;
+        int? planned = root.TryGetProperty("plannedTotalCount", out var ptEl) && ptEl.TryGetInt32(out var pt) ? pt : null;
+
+        var result = await writeService.CreateActivityAsync(
+            principal,
+            false,
+            courseId.Value,
+            GetOptionalString(root, "activityType"),
+            GetOptionalString(root, "title"),
+            GetOptionalString(root, "defaultLocation"),
+            minCount,
+            minPct,
+            planned,
+            ct);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            await writeEventAsync(new { type = "mutation", domain = "university", id = result.Value.Id, title = result.Value.Title ?? result.Value.ActivityType });
+        }
+
+        return SerializeResult(result);
+    }
+
+    private async Task<string> RunCreateActivityItemAsync(
+        ClaimsPrincipal principal,
+        Guid userId,
+        JsonElement root,
+        Guid? lockedCourseId,
+        Func<object, Task> writeEventAsync,
+        CancellationToken ct)
+    {
+        var activityId = GetOptionalGuid(root, "activityId");
+        if (!activityId.HasValue) return JsonSerializer.Serialize(new { error = "activityId is required." }, JsonOptions);
+
+        if (lockedCourseId.HasValue)
+        {
+            var belongs = await db.UniversityCourseActivities.AnyAsync(
+                a => a.Id == activityId.Value && a.UserId == userId && a.CourseId == lockedCourseId.Value,
+                ct);
+            if (!belongs)
+            {
+                return JsonSerializer.Serialize(new { error = "Access denied: activity does not belong to the selected course." }, JsonOptions);
+            }
+        }
+
+        int? seq = root.TryGetProperty("sequenceNumber", out var seqEl) && seqEl.TryGetInt32(out var sv) ? sv : null;
+        var result = await writeService.CreateActivityItemAsync(
+            principal,
+            false,
+            activityId.Value,
+            GetOptionalString(root, "title"),
+            GetOptionalString(root, "theme"),
+            GetOptionalString(root, "notes"),
+            seq,
+            GetOptionalDateTimeOffset(root, "startAt"),
+            GetOptionalDateTimeOffset(root, "endAt"),
+            GetOptionalBool(root, "isAllDay", false),
+            GetOptionalString(root, "location"),
+            ct);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            await writeEventAsync(new { type = "mutation", domain = "university", id = result.Value.Id, title = result.Value.Title });
+        }
+
+        return SerializeResult(result);
     }
 
     private async Task<string> RunGetCourseAsync(ClaimsPrincipal principal, Guid? courseId, CancellationToken ct)
@@ -803,19 +1120,19 @@ public sealed partial class OpenAiChatService(
             return $"""
                 You are Atrium's study assistant. Today's UTC date is {todayUtc}.
                 You are strictly scoped to the university course "{courseName ?? "Selected Course"}" (courseId: {courseId.Value}).
-                Answer questions using ONLY the notes, lectures, and uploaded artifacts of this course.
-                Use your tools (`search_knowledge`, `get_course`, `read_note`, `list_artifacts`, `read_artifact_text`) to look up exact content before answering.
+                You have both read tools (`search_knowledge`, `get_course`, `read_note`, `list_artifacts`, `read_artifact_text`) and write tools (`create_note`, `update_note`, `extract_pdf_images`, `create_activity_item`) scoped to this course.
+                Use your read tools to inspect exact course notes and uploaded slides/PDFs before answering or creating study guides, and use your write tools when asked to create/update notes, embed PDF figures, or add lecture items.
                 Be concise, cite the note title or slide/page label when referencing material, and say clearly if the course materials do not contain the answer.
-                Format replies for a narrow sidebar: prefer short bullet lists or compact 2-3 column tables rather than wide multi-column tables.
+                Format chat replies for a narrow sidebar (prefer short bullet lists or compact 2-3 column tables), while using rich Markdown (headings, Obsidian callouts, GFM tables, code blocks, LaTeX, and embedded PDF figures) inside notes created via `create_note`/`update_note`.
                 """;
         }
 
         return $"""
             You are Atrium's personal assistant. Today's UTC date is {todayUtc}.
-            You can read the user's daily checklist & daily note, calendar events, university courses, Markdown notes, and uploaded study artifacts (PDFs, slides, documents).
-            Always use your read-only tools to look up real data before answering questions about the user's schedule, tasks, courses, notes, or files.
+            You can read AND create/update the user's daily checklist, calendar events, university courses/activities/lectures, Markdown notes, and uploaded study artifacts (including extracting diagrams from PDFs into notes via `extract_pdf_images`).
+            Always use your read tools to look up real data before answering, and use your write tools (`create_note`, `update_note`, `extract_pdf_images`, `create_checklist_item`, `toggle_checklist_item`, `create_event`, `create_course`, `create_activity`, `create_activity_item`) whenever the user asks you to create or update items.
             Be concise, helpful, and cite the note title or file/page label when referencing knowledge base items.
-            Format replies for a narrow sidebar: prefer short bullet lists or compact 2-3 column tables rather than wide multi-column tables.
+            Format chat replies for a narrow sidebar (prefer short bullet lists or compact 2-3 column tables), while using rich Markdown inside notes created via `create_note`/`update_note`.
             """;
     }
 
@@ -900,6 +1217,130 @@ public sealed partial class OpenAiChatService(
             },
             ["attachmentId"]));
 
+        arr.Add(BuildTool(
+            "create_note",
+            "Create a new Markdown note (supports rich formatting: headings, GFM tables, callouts, code blocks, LaTeX math, and embedded images). Can attach to a university lecture/item or course.",
+            new JsonObject
+            {
+                ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Note title." },
+                ["content"] = new JsonObject { ["type"] = "string", ["description"] = "Full Markdown content." },
+                ["universityCourseId"] = new JsonObject { ["type"] = "string", ["description"] = "Optional university course GUID." },
+                ["universityActivityItemId"] = new JsonObject { ["type"] = "string", ["description"] = "Optional university lecture/item GUID." },
+                ["folderId"] = new JsonObject { ["type"] = "string", ["description"] = "Optional folder GUID." },
+            },
+            ["title", "content"]));
+
+        arr.Add(BuildTool(
+            "update_note",
+            "Update an existing Markdown note's title and/or content (e.g. to embed extracted PDF images or refine a study guide).",
+            new JsonObject
+            {
+                ["noteId"] = new JsonObject { ["type"] = "string", ["description"] = "Note GUID." },
+                ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Optional new title." },
+                ["content"] = new JsonObject { ["type"] = "string", ["description"] = "Optional new Markdown content." },
+            },
+            ["noteId"]));
+
+        arr.Add(BuildTool(
+            "extract_pdf_images",
+            "Extract embedded figures/diagrams from a PDF artifact, save them as inline images on a target note, and return Markdown image embeds ![caption](/api/attachments/id).",
+            new JsonObject
+            {
+                ["attachmentId"] = new JsonObject { ["type"] = "string", ["description"] = "Source PDF artifact GUID." },
+                ["noteId"] = new JsonObject { ["type"] = "string", ["description"] = "Target note GUID." },
+                ["startPage"] = new JsonObject { ["type"] = "integer" },
+                ["endPage"] = new JsonObject { ["type"] = "integer" },
+                ["maxImages"] = new JsonObject { ["type"] = "integer", ["description"] = "Max images to extract (1-6)." },
+            },
+            ["attachmentId", "noteId"]));
+
+        arr.Add(BuildTool(
+            "create_activity_item",
+            "Create a new lecture, lab, assignment, or exam item under a university course activity.",
+            new JsonObject
+            {
+                ["activityId"] = new JsonObject { ["type"] = "string", ["description"] = "Activity GUID." },
+                ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Item title." },
+                ["theme"] = new JsonObject { ["type"] = "string" },
+                ["notes"] = new JsonObject { ["type"] = "string" },
+                ["sequenceNumber"] = new JsonObject { ["type"] = "integer" },
+                ["startAt"] = new JsonObject { ["type"] = "string", ["description"] = "Optional ISO-8601 start timestamp." },
+                ["endAt"] = new JsonObject { ["type"] = "string", ["description"] = "Optional ISO-8601 end timestamp." },
+                ["isAllDay"] = new JsonObject { ["type"] = "boolean" },
+                ["location"] = new JsonObject { ["type"] = "string" },
+            },
+            ["activityId", "title"]));
+
+        if (!courseScopedOnly)
+        {
+            arr.Add(BuildTool(
+                "create_checklist_item",
+                "Add a task to the user's daily checklist.",
+                new JsonObject
+                {
+                    ["title"] = new JsonObject { ["type"] = "string" },
+                    ["date"] = new JsonObject { ["type"] = "string", ["description"] = "Optional yyyy-MM-dd date." },
+                    ["dueTime"] = new JsonObject { ["type"] = "string", ["description"] = "Optional 24h HH:mm time." },
+                },
+                ["title"]));
+
+            arr.Add(BuildTool(
+                "toggle_checklist_item",
+                "Mark a daily checklist item completed or incomplete.",
+                new JsonObject
+                {
+                    ["itemId"] = new JsonObject { ["type"] = "string" },
+                    ["isCompleted"] = new JsonObject { ["type"] = "boolean" },
+                },
+                ["itemId", "isCompleted"]));
+
+            arr.Add(BuildTool(
+                "create_event",
+                "Create a new calendar event.",
+                new JsonObject
+                {
+                    ["title"] = new JsonObject { ["type"] = "string" },
+                    ["startAt"] = new JsonObject { ["type"] = "string", ["description"] = "ISO-8601 start timestamp." },
+                    ["endAt"] = new JsonObject { ["type"] = "string", ["description"] = "ISO-8601 end timestamp." },
+                    ["calendarId"] = new JsonObject { ["type"] = "string" },
+                    ["isAllDay"] = new JsonObject { ["type"] = "boolean" },
+                    ["location"] = new JsonObject { ["type"] = "string" },
+                    ["description"] = new JsonObject { ["type"] = "string" },
+                    ["recurrenceRule"] = new JsonObject { ["type"] = "string" },
+                },
+                ["title", "startAt", "endAt"]));
+
+            arr.Add(BuildTool(
+                "create_course",
+                "Create a new university course.",
+                new JsonObject
+                {
+                    ["name"] = new JsonObject { ["type"] = "string" },
+                    ["code"] = new JsonObject { ["type"] = "string" },
+                    ["semester"] = new JsonObject { ["type"] = "string" },
+                    ["instructor"] = new JsonObject { ["type"] = "string" },
+                    ["credits"] = new JsonObject { ["type"] = "number" },
+                    ["color"] = new JsonObject { ["type"] = "string" },
+                    ["description"] = new JsonObject { ["type"] = "string" },
+                },
+                ["name"]));
+
+            arr.Add(BuildTool(
+                "create_activity",
+                "Create an activity group (lecture, practice, laboratory, homework_assignment, semester_assignment, midterm, exam) inside a university course.",
+                new JsonObject
+                {
+                    ["courseId"] = new JsonObject { ["type"] = "string" },
+                    ["activityType"] = new JsonObject { ["type"] = "string" },
+                    ["title"] = new JsonObject { ["type"] = "string" },
+                    ["defaultLocation"] = new JsonObject { ["type"] = "string" },
+                    ["minAttendanceCount"] = new JsonObject { ["type"] = "integer" },
+                    ["minAttendancePercent"] = new JsonObject { ["type"] = "number" },
+                    ["plannedTotalCount"] = new JsonObject { ["type"] = "integer" },
+                },
+                ["courseId", "activityType"]));
+        }
+
         return arr;
     }
 
@@ -951,6 +1392,15 @@ public sealed partial class OpenAiChatService(
         "list_artifacts" => "Listing attached files…",
         "read_artifact_text" => "Reading file contents…",
         "search_knowledge" => courseName is not null ? $"Searching {courseName}…" : "Searching knowledge base…",
+        "create_note" => "Creating Markdown note…",
+        "update_note" => "Updating Markdown note…",
+        "extract_pdf_images" => "Extracting diagrams from PDF…",
+        "create_checklist_item" => "Adding checklist task…",
+        "toggle_checklist_item" => "Updating checklist task…",
+        "create_event" => "Creating calendar event…",
+        "create_course" => "Creating university course…",
+        "create_activity" => "Adding course activity…",
+        "create_activity_item" => "Adding lecture/item…",
         _ => "Looking up information…",
     };
 

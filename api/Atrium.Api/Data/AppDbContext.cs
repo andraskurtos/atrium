@@ -444,10 +444,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .HasDatabaseName("ix_notes_user_uni_course");
             entity.HasIndex(n => new { n.UserId, n.CalendarEventId, n.DeletedAt })
                 .HasDatabaseName("ix_notes_user_calendar_event");
-            entity.HasIndex(n => n.UniversityActivityItemId)
-                .IsUnique()
-                .HasDatabaseName("ix_notes_uni_item_unique")
-                .HasFilter("\"university_activity_item_id\" IS NOT NULL AND \"deleted_at\" IS NULL");
+            entity.HasIndex(n => new { n.UserId, n.UniversityActivityItemId, n.DeletedAt })
+                .HasDatabaseName("ix_notes_user_uni_item");
             entity.HasIndex(n => new { n.CalendarEventId, n.CalendarOccurrenceStartAt })
                 .IsUnique()
                 .HasDatabaseName("ix_notes_event_occurrence_unique")

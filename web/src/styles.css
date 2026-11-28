@@ -5005,10 +5005,24 @@ select {
   vertical-align: middle;
 }
 
-.notes-reading-prose .katex-display {
+.notes-reading-prose .katex-display,
+.chat-markdown-body .katex-display {
+  display: block;
+  margin: 1.35em 0;
+  padding: 10px 4px;
+  text-align: center;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 6px 0;
+}
+
+.notes-reading-prose .katex,
+.chat-markdown-body .katex {
+  line-height: 1.25;
+}
+
+.notes-reading-prose .katex *,
+.chat-markdown-body .katex * {
+  box-sizing: content-box;
 }
 
 /* Custom 24h / 12h TimeInput */
@@ -5642,4 +5656,56 @@ select {
   .chat-history-rail.is-mobile-open {
     display: flex;
   }
+}
+
+/* Notes Reading & Live Preview Markdown Tables */
+.notes-reading-table-wrap,
+.cm-md-table-wrap {
+  margin: 0.9em 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background-color: var(--surface);
+}
+
+.notes-reading-table-wrap table,
+.cm-md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.notes-reading-table-wrap th,
+.notes-reading-table-wrap td,
+.cm-md-table th,
+.cm-md-table td {
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  white-space: normal;
+  word-break: break-word;
+}
+
+.notes-reading-table-wrap th,
+.cm-md-table th {
+  font-weight: 600;
+  background-color: var(--surface-muted);
+  color: var(--text);
+}
+
+.notes-reading-table-wrap tr:last-child td,
+.cm-md-table tr:last-child td {
+  border-bottom: none;
+}
+
+.cm-md-table code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-muted);
+  border: 1px solid var(--border);
 }

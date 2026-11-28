@@ -586,6 +586,90 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
   const overlapsCode = (from: number, to: number): boolean =>
     codeSkipRanges.some((r) => from < r.to && to > r.from);
 
+  // 9a. GFM Markdown tables (render as crisp HTML tables when cursor is outside)
+  const tableRanges: Array<{ from: number; to: number }> = [];
+  const tableSepRe = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+
+  const splitTableRow = (rawLine: string): string[] => {
+    let trimmed = rawLine.trim();
+    if (trimmed.startsWith('|')) trimmed = trimmed.slice(1);
+    if (trimmed.endsWith('|') && !trimmed.endsWith('\\|')) {
+      trimmed = trimmed.slice(0, -1);
+    }
+    const cells: string[] = [];
+    let current = '';
+    for (let i = 0; i < trimmed.length; i += 1) {
+      if (trimmed[i] === '\\' && trimmed[i + 1] === '|') {
+        current += '|';
+        i += 1;
+      } else if (trimmed[i] === '|') {
+        cells.push(current.trim());
+        current = '';
+      } else {
+        current += trimmed[i];
+      }
+    }
+    cells.push(current.trim());
+    return cells;
+  };
+
+  for (let ln = 1; ln <= doc.lines - 1; ln += 1) {
+    const headerLine = doc.line(ln);
+    const sepLine = doc.line(ln + 1);
+    if (
+      !headerLine.text.includes('|') ||
+      !tableSepRe.test(sepLine.text) ||
+      overlapsCode(headerLine.from, sepLine.to)
+    ) {
+      continue;
+    }
+
+    const headers = splitTableRow(headerLine.text);
+    const sepCells = splitTableRow(sepLine.text);
+    if (headers.length < 2 || sepCells.length < 2) continue;
+
+    const alignments: Array<'left' | 'center' | 'right'> = sepCells.map((c) => {
+      const s = c.trim();
+      const left = s.startsWith(':');
+      const right = s.endsWith(':');
+      if (left && right) return 'center';
+      if (right) return 'right';
+      return 'left';
+    });
+
+    const rows: string[][] = [];
+    let endLineNum = ln + 1;
+    while (endLineNum + 1 <= doc.lines) {
+      const nextLine = doc.line(endLineNum + 1);
+      if (
+        !nextLine.text.trim() ||
+        !nextLine.text.includes('|') ||
+        overlapsCode(nextLine.from, nextLine.to)
+      ) {
+        break;
+      }
+      rows.push(splitTableRow(nextLine.text));
+      endLineNum += 1;
+    }
+
+    const tFrom = headerLine.from;
+    const tTo = doc.line(endLineNum).to;
+    if (!isRangeActive(state, tFrom, tTo)) {
+      tableRanges.push({ from: tFrom, to: tTo });
+      decorations.push(
+        Decoration.replace({
+          widget: new MarkdownTableWidget(headers, alignments, rows),
+          block: true,
+        }).range(tFrom, tTo),
+      );
+    }
+
+    ln = endLineNum;
+  }
+
+  const overlapsTable = (from: number, to: number): boolean =>
+    tableRanges.some((r) => from < r.to && to > r.from);
+
   const mathBlockRanges: Array<{ from: number; to: number }> = [];
   const fullText = doc.toString();
 
@@ -596,7 +680,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
     const mFrom = bm.index;
     const mTo = mFrom + bm[0].length;
     const expr = bm[2].trim();
-    if (!expr || overlapsCode(mFrom, mTo)) continue;
+    if (!expr || overlapsCode(mFrom, mTo) || overlapsTable(mFrom, mTo)) continue;
     mathBlockRanges.push({ from: mFrom, to: mTo });
     if (!isRangeActive(state, mFrom, mTo)) {
       const spansLines = fullText.slice(mFrom, mTo).includes('\n');
@@ -616,7 +700,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
     const mFrom = im.index;
     const mTo = mFrom + im[0].length;
     const expr = im[1].trim();
-    if (!expr || overlapsCode(mFrom, mTo)) continue;
+    if (!expr || overlapsCode(mFrom, mTo) || overlapsTable(mFrom, mTo)) continue;
     if (mathBlockRanges.some((r) => mFrom < r.to && mTo > r.from)) continue;
     if (!isRangeActive(state, mFrom, mTo)) {
       decorations.push(
@@ -627,7 +711,128 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
     }
   }
 
-  return Decoration.set(decorations, true);
+  // Filter out any earlier syntax-tree decorations that fall inside a replaced table block
+  const finalDecorations =
+    tableRanges.length === 0
+      ? decorations
+      : decorations.filter(
+          (d) =>
+            tableRanges.some((r) => d.from === r.from && d.to === r.to) ||
+            !tableRanges.some((r) => d.from >= r.from && d.to <= r.to),
+        );
+
+  return Decoration.set(finalDecorations, true);
+}
+
+function appendFormattedCellContent(container: HTMLElement, raw: string) {
+  const tokenRe =
+    /(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`|\$[^$\n]+\$)/g;
+  let lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = tokenRe.exec(raw)) !== null) {
+    if (m.index > lastIndex) {
+      container.appendChild(document.createTextNode(raw.slice(lastIndex, m.index)));
+    }
+    const tok = m[0];
+    if (tok.startsWith('**') && tok.endsWith('**')) {
+      const strong = document.createElement('strong');
+      strong.textContent = tok.slice(2, -2);
+      container.appendChild(strong);
+    } else if (tok.startsWith('*') && tok.endsWith('*')) {
+      const em = document.createElement('em');
+      em.textContent = tok.slice(1, -1);
+      container.appendChild(em);
+    } else if (tok.startsWith('`') && tok.endsWith('`')) {
+      const code = document.createElement('code');
+      code.textContent = tok.slice(1, -1);
+      container.appendChild(code);
+    } else if (tok.startsWith('$') && tok.endsWith('$')) {
+      const span = document.createElement('span');
+      try {
+        span.innerHTML = katex.renderToString(tok.slice(1, -1), {
+          displayMode: false,
+          throwOnError: false,
+        });
+      } catch {
+        span.textContent = tok;
+      }
+      container.appendChild(span);
+    }
+    lastIndex = m.index + tok.length;
+  }
+  if (lastIndex < raw.length) {
+    container.appendChild(document.createTextNode(raw.slice(lastIndex)));
+  }
+}
+
+class MarkdownTableWidget extends WidgetType {
+  readonly headers: string[];
+  readonly alignments: Array<'left' | 'center' | 'right'>;
+  readonly rows: string[][];
+
+  constructor(
+    headers: string[],
+    alignments: Array<'left' | 'center' | 'right'>,
+    rows: string[][],
+  ) {
+    super();
+    this.headers = headers;
+    this.alignments = alignments;
+    this.rows = rows;
+  }
+
+  eq(other: MarkdownTableWidget): boolean {
+    return (
+      this.headers.length === other.headers.length &&
+      this.rows.length === other.rows.length &&
+      this.headers.every((h, i) => h === other.headers[i]) &&
+      this.rows.every(
+        (r, ri) =>
+          r.length === other.rows[ri].length &&
+          r.every((c, ci) => c === other.rows[ri][ci]),
+      )
+    );
+  }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'cm-md-table-wrap';
+    const table = document.createElement('table');
+    table.className = 'cm-md-table';
+
+    const thead = document.createElement('thead');
+    const headerTr = document.createElement('tr');
+    this.headers.forEach((h, idx) => {
+      const th = document.createElement('th');
+      th.style.textAlign = this.alignments[idx] ?? 'left';
+      appendFormattedCellContent(th, h);
+      headerTr.appendChild(th);
+    });
+    thead.appendChild(headerTr);
+    table.appendChild(thead);
+
+    if (this.rows.length > 0) {
+      const tbody = document.createElement('tbody');
+      for (const row of this.rows) {
+        const tr = document.createElement('tr');
+        for (let idx = 0; idx < this.headers.length; idx += 1) {
+          const td = document.createElement('td');
+          td.style.textAlign = this.alignments[idx] ?? 'left';
+          appendFormattedCellContent(td, row[idx] ?? '');
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+    }
+
+    wrap.appendChild(table);
+    return wrap;
+  }
+
+  ignoreEvent(): boolean {
+    return false;
+  }
 }
 
 const livePreviewField = StateField.define<DecorationSet>({

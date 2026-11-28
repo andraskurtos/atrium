@@ -127,7 +127,10 @@ import type {
   PendingNoteTarget,
   RecurrenceScope,
   SessionItem,
+  StudyGuideJob,
   UniversityAttendanceStatus,
+  UniversityCourseActivity,
+  UniversityActivityItem,
   UpdatePreferencesPayload,
   UniversityCourse,
   UserCalendar,
@@ -696,6 +699,8 @@ export function App() {
   const [loadingChatThread, setLoadingChatThread] = useState(false);
   const [chatStreaming, setChatStreaming] = useState(false);
   const [chatStatusText, setChatStatusText] = useState<string | null>(null);
+  const [notesRefreshKey, setNotesRefreshKey] = useState(0);
+  const [studyGuideJobs, setStudyGuideJobs] = useState<Record<string, StudyGuideJob>>({});
   const chatAbortRef = useRef<AbortController | null>(null);
 
   const isAiConfigured = Boolean(
@@ -840,6 +845,18 @@ export function App() {
               ),
             );
           },
+          onMutation: (mutation) => {
+            if (mutation.domain === 'notes') {
+              setNotesRefreshKey((k) => k + 1);
+            } else if (mutation.domain === 'tasks') {
+              void loadDayData(selectedDateKey);
+            } else if (mutation.domain === 'calendar') {
+              void loadCalendarData(calendarViewYearRef.current);
+            } else if (mutation.domain === 'university') {
+              void loadUniversityData();
+              void loadCalendarData(calendarViewYearRef.current);
+            }
+          },
           onError: (message) => {
             setChatMessages((prev) =>
               prev.map((m) =>
@@ -876,8 +893,138 @@ export function App() {
       chatMessages,
       chatScope.courseId,
       chatStreaming,
+      loadCalendarData,
+      loadDayData,
+      loadUniversityData,
       refreshChatThreads,
+      selectedDateKey,
     ],
+  );
+
+  const handleGenerateStudyGuide = useCallback(
+    async (
+      course: UniversityCourse,
+      activity: UniversityCourseActivity,
+      item: UniversityActivityItem,
+    ) => {
+      if (!isAiConfigured) {
+        announce('Configure AI Assistant in Account settings first');
+        return;
+      }
+
+      const courseLabel = course.code ? `${course.code} · ${course.name}` : course.name;
+      const actLabel = activity.title || activity.activityType;
+      const prompt = [
+        `Create a comprehensive, rich Markdown study guide for the lecture "${item.title}" (${actLabel}) in course "${courseLabel}".`,
+        `Target universityActivityItemId: ${item.id}`,
+        '',
+        'Steps:',
+        `1. Inspect any existing notes and uploaded slides/PDFs for this lecture (call list_artifacts with universityActivityItemId="${item.id}", read_artifact_text on relevant files, and search_knowledge/read_note if helpful).`,
+        `2. Create a new note attached to universityActivityItemId="${item.id}" using create_note titled "Study Guide — ${item.title}".`,
+        '3. Format the note with rich Markdown: clear H1/H2/H3 headings, concise bullet summaries, Obsidian callouts (> [!note] Key Concept, > [!tip] Exam Tip, > [!warning] Common Pitfall), GFM comparison/summary tables, syntax-highlighted fenced code blocks, LaTeX math ($...$ / $$...$$) where relevant, and a short Self-Check Questions section.',
+        '4. If any PDF artifact on this lecture contains useful diagrams or figures, call extract_pdf_images(attachmentId, noteId) on the newly created study guide note and call update_note to embed the most relevant diagrams (![caption](/api/attachments/...)) in the right sections.',
+        '5. Finish with a brief summary of what you created.',
+      ].join('\n');
+
+      setStudyGuideJobs((prev) => ({
+        ...prev,
+        [item.id]: {
+          threadId: null,
+          status: 'generating',
+          statusText: 'Starting study guide…',
+        },
+      }));
+      announce(`Generating study guide for ${item.title} in background`);
+
+      try {
+        await streamChat({
+          messages: [{ role: 'user', content: prompt }],
+          courseId: course.id,
+          onThread: (thread) => {
+            setStudyGuideJobs((prev) => ({
+              ...prev,
+              [item.id]: {
+                ...(prev[item.id] ?? { status: 'generating' }),
+                threadId: thread.id,
+              },
+            }));
+            setChatThreads((prev) => {
+              const without = prev.filter((t) => t.id !== thread.id);
+              return [thread, ...without];
+            });
+          },
+          onStatus: (status) => {
+            setStudyGuideJobs((prev) => ({
+              ...prev,
+              [item.id]: {
+                ...(prev[item.id] ?? { threadId: null, status: 'generating' }),
+                statusText: status,
+              },
+            }));
+          },
+          onDelta: () => {
+            // Stream runs silently in background; persisted to thread for View progress / Follow up
+          },
+          onMutation: (mutation) => {
+            if (mutation.domain === 'notes') {
+              setNotesRefreshKey((k) => k + 1);
+            }
+          },
+          onError: (message) => {
+            setStudyGuideJobs((prev) => ({
+              ...prev,
+              [item.id]: {
+                ...(prev[item.id] ?? { threadId: null }),
+                status: 'error',
+                error: message,
+              },
+            }));
+            announce(`Study guide failed: ${message}`);
+          },
+          onDone: () => {
+            setStudyGuideJobs((prev) => {
+              const current = prev[item.id];
+              if (current?.status === 'error') return prev;
+              return {
+                ...prev,
+                [item.id]: {
+                  ...(current ?? { threadId: null }),
+                  status: 'done',
+                  statusText: null,
+                },
+              };
+            });
+            setNotesRefreshKey((k) => k + 1);
+            void refreshChatThreads();
+            announce(`Study guide ready for ${item.title}`);
+          },
+        });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : 'Study guide generation failed.';
+        setStudyGuideJobs((prev) => ({
+          ...prev,
+          [item.id]: {
+            ...(prev[item.id] ?? { threadId: null }),
+            status: 'error',
+            error: message,
+          },
+        }));
+        announce(`Study guide failed: ${message}`);
+      }
+    },
+    [announce, isAiConfigured, refreshChatThreads],
+  );
+
+  const handleOpenStudyGuideThread = useCallback(
+    async (itemId: string) => {
+      const job = studyGuideJobs[itemId];
+      setIsChatOpen(true);
+      if (job?.threadId) {
+        await handleSelectChatThread(job.threadId);
+      }
+    },
+    [handleSelectChatThread, studyGuideJobs],
   );
 
   const handleChangePassword = async (
@@ -1620,6 +1767,15 @@ export function App() {
               navigateTo('notes');
             }}
             onAskAboutCourse={handleOpenCourseChat}
+            notesRefreshKey={notesRefreshKey}
+            isAiConfigured={isAiConfigured}
+            studyGuideJobs={studyGuideJobs}
+            onGenerateStudyGuide={(course, activity, item) =>
+              void handleGenerateStudyGuide(course, activity, item)
+            }
+            onOpenStudyGuideThread={(itemId) =>
+              void handleOpenStudyGuideThread(itemId)
+            }
             onAnnounce={announce}
           />
 
