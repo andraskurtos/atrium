@@ -104,7 +104,12 @@ import {
   type UpdateCourseInput,
 } from './lib/universityClient';
 import { clearNotesDraft } from './lib/markdownUtils';
-import { streamChat } from './lib/chatClient';
+import {
+  deleteChatThread,
+  getChatThread,
+  listChatThreads,
+  streamChat,
+} from './lib/chatClient';
 import type {
   AccountPreferences,
   AgentToken,
@@ -113,6 +118,7 @@ import type {
   CaptureKind,
   ChatMessage,
   ChatScope,
+  ChatThreadSummary,
   DailyCheckItem,
   DailyNote,
   HouseholdMember,
@@ -680,19 +686,36 @@ export function App() {
     }
   };
 
-  // Collapsible AI Chat Sidebar (in-memory per-scope threads)
+  // Collapsible & Fullscreenable AI Chat Sidebar with persisted history
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isChatFullscreen, setIsChatFullscreen] = useState(false);
   const [chatScope, setChatScope] = useState<ChatScope>({ courseId: null });
-  const [chatThreads, setChatThreads] = useState<Record<string, ChatMessage[]>>({});
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatThreads, setChatThreads] = useState<ChatThreadSummary[]>([]);
+  const [activeChatThreadId, setActiveChatThreadId] = useState<string | null>(null);
+  const [loadingChatThread, setLoadingChatThread] = useState(false);
   const [chatStreaming, setChatStreaming] = useState(false);
   const [chatStatusText, setChatStatusText] = useState<string | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
 
-  const chatThreadKey = chatScope.courseId ? `course:${chatScope.courseId}` : 'global';
-  const activeChatMessages = chatThreads[chatThreadKey] ?? [];
   const isAiConfigured = Boolean(
     preferences.aiInferenceUrl?.trim() && preferences.aiModel?.trim(),
   );
+
+  const refreshChatThreads = useCallback(async () => {
+    try {
+      const list = await listChatThreads();
+      setChatThreads(list);
+    } catch {
+      // Ignore background history refresh failure
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isChatOpen && profile) {
+      void refreshChatThreads();
+    }
+  }, [isChatOpen, isChatFullscreen, profile, refreshChatThreads]);
 
   const handleStopChat = useCallback(() => {
     chatAbortRef.current?.abort();
@@ -701,17 +724,57 @@ export function App() {
     setChatStatusText(null);
   }, []);
 
+  const handleNewChat = useCallback(() => {
+    setActiveChatThreadId(null);
+    setChatMessages([]);
+  }, []);
+
   const handleOpenCourseChat = useCallback((course: UniversityCourse) => {
     const label = course.code ? `${course.code} · ${course.name}` : course.name;
     setChatScope({ courseId: course.id, courseLabel: label });
+    setActiveChatThreadId(null);
+    setChatMessages([]);
     setIsChatOpen(true);
   }, []);
+
+  const handleSelectChatThread = useCallback(async (threadId: string) => {
+    setLoadingChatThread(true);
+    try {
+      const detail = await getChatThread(threadId);
+      setActiveChatThreadId(detail.id);
+      setChatScope({
+        courseId: detail.courseId,
+        courseLabel: detail.courseLabel ?? null,
+      });
+      setChatMessages(detail.messages);
+    } catch {
+      announce('Could not load chat conversation');
+    } finally {
+      setLoadingChatThread(false);
+    }
+  }, [announce]);
+
+  const handleDeleteChatThread = useCallback(
+    async (threadId: string) => {
+      try {
+        await deleteChatThread(threadId);
+        setChatThreads((prev) => prev.filter((t) => t.id !== threadId));
+        if (activeChatThreadId === threadId) {
+          setActiveChatThreadId(null);
+          setChatMessages([]);
+        }
+      } catch {
+        announce('Could not delete chat conversation');
+      }
+    },
+    [activeChatThreadId, announce],
+  );
 
   const handleSendChat = useCallback(
     async (prompt: string) => {
       if (chatStreaming) return;
-      const scopeKey = chatThreadKey;
       const scopeCourseId = chatScope.courseId;
+      const targetThreadId = activeChatThreadId;
       const userMsg: ChatMessage = {
         id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         role: 'user',
@@ -722,19 +785,17 @@ export function App() {
         id: assistantId,
         role: 'assistant',
         content: '',
+        reasoning: '',
       };
 
       const historyPayload = [
-        ...(chatThreads[scopeKey] ?? [])
+        ...chatMessages
           .filter((m) => !m.error && m.content.trim().length > 0)
           .map((m) => ({ role: m.role, content: m.content })),
         { role: 'user' as const, content: prompt },
       ];
 
-      setChatThreads((prev) => ({
-        ...prev,
-        [scopeKey]: [...(prev[scopeKey] ?? []), userMsg, assistantMsg],
-      }));
+      setChatMessages((prev) => [...prev, userMsg, assistantMsg]);
       setChatStreaming(true);
       setChatStatusText('Thinking…');
 
@@ -745,48 +806,61 @@ export function App() {
         await streamChat({
           messages: historyPayload,
           courseId: scopeCourseId,
+          threadId: targetThreadId,
           signal: controller.signal,
+          onThread: (thread) => {
+            setActiveChatThreadId(thread.id);
+            setChatThreads((prev) => {
+              const without = prev.filter((t) => t.id !== thread.id);
+              return [thread, ...without];
+            });
+          },
           onStatus: (status) => setChatStatusText(status),
+          onReasoning: (reasoningDelta) => {
+            setChatMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, reasoning: (m.reasoning ?? '') + reasoningDelta }
+                  : m,
+              ),
+            );
+          },
           onDelta: (delta) => {
             setChatStatusText(null);
-            setChatThreads((prev) => ({
-              ...prev,
-              [scopeKey]: (prev[scopeKey] ?? []).map((m) =>
+            setChatMessages((prev) =>
+              prev.map((m) =>
                 m.id === assistantId ? { ...m, content: m.content + delta } : m,
               ),
-            }));
+            );
           },
           onCitations: (citations) => {
-            setChatThreads((prev) => ({
-              ...prev,
-              [scopeKey]: (prev[scopeKey] ?? []).map((m) =>
+            setChatMessages((prev) =>
+              prev.map((m) =>
                 m.id === assistantId ? { ...m, citations } : m,
               ),
-            }));
+            );
           },
           onError: (message) => {
-            setChatThreads((prev) => ({
-              ...prev,
-              [scopeKey]: (prev[scopeKey] ?? []).map((m) =>
+            setChatMessages((prev) =>
+              prev.map((m) =>
                 m.id === assistantId
                   ? { ...m, content: m.content || message, error: true }
                   : m,
               ),
-            }));
+            );
           },
         });
       } catch (err) {
         if ((err as Error)?.name !== 'AbortError') {
           const message =
             err instanceof Error ? err.message : 'Chat request failed.';
-          setChatThreads((prev) => ({
-            ...prev,
-            [scopeKey]: (prev[scopeKey] ?? []).map((m) =>
+          setChatMessages((prev) =>
+            prev.map((m) =>
               m.id === assistantId
                 ? { ...m, content: m.content || message, error: true }
                 : m,
             ),
-          }));
+          );
         }
       } finally {
         if (chatAbortRef.current === controller) {
@@ -794,9 +868,16 @@ export function App() {
         }
         setChatStreaming(false);
         setChatStatusText(null);
+        void refreshChatThreads();
       }
     },
-    [chatScope.courseId, chatStreaming, chatThreadKey, chatThreads],
+    [
+      activeChatThreadId,
+      chatMessages,
+      chatScope.courseId,
+      chatStreaming,
+      refreshChatThreads,
+    ],
   );
 
   const handleChangePassword = async (
@@ -1887,24 +1968,38 @@ export function App() {
 
       <ChatSidebar
         isOpen={isChatOpen}
+        isFullscreen={isChatFullscreen}
         scope={chatScope}
         isConfigured={isAiConfigured}
         modelLabel={preferences.aiModel}
-        messages={activeChatMessages}
+        messages={chatMessages}
+        threads={chatThreads}
+        activeThreadId={activeChatThreadId}
+        loadingThread={loadingChatThread}
         streaming={chatStreaming}
         statusText={chatStatusText}
-        onClose={() => setIsChatOpen(false)}
-        onClearScope={() => setChatScope({ courseId: null })}
-        onNewChat={() =>
-          setChatThreads((prev) => ({
-            ...prev,
-            [chatThreadKey]: [],
-          }))
-        }
+        onClose={() => {
+          setIsChatOpen(false);
+          setIsChatFullscreen(false);
+        }}
+        onToggleFullscreen={() => setIsChatFullscreen((prev) => !prev)}
+        onClearScope={() => {
+          setChatScope({ courseId: null });
+          setActiveChatThreadId(null);
+          setChatMessages([]);
+        }}
+        onNewChat={handleNewChat}
+        onSelectThread={(id) => void handleSelectChatThread(id)}
+        onDeleteThread={(id) => void handleDeleteChatThread(id)}
         onSend={(prompt) => void handleSendChat(prompt)}
         onStop={handleStopChat}
-        onOpenSettings={() => navigateTo('account')}
+        onOpenSettings={() => {
+          setIsChatOpen(false);
+          setIsChatFullscreen(false);
+          navigateTo('account');
+        }}
         onOpenNote={(noteId) => {
+          setIsChatFullscreen(false);
           setPendingNoteTarget({ kind: 'note_id', noteId });
           navigateTo('notes');
         }}

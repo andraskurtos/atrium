@@ -639,6 +639,38 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.Navigation("User");
         });
 
+        modelBuilder.Entity("Atrium.Api.Data.Entities.ChatMessageEntity", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<string>("CitationsJson").HasColumnType("text").HasColumnName("citations_json");
+            b.Property<string>("Content").IsRequired().HasColumnType("text").HasColumnName("content");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<string>("Reasoning").HasColumnType("text").HasColumnName("reasoning");
+            b.Property<string>("Role").IsRequired().HasMaxLength(16).HasColumnType("character varying(16)").HasColumnName("role");
+            b.Property<Guid>("ThreadId").HasColumnType("uuid").HasColumnName("thread_id");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("UserId");
+            b.HasIndex("ThreadId", "CreatedAt").HasDatabaseName("ix_chat_messages_thread_created");
+            b.ToTable("chat_messages", (string?)null);
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.ChatThread", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<Guid?>("CourseId").HasColumnType("uuid").HasColumnName("course_id");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<string>("Title").IsRequired().HasMaxLength(160).HasColumnType("character varying(160)").HasColumnName("title");
+            b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone").HasColumnName("updated_at");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("CourseId");
+            b.HasIndex("UserId", "UpdatedAt").HasDatabaseName("ix_chat_threads_user_updated");
+            b.ToTable("chat_threads", (string?)null);
+        });
+
         modelBuilder.Entity("Atrium.Api.Data.Entities.UserPreferences", b =>
         {
             b.HasOne("Atrium.Api.Data.Entities.User", "User")
@@ -649,9 +681,45 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.Navigation("User");
         });
 
+        modelBuilder.Entity("Atrium.Api.Data.Entities.ChatMessageEntity", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.ChatThread", "Thread")
+                .WithMany("Messages")
+                .HasForeignKey("ThreadId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("Thread");
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.ChatThread", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.UniversityCourse", "Course")
+                .WithMany()
+                .HasForeignKey("CourseId")
+                .OnDelete(DeleteBehavior.SetNull);
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("Course");
+            b.Navigation("User");
+        });
+
         modelBuilder.Entity("Atrium.Api.Data.Entities.Attachment", b =>
         {
             b.Navigation("TextChunks");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.ChatThread", b =>
+        {
+            b.Navigation("Messages");
         });
 
         modelBuilder.Entity("Atrium.Api.Data.Entities.CalendarEvent", b =>

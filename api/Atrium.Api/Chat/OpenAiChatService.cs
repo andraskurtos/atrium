@@ -24,7 +24,7 @@ public sealed partial class OpenAiChatService(
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public async Task StreamChatAsync(
+    public async Task<ChatStreamSummary> StreamChatAsync(
         ClaimsPrincipal principal,
         Guid userId,
         string inferenceBaseUrl,
@@ -37,6 +37,8 @@ public sealed partial class OpenAiChatService(
         CancellationToken ct)
     {
         var citations = new Dictionary<(string SourceType, Guid Id), ChatCitationDto>();
+        var totalAssistantText = new StringBuilder();
+        var totalReasoningText = new StringBuilder();
         var conversation = new List<JsonObject>
         {
             new()
@@ -60,6 +62,32 @@ public sealed partial class OpenAiChatService(
         var client = httpClientFactory.CreateClient(HttpClientName);
         var needsParagraphBreak = false;
 
+        async Task EmitTrackedEventAsync(object evt)
+        {
+            if (evt is DeltaEvent delta)
+            {
+                if (needsParagraphBreak)
+                {
+                    needsParagraphBreak = false;
+                    totalAssistantText.Append("\n\n");
+                    await writeEventAsync(new DeltaEvent("\n\n"));
+                }
+
+                totalAssistantText.Append(delta.Text);
+                await writeEventAsync(delta);
+                return;
+            }
+
+            if (evt is ReasoningEvent reasoning)
+            {
+                totalReasoningText.Append(reasoning.Text);
+                await writeEventAsync(reasoning);
+                return;
+            }
+
+            await writeEventAsync(evt);
+        }
+
         for (var round = 0; round < MaxToolRounds; round++)
         {
             var isLastRound = round == MaxToolRounds - 1;
@@ -76,18 +104,7 @@ public sealed partial class OpenAiChatService(
                 payload["tool_choice"] = "auto";
             }
 
-            async Task WriteRoundEventAsync(object evt)
-            {
-                if (needsParagraphBreak && evt is DeltaEvent)
-                {
-                    needsParagraphBreak = false;
-                    await writeEventAsync(new DeltaEvent("\n\n"));
-                }
-
-                await writeEventAsync(evt);
-            }
-
-            var roundResult = await SendStreamingRoundAsync(client, endpointUrl, apiKey, payload, WriteRoundEventAsync, ct);
+            var roundResult = await SendStreamingRoundAsync(client, endpointUrl, apiKey, payload, EmitTrackedEventAsync, ct);
 
             // If the provider rejected tool-calling on the first round, gracefully fall back to single-shot RAG
             if (!roundResult.Success
@@ -121,11 +138,15 @@ public sealed partial class OpenAiChatService(
                     ["stream"] = true,
                 };
 
-                var fallbackResult = await SendStreamingRoundAsync(client, endpointUrl, apiKey, fallbackPayload, writeEventAsync, ct);
+                var fallbackResult = await SendStreamingRoundAsync(client, endpointUrl, apiKey, fallbackPayload, EmitTrackedEventAsync, ct);
                 if (!fallbackResult.Success)
                 {
                     await writeEventAsync(new { type = "error", message = fallbackResult.ErrorMessage ?? "Inference request failed." });
-                    return;
+                    return new ChatStreamSummary(
+                        totalAssistantText.ToString(),
+                        totalReasoningText.Length > 0 ? totalReasoningText.ToString() : null,
+                        citations.Values.ToList(),
+                        HadError: true);
                 }
 
                 if (citations.Count > 0)
@@ -134,13 +155,21 @@ public sealed partial class OpenAiChatService(
                 }
 
                 await writeEventAsync(new { type = "done" });
-                return;
+                return new ChatStreamSummary(
+                    totalAssistantText.ToString(),
+                    totalReasoningText.Length > 0 ? totalReasoningText.ToString() : null,
+                    citations.Values.ToList(),
+                    HadError: false);
             }
 
             if (!roundResult.Success)
             {
                 await writeEventAsync(new { type = "error", message = roundResult.ErrorMessage ?? "Inference request failed." });
-                return;
+                return new ChatStreamSummary(
+                    totalAssistantText.ToString(),
+                    totalReasoningText.Length > 0 ? totalReasoningText.ToString() : null,
+                    citations.Values.ToList(),
+                    HadError: true);
             }
 
             if (roundResult.ToolCalls.Count == 0)
@@ -151,7 +180,11 @@ public sealed partial class OpenAiChatService(
                 }
 
                 await writeEventAsync(new { type = "done" });
-                return;
+                return new ChatStreamSummary(
+                    totalAssistantText.ToString(),
+                    totalReasoningText.Length > 0 ? totalReasoningText.ToString() : null,
+                    citations.Values.ToList(),
+                    HadError: false);
             }
 
             // Record assistant tool_calls turn
@@ -210,11 +243,21 @@ public sealed partial class OpenAiChatService(
         }
 
         await writeEventAsync(new { type = "done" });
+        return new ChatStreamSummary(
+            totalAssistantText.ToString(),
+            totalReasoningText.Length > 0 ? totalReasoningText.ToString() : null,
+            citations.Values.ToList(),
+            HadError: false);
     }
 
     private sealed record DeltaEvent(string Text)
     {
         public string Type { get; } = "delta";
+    }
+
+    private sealed record ReasoningEvent(string Text)
+    {
+        public string Type { get; } = "reasoning";
     }
 
     private sealed record AccumulatedToolCall(string Id, string Name, string Arguments);
@@ -283,6 +326,7 @@ public sealed partial class OpenAiChatService(
 
             var assistantText = new StringBuilder();
             var toolBuilders = new SortedDictionary<int, (string Id, string Name, StringBuilder Args)>();
+            var thinkSplitter = new ThinkTagSplitter();
 
             await using var stream = await res.Content.ReadAsStreamAsync(ct);
             using var reader = new StreamReader(stream, Encoding.UTF8);
@@ -311,14 +355,30 @@ public sealed partial class OpenAiChatService(
                         continue;
                     }
 
+                    var reasoningChunk = ExtractReasoningString(delta);
+                    if (!string.IsNullOrEmpty(reasoningChunk))
+                    {
+                        await writeEventAsync(new ReasoningEvent(reasoningChunk));
+                    }
+
                     if (delta.TryGetProperty("content", out var contentEl)
                         && contentEl.ValueKind == JsonValueKind.String)
                     {
                         var chunk = contentEl.GetString();
                         if (!string.IsNullOrEmpty(chunk))
                         {
-                            assistantText.Append(chunk);
-                            await writeEventAsync(new DeltaEvent(chunk));
+                            foreach (var (isReasoning, textPart) in thinkSplitter.Feed(chunk))
+                            {
+                                if (isReasoning)
+                                {
+                                    await writeEventAsync(new ReasoningEvent(textPart));
+                                }
+                                else
+                                {
+                                    assistantText.Append(textPart);
+                                    await writeEventAsync(new DeltaEvent(textPart));
+                                }
+                            }
                         }
                     }
 
@@ -366,6 +426,19 @@ public sealed partial class OpenAiChatService(
                 }
             }
 
+            foreach (var (isReasoning, textPart) in thinkSplitter.Flush())
+            {
+                if (isReasoning)
+                {
+                    await writeEventAsync(new ReasoningEvent(textPart));
+                }
+                else
+                {
+                    assistantText.Append(textPart);
+                    await writeEventAsync(new DeltaEvent(textPart));
+                }
+            }
+
             var finalizedCalls = toolBuilders
                 .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value.Name))
                 .Select((kvp, i) => new AccumulatedToolCall(
@@ -409,12 +482,31 @@ public sealed partial class OpenAiChatService(
                 }
             }
 
-            if (calls.Count == 0 && !string.IsNullOrEmpty(text))
+            var reasoning = ExtractReasoningString(message);
+            if (!string.IsNullOrEmpty(reasoning))
             {
-                await writeEventAsync(new DeltaEvent(text));
+                await writeEventAsync(new ReasoningEvent(reasoning));
             }
 
-            return new StreamRoundResult(true, HttpStatusCode.OK, null, text, calls);
+            var cleanedText = new StringBuilder();
+            if (calls.Count == 0 && !string.IsNullOrEmpty(text))
+            {
+                var splitter = new ThinkTagSplitter();
+                foreach (var (isReasoning, part) in splitter.Feed(text).Concat(splitter.Flush()))
+                {
+                    if (isReasoning)
+                    {
+                        await writeEventAsync(new ReasoningEvent(part));
+                    }
+                    else
+                    {
+                        cleanedText.Append(part);
+                        await writeEventAsync(new DeltaEvent(part));
+                    }
+                }
+            }
+
+            return new StreamRoundResult(true, HttpStatusCode.OK, null, cleanedText.Length > 0 ? cleanedText.ToString() : text, calls);
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
@@ -893,6 +985,86 @@ public sealed partial class OpenAiChatService(
             out var dt)
             ? dt
             : null;
+
+    private static string? ExtractReasoningString(JsonElement obj)
+    {
+        if (obj.TryGetProperty("reasoning_content", out var rcEl) && rcEl.ValueKind == JsonValueKind.String)
+        {
+            return rcEl.GetString();
+        }
+
+        if (obj.TryGetProperty("reasoning", out var rEl) && rEl.ValueKind == JsonValueKind.String)
+        {
+            return rEl.GetString();
+        }
+
+        return null;
+    }
+
+    private sealed class ThinkTagSplitter
+    {
+        private const string OpenTag = "<think>";
+        private const string CloseTag = "</think>";
+        private readonly StringBuilder pending = new();
+        private bool inThink;
+
+        public List<(bool IsReasoning, string Text)> Feed(string chunk)
+        {
+            pending.Append(chunk);
+            return Drain(final: false);
+        }
+
+        public List<(bool IsReasoning, string Text)> Flush() => Drain(final: true);
+
+        private List<(bool IsReasoning, string Text)> Drain(bool final)
+        {
+            var output = new List<(bool, string)>();
+            while (pending.Length > 0)
+            {
+                var buf = pending.ToString();
+                var targetTag = inThink ? CloseTag : OpenTag;
+                var idx = buf.IndexOf(targetTag, StringComparison.OrdinalIgnoreCase);
+                if (idx >= 0)
+                {
+                    if (idx > 0)
+                    {
+                        output.Add((inThink, buf[..idx]));
+                    }
+
+                    pending.Remove(0, idx + targetTag.Length);
+                    inThink = !inThink;
+                    continue;
+                }
+
+                if (final)
+                {
+                    output.Add((inThink, buf));
+                    pending.Clear();
+                    break;
+                }
+
+                // Only hold back a potential partial tag if '<' appears near the end of the buffer
+                var lastLt = buf.LastIndexOf('<');
+                if (lastLt >= 0 && buf.Length - lastLt < targetTag.Length)
+                {
+                    if (lastLt > 0)
+                    {
+                        output.Add((inThink, buf[..lastLt]));
+                        pending.Remove(0, lastLt);
+                    }
+                }
+                else
+                {
+                    output.Add((inThink, buf));
+                    pending.Clear();
+                }
+
+                break;
+            }
+
+            return output;
+        }
+    }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "OpenAI-compatible inference HTTP request failed.")]
     private static partial void LogInferenceRequestFailed(ILogger logger, Exception exception);

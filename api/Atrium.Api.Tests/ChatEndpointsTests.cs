@@ -267,5 +267,76 @@ public sealed class ChatEndpointsTests
         Assert.Equal(2, handler.RecordedRequests.Count);
         Assert.Contains("Virtual memory uses page tables.", handler.RecordedRequests[1].Body, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task ChatHistory_SavesReasoningSeparately_ListsContinuesAndDeletesThreads()
+    {
+        using var handler = new FakeOpenAiHandler((_, _, round) =>
+        {
+            if (round == 0)
+            {
+                return SseResponse(
+                    """{"choices":[{"delta":{"reasoning_content":"First I think about it."}}]}""",
+                    """{"choices":[{"delta":{"content":"<think> And inline think.</think>Final answer."}}]}""");
+            }
+
+            return SseResponse("""{"choices":[{"delta":{"content":"Follow-up answer."}}]}""");
+        });
+
+        using var factory = new TestAppFactory();
+        using var client = CreateChatClient(factory, handler);
+        await SetupOwnerAsync(client);
+        await ConfigureAiAsync(client, "https://inference.local/v1", "deepseek-r1", null);
+
+        var res1 = await client.PostAsJsonAsync(
+            "/api/chat/stream",
+            new ChatStreamRequest([new ChatMessageInput("user", "Explain gravity")]));
+        Assert.Equal(HttpStatusCode.OK, res1.StatusCode);
+        var sse1 = await res1.Content.ReadAsStringAsync();
+        Assert.Contains("\"type\":\"reasoning\"", sse1, StringComparison.Ordinal);
+        Assert.Contains("Final answer.", sse1, StringComparison.Ordinal);
+
+        // Thread is listed in GET /api/chat/threads
+        var threads = await client.GetFromJsonAsync<List<ChatThreadSummaryDto>>("/api/chat/threads");
+        Assert.NotNull(threads);
+        Assert.Single(threads);
+        var threadId = threads[0].Id;
+        Assert.Equal("Explain gravity", threads[0].Title);
+        Assert.Equal(2, threads[0].MessageCount);
+
+        // Detail has separated reasoning + clean content
+        var detail = await client.GetFromJsonAsync<ChatThreadDetailDto>($"/api/chat/threads/{threadId}");
+        Assert.NotNull(detail);
+        Assert.Equal(2, detail.Messages.Count);
+        Assert.Equal("Final answer.", detail.Messages[1].Content);
+        Assert.NotNull(detail.Messages[1].Reasoning);
+        Assert.Contains("First I think about it.", detail.Messages[1].Reasoning, StringComparison.Ordinal);
+        Assert.Contains("And inline think.", detail.Messages[1].Reasoning, StringComparison.Ordinal);
+
+        // Continue existing thread
+        var res2 = await client.PostAsJsonAsync(
+            "/api/chat/stream",
+            new ChatStreamRequest(
+                [
+                    new ChatMessageInput("user", "Explain gravity"),
+                    new ChatMessageInput("assistant", "Final answer."),
+                    new ChatMessageInput("user", "Tell me more"),
+                ],
+                ThreadId: threadId));
+        Assert.Equal(HttpStatusCode.OK, res2.StatusCode);
+
+        var detail2 = await client.GetFromJsonAsync<ChatThreadDetailDto>($"/api/chat/threads/{threadId}");
+        Assert.NotNull(detail2);
+        Assert.Equal(4, detail2.Messages.Count);
+        Assert.Equal("Follow-up answer.", detail2.Messages[3].Content);
+
+        // Delete thread
+        var delRes = await client.DeleteAsync($"/api/chat/threads/{threadId}");
+        Assert.Equal(HttpStatusCode.NoContent, delRes.StatusCode);
+
+        var threadsAfter = await client.GetFromJsonAsync<List<ChatThreadSummaryDto>>("/api/chat/threads");
+        Assert.NotNull(threadsAfter);
+        Assert.Empty(threadsAfter);
+    }
 }
 

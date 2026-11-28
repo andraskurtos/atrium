@@ -329,8 +329,24 @@ export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  reasoning?: string | null;
   citations?: ChatCitation[];
   error?: boolean;
+  createdAt?: string;
+}
+
+export interface ChatThreadSummary {
+  id: string;
+  courseId: string | null;
+  courseLabel?: string | null;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+export interface ChatThreadDetail extends ChatThreadSummary {
+  messages: ChatMessage[];
 }
 
 export interface ChatScope {

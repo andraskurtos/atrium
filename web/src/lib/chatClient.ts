@@ -1,11 +1,18 @@
-import { ApiError, authenticatedRawFetch } from './authClient';
-import type { ChatCitation } from '../types/atrium';
+import { ApiError, apiFetch, authenticatedRawFetch } from './authClient';
+import type {
+  ChatCitation,
+  ChatThreadDetail,
+  ChatThreadSummary,
+} from '../types/atrium';
 
 export interface StreamChatOptions {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   courseId?: string | null;
+  threadId?: string | null;
   signal?: AbortSignal;
+  onThread?: (thread: ChatThreadSummary) => void;
   onStatus?: (message: string) => void;
+  onReasoning?: (text: string) => void;
   onDelta: (text: string) => void;
   onCitations?: (citations: ChatCitation[]) => void;
   onError?: (message: string) => void;
@@ -13,11 +20,25 @@ export interface StreamChatOptions {
 }
 
 type ChatSseEvent =
+  | { type: 'thread'; thread: ChatThreadSummary }
   | { type: 'status'; message: string }
+  | { type: 'reasoning'; text: string }
   | { type: 'delta'; text: string }
   | { type: 'citations'; citations: ChatCitation[] }
   | { type: 'error'; message: string }
   | { type: 'done' };
+
+export async function listChatThreads(): Promise<ChatThreadSummary[]> {
+  return apiFetch<ChatThreadSummary[]>('/api/chat/threads', { method: 'GET' });
+}
+
+export async function getChatThread(id: string): Promise<ChatThreadDetail> {
+  return apiFetch<ChatThreadDetail>(`/api/chat/threads/${id}`, { method: 'GET' });
+}
+
+export async function deleteChatThread(id: string): Promise<void> {
+  await apiFetch<void>(`/api/chat/threads/${id}`, { method: 'DELETE' });
+}
 
 export async function streamChat(options: StreamChatOptions): Promise<void> {
   const response = await authenticatedRawFetch('/api/chat/stream', {
@@ -25,6 +46,7 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
     body: JSON.stringify({
       messages: options.messages,
       courseId: options.courseId ?? null,
+      threadId: options.threadId ?? null,
     }),
     signal: options.signal,
   });
@@ -71,8 +93,14 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
         }
 
         switch (evt.type) {
+          case 'thread':
+            options.onThread?.(evt.thread);
+            break;
           case 'status':
             options.onStatus?.(evt.message);
+            break;
+          case 'reasoning':
+            options.onReasoning?.(evt.text);
             break;
           case 'delta':
             options.onDelta(evt.text);
@@ -93,4 +121,3 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
     reader.releaseLock();
   }
 }
-
