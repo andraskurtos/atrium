@@ -718,8 +718,17 @@ public sealed partial class OpenAiChatService(
         var startPage = root.TryGetProperty("startPage", out var spEl) && spEl.TryGetInt32(out var sp) ? sp : (int?)null;
         var endPage = root.TryGetProperty("endPage", out var epEl) && epEl.TryGetInt32(out var ep) ? ep : (int?)null;
         var maxImages = GetOptionalInt(root, "maxImages", 4);
+        List<int>? pages = null;
+        if (root.TryGetProperty("pages", out var pagesEl) && pagesEl.ValueKind == JsonValueKind.Array)
+        {
+            pages = [];
+            foreach (var pEl in pagesEl.EnumerateArray())
+            {
+                if (pEl.TryGetInt32(out var pNum)) pages.Add(pNum);
+            }
+        }
 
-        var result = await writeService.ExtractPdfImagesAsync(principal, false, attachmentId.Value, noteId.Value, startPage, endPage, maxImages, ct);
+        var result = await writeService.ExtractPdfImagesAsync(principal, false, attachmentId.Value, noteId.Value, startPage, endPage, maxImages, ct, pages);
         return SerializeResult(result);
     }
 
@@ -1243,11 +1252,17 @@ public sealed partial class OpenAiChatService(
 
         arr.Add(BuildTool(
             "extract_pdf_images",
-            "Extract embedded figures/diagrams from a PDF artifact, save them as inline images on a target note, and return Markdown image embeds ![caption](/api/attachments/id).",
+            "Extract diagrams/figures from specific pages of a PDF artifact (automatically skipping slide backgrounds and rendering vector-diagram slides to PNG), attach them to a target note, and return Markdown embeds ![caption](/api/attachments/id). Always pass the specific slide numbers via 'pages' (e.g. [5, 11, 22]).",
             new JsonObject
             {
                 ["attachmentId"] = new JsonObject { ["type"] = "string", ["description"] = "Source PDF artifact GUID." },
                 ["noteId"] = new JsonObject { ["type"] = "string", ["description"] = "Target note GUID." },
+                ["pages"] = new JsonObject
+                {
+                    ["type"] = "array",
+                    ["items"] = new JsonObject { ["type"] = "integer" },
+                    ["description"] = "Specific 1-based page/slide numbers containing diagrams to extract or render (e.g. [5, 11, 39]).",
+                },
                 ["startPage"] = new JsonObject { ["type"] = "integer" },
                 ["endPage"] = new JsonObject { ["type"] = "integer" },
                 ["maxImages"] = new JsonObject { ["type"] = "integer", ["description"] = "Max images to extract (1-6)." },

@@ -244,10 +244,11 @@ public sealed class AtriumMcpTools(
     }
 
     [McpServerTool(Name = "extract_pdf_images", ReadOnly = false, Destructive = false)]
-    [Description("Extract embedded figures/diagrams (>=120x120px) from a PDF artifact, attach them as inline images on a target note, and return Markdown embed snippets. Requires notes:write scope.")]
+    [Description("Extract diagrams/figures from specific pages of a PDF artifact (skipping slide backgrounds and rendering vector-diagram slides to PNG), attach them as inline images on a target note, and return Markdown embed snippets. Requires notes:write scope.")]
     public async Task<CallToolResult> ExtractPdfImagesAsync(
         [Description("Source PDF artifact attachment GUID.")] Guid attachmentId,
         [Description("Target note GUID where the extracted images will be attached.")] Guid noteId,
+        [Description("Optional list of specific 1-based page/slide numbers to extract or render (e.g. [5, 11, 39]).")] int[]? pages = null,
         [Description("Optional 1-based start page.")] int? startPage = null,
         [Description("Optional 1-based end page.")] int? endPage = null,
         [Description("Maximum images to extract (1-6, default 4).")] int maxImages = 4,
@@ -264,7 +265,8 @@ public sealed class AtriumMcpTools(
             startPage,
             endPage,
             maxImages,
-            ct);
+            ct,
+            pages);
         return ToToolResult(result);
     }
 

@@ -317,7 +317,8 @@ public sealed partial class KnowledgeWriteService(
         int? startPage,
         int? endPage,
         int maxImages,
-        CancellationToken ct)
+        CancellationToken ct,
+        IReadOnlyList<int>? pages = null)
     {
         var userId = principal.GetUserId();
         if (userId is null) return KnowledgeResult.Unauthorized<ExtractPdfImagesResponse>();
@@ -382,8 +383,30 @@ public sealed partial class KnowledgeWriteService(
 
             using var document = PdfDocument.Open(ms);
             var totalPages = document.NumberOfPages;
-            var fromPage = Math.Clamp(startPage ?? 1, 1, Math.Max(1, totalPages));
-            var toPage = Math.Clamp(endPage ?? totalPages, fromPage, Math.Max(1, totalPages));
+            var targetPages = new List<int>();
+            var explicitPageSelection = false;
+
+            if (pages is { Count: > 0 })
+            {
+                explicitPageSelection = true;
+                foreach (var p in pages)
+                {
+                    if (p >= 1 && p <= totalPages && !targetPages.Contains(p))
+                    {
+                        targetPages.Add(p);
+                    }
+                }
+            }
+            else
+            {
+                var fromPage = Math.Clamp(startPage ?? 1, 1, Math.Max(1, totalPages));
+                var toPage = Math.Clamp(endPage ?? totalPages, fromPage, Math.Max(1, totalPages));
+                explicitPageSelection = startPage.HasValue || endPage.HasValue;
+                for (var p = fromPage; p <= toPage; p++)
+                {
+                    targetPages.Add(p);
+                }
+            }
 
             // 1. Pre-scan image hashes across the PDF to detect repeating slide backgrounds, logos, and master templates
             var imagePageOccurrences = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -417,8 +440,9 @@ public sealed partial class KnowledgeWriteService(
             var extractedHashes = new HashSet<string>(StringComparer.Ordinal);
             var pagesNeedingRenderFallback = new List<int>();
 
-            for (var pageNum = fromPage; pageNum <= toPage && extracted.Count < limit; pageNum++)
+            foreach (var pageNum in targetPages)
             {
+                if (extracted.Count >= limit) break;
                 ct.ThrowIfCancellationRequested();
                 var page = document.GetPage(pageNum);
                 var pageImages = page.GetImages().ToList();
@@ -492,9 +516,9 @@ public sealed partial class KnowledgeWriteService(
                     extracted.Add(saved);
                 }
 
-                // If caller asked for a specific narrow page range and no non-background raster figures were found
+                // When specific pages were requested and no non-background raster figures were found
                 // (e.g., slide uses vector diagrams + text), queue the slide for pdftoppm rendering
-                if (pageImgIndex == 0 && (toPage - fromPage) <= 5)
+                if (pageImgIndex == 0 && (explicitPageSelection || targetPages.Count <= limit))
                 {
                     pagesNeedingRenderFallback.Add(pageNum);
                 }

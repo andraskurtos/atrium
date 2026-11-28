@@ -922,7 +922,7 @@ export function App() {
         `1. Inspect any existing notes and uploaded slides/PDFs for this lecture (call list_artifacts with universityActivityItemId="${item.id}", read_artifact_text on relevant files, and search_knowledge/read_note if helpful).`,
         `2. Create a new note attached to universityActivityItemId="${item.id}" using create_note titled "Study Guide — ${item.title}".`,
         '3. Format the note with rich Markdown: clear H1/H2/H3 headings, concise bullet summaries, Obsidian callouts (> [!note] Key Concept, > [!tip] Exam Tip, > [!warning] Common Pitfall), GFM comparison/summary tables, syntax-highlighted fenced code blocks, LaTeX math ($...$ / $$...$$) where relevant, and a short Self-Check Questions section.',
-        '4. If any PDF artifact on this lecture contains useful diagrams or figures, call extract_pdf_images(attachmentId, noteId) on the newly created study guide note and call update_note to embed the most relevant diagrams (![caption](/api/attachments/...)) in the right sections.',
+        '4. If any PDF slides on this lecture contain important diagrams or architecture figures, call extract_pdf_images(attachmentId, noteId, pages=[...]) with the specific 1-based slide numbers (up to 6 slides), then call update_note to embed the returned ![caption](/api/attachments/...) Markdown images directly in the relevant sections. Never leave placeholder comments like <!-- FIGURE: ... --> in the note.',
         '5. Finish with a brief summary of what you created.',
       ].join('\n');
 
