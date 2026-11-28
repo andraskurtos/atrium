@@ -1186,6 +1186,63 @@ export function AccountPage({
               ))}
             </div>
           )}
+
+          {(() => {
+            const mcpUrl = `${window.location.origin}/mcp`;
+            const mcpConfigSnippet = JSON.stringify(
+              {
+                mcpServers: {
+                  atrium: {
+                    url: mcpUrl,
+                    headers: {
+                      Authorization: `Bearer ${createdSecret ?? '<your-agent-token>'}`,
+                    },
+                  },
+                },
+              },
+              null,
+              2,
+            );
+            return (
+              <details className="card-soft mcp-connect-box">
+                <summary className="mcp-connect-summary">
+                  <span className="row-title">Connect via MCP</span>
+                  <span className="meta-text">Streamable HTTP · Read-only tools</span>
+                </summary>
+                <div className="mcp-connect-body">
+                  <div className="mcp-connect-url-row">
+                    <span className="meta-text">Endpoint:</span>
+                    <code className="mono-num mcp-connect-url">{mcpUrl}</code>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs"
+                      onClick={() => handleCopyText(mcpUrl, 'MCP endpoint URL')}
+                    >
+                      <CopyIcon />
+                      <span>Copy URL</span>
+                    </button>
+                  </div>
+                  <div className="mcp-connect-snippet-wrap">
+                    <pre className="mcp-connect-pre">
+                      <code>{mcpConfigSnippet}</code>
+                    </pre>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-xs mcp-connect-copy-btn"
+                      onClick={() => handleCopyText(mcpConfigSnippet, 'MCP config snippet')}
+                    >
+                      <CopyIcon />
+                      <span>Copy config</span>
+                    </button>
+                  </div>
+                  <p className="meta-text">
+                    Requires an Agent PAT (<code>atr_...</code>). Private notes and folders
+                    with agent read disabled are always excluded.
+                  </p>
+                </div>
+              </details>
+            );
+          })()}
         </section>
 
         {/* 6. Data Export */}

@@ -38,6 +38,7 @@ public sealed class TestAppFactory : WebApplicationFactory<Program>
         builder.UseSetting("Atrium:Database:AutoMigrate", "false");
         builder.UseSetting("Atrium:Auth:JwtSigningKey", TestJwtSigningKey);
         builder.UseSetting("Atrium:Storage:UploadsPath", _uploadsTempDir);
+        builder.UseSetting("Atrium:Knowledge:EnableBackfill", "false");
 
         builder.ConfigureServices(services =>
         {

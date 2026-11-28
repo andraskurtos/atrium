@@ -21,6 +21,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<Note> Notes => Set<Note>();
     public DbSet<NoteTag> NoteTags => Set<NoteTag>();
     public DbSet<Attachment> Attachments => Set<Attachment>();
+    public DbSet<AttachmentTextChunk> AttachmentTextChunks => Set<AttachmentTextChunk>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -499,6 +500,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(a => a.CalendarEventId).HasColumnName("calendar_event_id");
             entity.Property(a => a.CalendarOccurrenceStartAt).HasColumnName("calendar_occurrence_start_at");
             entity.Property(a => a.AllowAgentRead).HasColumnName("allow_agent_read").HasDefaultValue(true);
+            entity.Property(a => a.TextExtractionStatus).HasColumnName("text_extraction_status").HasMaxLength(24).HasDefaultValue("pending").IsRequired();
+            entity.Property(a => a.ExtractedPageCount).HasColumnName("extracted_page_count");
+            entity.Property(a => a.TextExtractedAt).HasColumnName("text_extracted_at");
             entity.Property(a => a.CreatedAt).HasColumnName("created_at");
             entity.Property(a => a.DeletedAt).HasColumnName("deleted_at");
 
@@ -534,6 +538,36 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasOne(a => a.CalendarEvent)
                 .WithMany()
                 .HasForeignKey(a => a.CalendarEventId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AttachmentTextChunk>(entity =>
+        {
+            entity.ToTable("attachment_text_chunks");
+            entity.HasKey(c => c.Id);
+            entity.Property(c => c.Id).HasColumnName("id");
+            entity.Property(c => c.AttachmentId).HasColumnName("attachment_id");
+            entity.Property(c => c.UserId).HasColumnName("user_id");
+            entity.Property(c => c.ChunkIndex).HasColumnName("chunk_index");
+            entity.Property(c => c.PageLabel).HasColumnName("page_label").HasMaxLength(64).IsRequired();
+            entity.Property(c => c.Content).HasColumnName("content").IsRequired();
+            entity.Property(c => c.CharCount).HasColumnName("char_count");
+            entity.Property(c => c.CreatedAt).HasColumnName("created_at");
+
+            entity.HasIndex(c => new { c.AttachmentId, c.ChunkIndex })
+                .IsUnique()
+                .HasDatabaseName("ix_attachment_text_chunks_attachment_chunk");
+            entity.HasIndex(c => new { c.UserId, c.AttachmentId })
+                .HasDatabaseName("ix_attachment_text_chunks_user_attachment");
+
+            entity.HasOne(c => c.Attachment)
+                .WithMany(a => a.TextChunks)
+                .HasForeignKey(c => c.AttachmentId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(c => c.User)
+                .WithMany()
+                .HasForeignKey(c => c.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

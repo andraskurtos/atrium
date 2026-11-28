@@ -274,12 +274,15 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.Property<string>("ContentType").IsRequired().HasMaxLength(127).HasColumnType("character varying(127)").HasColumnName("content_type");
             b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
             b.Property<DateTimeOffset?>("DeletedAt").HasColumnType("timestamp with time zone").HasColumnName("deleted_at");
+            b.Property<int?>("ExtractedPageCount").HasColumnType("integer").HasColumnName("extracted_page_count");
             b.Property<string>("FileName").IsRequired().HasMaxLength(255).HasColumnType("character varying(255)").HasColumnName("file_name");
             b.Property<string>("Kind").IsRequired().HasMaxLength(24).HasColumnType("character varying(24)").HasColumnName("kind");
             b.Property<Guid?>("NoteId").HasColumnType("uuid").HasColumnName("note_id");
             b.Property<string>("Sha256").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)").HasColumnName("sha256");
             b.Property<long>("SizeBytes").HasColumnType("bigint").HasColumnName("size_bytes");
             b.Property<string>("StorageKey").IsRequired().HasMaxLength(255).HasColumnType("character varying(255)").HasColumnName("storage_key");
+            b.Property<DateTimeOffset?>("TextExtractedAt").HasColumnType("timestamp with time zone").HasColumnName("text_extracted_at");
+            b.Property<string>("TextExtractionStatus").IsRequired().ValueGeneratedOnAdd().HasMaxLength(24).HasColumnType("character varying(24)").HasDefaultValue("pending").HasColumnName("text_extraction_status");
             b.Property<Guid?>("UniversityActivityItemId").HasColumnType("uuid").HasColumnName("university_activity_item_id");
             b.Property<Guid?>("UniversityCourseId").HasColumnType("uuid").HasColumnName("university_course_id");
             b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
@@ -294,6 +297,23 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.HasIndex("UserId", "UniversityActivityItemId", "DeletedAt").HasDatabaseName("ix_attachments_user_uni_item");
             b.HasIndex("UserId", "UniversityCourseId", "DeletedAt").HasDatabaseName("ix_attachments_user_uni_course");
             b.ToTable("attachments", (string?)null);
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.AttachmentTextChunk", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<Guid>("AttachmentId").HasColumnType("uuid").HasColumnName("attachment_id");
+            b.Property<int>("CharCount").HasColumnType("integer").HasColumnName("char_count");
+            b.Property<int>("ChunkIndex").HasColumnType("integer").HasColumnName("chunk_index");
+            b.Property<string>("Content").IsRequired().HasColumnType("text").HasColumnName("content");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<string>("PageLabel").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)").HasColumnName("page_label");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("AttachmentId", "ChunkIndex").IsUnique().HasDatabaseName("ix_attachment_text_chunks_attachment_chunk");
+            b.HasIndex("UserId", "AttachmentId").HasDatabaseName("ix_attachment_text_chunks_user_attachment");
+            b.ToTable("attachment_text_chunks", (string?)null);
         });
 
         modelBuilder.Entity("Atrium.Api.Data.Entities.Note", b =>
@@ -448,6 +468,22 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.Navigation("Note");
             b.Navigation("UniversityActivityItem");
             b.Navigation("UniversityCourse");
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.AttachmentTextChunk", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.Attachment", "Attachment")
+                .WithMany("TextChunks")
+                .HasForeignKey("AttachmentId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("Attachment");
             b.Navigation("User");
         });
 
@@ -608,6 +644,11 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .OnDelete(DeleteBehavior.Cascade)
                 .IsRequired();
             b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.Attachment", b =>
+        {
+            b.Navigation("TextChunks");
         });
 
         modelBuilder.Entity("Atrium.Api.Data.Entities.CalendarEvent", b =>

@@ -9,6 +9,7 @@ public static class AuthConstants
     public const string HumanJwtOnlyPolicy = "HumanJwtOnly";
     public const string OwnerOnlyPolicy = "OwnerOnly";
     public const string HumanOrAgentPolicy = "HumanOrAgent";
+    public const string AgentPatOnlyPolicy = "AgentPatOnly";
 
     public const string AuthRateLimitPolicy = "AuthRateLimit";
 
