@@ -50,6 +50,10 @@ export function loadAtriumEnv() {
       `Password=${merged.POSTGRES_PASSWORD}`;
   }
 
+  if (merged.ATRIUM_UPLOADS_PATH && !merged.Atrium__Storage__UploadsPath) {
+    merged.Atrium__Storage__UploadsPath = merged.ATRIUM_UPLOADS_PATH;
+  }
+
   return merged;
 }
 

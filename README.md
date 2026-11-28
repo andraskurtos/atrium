@@ -14,6 +14,7 @@ A private, self-hosted personal everything-app for storing personal data, calend
 - **UI Style Guide:** [docs/design/style-guide.md](docs/design/style-guide.md) — Warm Tactile Swiss (*"Atelier"*) + Focus Stream design system
 - **Contributing, Branching & CI Policy:** [docs/engineering/contributing-and-ci.md](docs/engineering/contributing-and-ci.md) — `main` PR workflow, `feature/*` & `bugfix/*` branches, and zero undocumented warnings policy
 - **Database Migrations Guide:** [docs/engineering/database-migrations.md](docs/engineering/database-migrations.md) — Applying EF Core migrations automatically, via CLI/Docker, or via idempotent SQL script
+- **Backups & Restore Guide:** [docs/engineering/backups-and-restore.md](docs/engineering/backups-and-restore.md) — Automated PostgreSQL + uploads snapshots, secondary drive copies, and verified restores
 - **Warning Justification Registry:** [docs/engineering/warning-justifications.md](docs/engineering/warning-justifications.md) — Logged project-wide workarounds and suppressions
 
 ## Prerequisites

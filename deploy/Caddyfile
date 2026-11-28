@@ -1,4 +1,14 @@
 {$ATRIUM_DOMAIN} {
 	encode zstd gzip
-	reverse_proxy atrium:8080
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "SAMEORIGIN"
+		-Server
+	}
+
+	reverse_proxy atrium:8080 {
+		flush_interval -1
+	}
 }
