@@ -579,7 +579,9 @@ print_summary() {
   printf '  Restart:      %s restart\n' "$compose_prefix"
   printf '  Update:       git pull && %s up -d --build\n' "$compose_prefix"
   printf '  Stop:         %s down\n' "$compose_prefix"
-  printf '  DB backup:    docker compose exec -T postgres pg_dump -U %s %s > backup.sql\n\n' "$POSTGRES_USER" "$POSTGRES_DB"
+  printf '  Backup now:   ./scripts/backup.sh\n'
+  printf '  Daily timer:  ./scripts/backup.sh --install-timer\n'
+  printf '  Restore:      ./scripts/restore.sh --latest\n\n'
 }
 
 main() {

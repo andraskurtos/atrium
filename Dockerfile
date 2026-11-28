@@ -29,9 +29,9 @@ RUN dotnet publish Atrium.Api/Atrium.Api.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
-# Install curl for container healthcheck
+# Install curl (healthcheck) and poppler-utils (pdftoppm for PDF slide image extraction)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 ENV ASPNETCORE_ENVIRONMENT=Production \
@@ -40,6 +40,10 @@ ENV ASPNETCORE_ENVIRONMENT=Production \
 
 COPY --from=api-build /app/publish ./
 COPY --from=web-build /src/web/dist ./wwwroot
+
+# Ensure the uploads mount point is owned by the non-root app user so Docker named volumes initialize writable
+RUN mkdir -p /app/uploads \
+    && chown -R $APP_UID:$APP_UID /app/uploads
 
 EXPOSE 8080
 
