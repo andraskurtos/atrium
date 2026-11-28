@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Claims;
 using System.Text.Json;
 using Atrium.Api.Knowledge;
+using Atrium.Api.University;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -496,6 +497,31 @@ public sealed class AtriumMcpTools(
             enforceAgentRules: true,
             activityId,
             parsedItems,
+            ct);
+        return ToToolResult(result);
+    }
+
+    [McpServerTool(Name = "create_quiz", ReadOnly = false, Destructive = false)]
+    [Description("Create a playable multiple-choice quiz with explanations for a university lecture/activity item or an entire course. Requires university:write scope.")]
+    public async Task<CallToolResult> CreateQuizAsync(
+        [Description("Quiz title.")] string title,
+        [Description("Array of 1–50 multiple-choice questions (prompt, 2–6 options, 0-based correctIndex, explanation, optional sourceReference).")] IReadOnlyList<QuizQuestionDto> questions,
+        [Description("Optional university course GUID (required if universityActivityItemId is omitted).")] Guid? courseId = null,
+        [Description("Optional university lecture/activity item GUID (omit for a whole-course quiz).")] Guid? universityActivityItemId = null,
+        [Description("Optional short description of what the quiz covers.")] string? description = null,
+        CancellationToken ct = default)
+    {
+        var principal = GetPrincipal();
+        if (principal is null) return ErrorResult("Unauthorized.");
+
+        var result = await writeService.CreateQuizAsync(
+            principal,
+            enforceAgentRules: true,
+            courseId,
+            universityActivityItemId,
+            title,
+            description,
+            questions,
             ct);
         return ToToolResult(result);
     }

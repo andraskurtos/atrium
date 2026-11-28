@@ -418,6 +418,39 @@ export interface StudyGuideJob {
   error?: string | null;
 }
 
+export interface QuizQuestion {
+  prompt: string;
+  options: string[];
+  correctIndex: number;
+  explanation: string;
+  sourceReference?: string | null;
+}
+
+export interface UniversityQuizSummary {
+  id: string;
+  courseId: string;
+  universityActivityItemId: string | null;
+  title: string;
+  description: string | null;
+  questionCount: number;
+  attemptCount: number;
+  lastScore: number | null;
+  bestScore: number | null;
+  lastPlayedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UniversityQuizDetail extends UniversityQuizSummary {
+  questions: QuizQuestion[];
+}
+
+export interface QuizGenerateOptions {
+  questionCount: number;
+  difficulty: 'mixed' | 'easy' | 'medium' | 'hard';
+  customInstructions: string;
+}
+
 export interface AgentToken {
   id: string;
   name: string;

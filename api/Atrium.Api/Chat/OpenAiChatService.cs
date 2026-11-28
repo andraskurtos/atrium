@@ -695,6 +695,7 @@ public sealed partial class OpenAiChatService(
         "create_activity",
         "create_activity_item",
         "create_activity_items",
+        "create_quiz",
     };
 
     private async Task<string> ExecuteToolAsync(
@@ -749,6 +750,7 @@ public sealed partial class OpenAiChatService(
                         "extract_pdf_images" => await RunExtractPdfImagesAsync(principal, userId, root, lockedCourseId, ct),
                         "create_activity_item" => await RunCreateActivityItemAsync(principal, userId, root, lockedCourseId, writeEventAsync, ct),
                         "create_activity_items" => await RunCreateActivityItemsBatchAsync(principal, userId, root, lockedCourseId, writeEventAsync, ct),
+                        "create_quiz" => await RunCreateQuizAsync(principal, userId, root, lockedCourseId, writeEventAsync, ct),
                         "web_search" => await webToolsService.WebSearchAsync(userId, GetOptionalString(root, "query") ?? string.Empty, GetOptionalInt(root, "maxResults", 5), ct),
                         "fetch_url" => await webToolsService.FetchUrlAsync(GetOptionalString(root, "url") ?? string.Empty, GetOptionalInt(root, "maxChars", 16_000), ct),
                         "query_chat_ics" => await RunQueryChatIcsAsync(userId, threadId, userTimezone, root, ct),
@@ -795,6 +797,7 @@ public sealed partial class OpenAiChatService(
                     "create_activity" => await RunCreateActivityAsync(principal, root, writeEventAsync, ct),
                     "create_activity_item" => await RunCreateActivityItemAsync(principal, userId, root, null, writeEventAsync, ct),
                     "create_activity_items" => await RunCreateActivityItemsBatchAsync(principal, userId, root, null, writeEventAsync, ct),
+                    "create_quiz" => await RunCreateQuizAsync(principal, userId, root, null, writeEventAsync, ct),
                     "web_search" => await webToolsService.WebSearchAsync(userId, GetOptionalString(root, "query") ?? string.Empty, GetOptionalInt(root, "maxResults", 5), ct),
                     "fetch_url" => await webToolsService.FetchUrlAsync(GetOptionalString(root, "url") ?? string.Empty, GetOptionalInt(root, "maxChars", 16_000), ct),
                     "query_chat_ics" => await RunQueryChatIcsAsync(userId, threadId, userTimezone, root, ct),
@@ -1175,6 +1178,83 @@ public sealed partial class OpenAiChatService(
                 domain = "university",
                 id = result.Value.ActivityId,
                 title = $"Created {result.Value.CreatedCount} items",
+            });
+        }
+
+        return SerializeResult(result);
+    }
+
+    private async Task<string> RunCreateQuizAsync(
+        ClaimsPrincipal principal,
+        Guid userId,
+        JsonElement root,
+        Guid? lockedCourseId,
+        Func<object, Task> writeEventAsync,
+        CancellationToken ct)
+    {
+        var courseId = lockedCourseId ?? GetOptionalGuid(root, "courseId");
+        var itemId = GetOptionalGuid(root, "universityActivityItemId");
+
+        if (lockedCourseId.HasValue && itemId.HasValue)
+        {
+            var belongs = await db.UniversityActivityItems.AnyAsync(
+                i => i.Id == itemId.Value && i.UserId == userId && i.CourseId == lockedCourseId.Value,
+                ct);
+            if (!belongs)
+            {
+                return JsonSerializer.Serialize(new { error = "Access denied: activity item does not belong to the selected course." }, JsonOptions);
+            }
+        }
+
+        if (!root.TryGetProperty("questions", out var questionsEl) || questionsEl.ValueKind != JsonValueKind.Array)
+        {
+            return JsonSerializer.Serialize(new { error = "questions array is required." }, JsonOptions);
+        }
+
+        var questions = new List<University.QuizQuestionDto>();
+        foreach (var qEl in questionsEl.EnumerateArray())
+        {
+            if (qEl.ValueKind != JsonValueKind.Object) continue;
+            var opts = new List<string>();
+            if (qEl.TryGetProperty("options", out var optsEl) && optsEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var o in optsEl.EnumerateArray())
+                {
+                    if (o.ValueKind == JsonValueKind.String)
+                    {
+                        var val = o.GetString()?.Trim();
+                        if (!string.IsNullOrEmpty(val)) opts.Add(val);
+                    }
+                }
+            }
+
+            var correctIndex = GetOptionalInt(qEl, "correctIndex", -1);
+            questions.Add(new University.QuizQuestionDto(
+                GetOptionalString(qEl, "prompt") ?? string.Empty,
+                opts,
+                correctIndex,
+                GetOptionalString(qEl, "explanation") ?? string.Empty,
+                GetOptionalString(qEl, "sourceReference")));
+        }
+
+        var result = await writeService.CreateQuizAsync(
+            principal,
+            false,
+            courseId,
+            itemId,
+            GetOptionalString(root, "title"),
+            GetOptionalString(root, "description"),
+            questions,
+            ct);
+
+        if (result.IsSuccess && result.Value is not null)
+        {
+            await writeEventAsync(new
+            {
+                type = "mutation",
+                domain = "university",
+                id = result.Value.Id,
+                title = result.Value.Title,
             });
         }
 
@@ -1762,6 +1842,40 @@ public sealed partial class OpenAiChatService(
             ["activityId", "items"]));
 
         arr.Add(BuildTool(
+            "create_quiz",
+            "Create a playable multiple-choice quiz with explanations for a university lecture/activity item or an entire course.",
+            new JsonObject
+            {
+                ["title"] = new JsonObject { ["type"] = "string", ["description"] = "Concise quiz title." },
+                ["description"] = new JsonObject { ["type"] = "string", ["description"] = "Short summary of quiz scope/difficulty." },
+                ["courseId"] = new JsonObject { ["type"] = "string", ["description"] = "University course GUID (optional when course-scoped or when universityActivityItemId is provided)." },
+                ["universityActivityItemId"] = new JsonObject { ["type"] = "string", ["description"] = "University lecture/item GUID (omit for a whole-course quiz)." },
+                ["questions"] = new JsonObject
+                {
+                    ["type"] = "array",
+                    ["items"] = new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["prompt"] = new JsonObject { ["type"] = "string", ["description"] = "Question text (supports Markdown and LaTeX $...$)." },
+                            ["options"] = new JsonObject
+                            {
+                                ["type"] = "array",
+                                ["items"] = new JsonObject { ["type"] = "string" },
+                                ["description"] = "2 to 6 answer choices (typically 4).",
+                            },
+                            ["correctIndex"] = new JsonObject { ["type"] = "integer", ["description"] = "0-based index of the correct option." },
+                            ["explanation"] = new JsonObject { ["type"] = "string", ["description"] = "Clear explanation of why the correct answer is right (and why key distractors are wrong)." },
+                            ["sourceReference"] = new JsonObject { ["type"] = "string", ["description"] = "Optional slide/page or note title reference." },
+                        },
+                        ["required"] = new JsonArray("prompt", "options", "correctIndex", "explanation"),
+                    },
+                },
+            },
+            ["title", "questions"]));
+
+        arr.Add(BuildTool(
             "web_search",
             "Search the web for current information, references, or documentation.",
             new JsonObject
@@ -1882,6 +1996,7 @@ public sealed partial class OpenAiChatService(
         "create_activity" => "Adding course activity…",
         "create_activity_item" => "Adding lecture/item…",
         "create_activity_items" => "Batch-creating course items…",
+        "create_quiz" => "Saving playable quiz…",
         "web_search" => "Searching the web…",
         "fetch_url" => "Reading web page…",
         "query_chat_ics" => "Inspecting attached calendar…",

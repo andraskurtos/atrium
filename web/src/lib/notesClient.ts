@@ -85,6 +85,7 @@ export async function createNote(input: {
   title?: string;
   folderId?: string | null;
   universityCourseId?: string | null;
+  universityActivityItemId?: string | null;
   content?: string;
   allowAgentRead?: boolean;
 }): Promise<NoteDetail> {
@@ -94,6 +95,7 @@ export async function createNote(input: {
       title: input.title ?? null,
       folderId: input.folderId ?? null,
       universityCourseId: input.universityCourseId ?? null,
+      universityActivityItemId: input.universityActivityItemId ?? null,
       content: input.content ?? '',
       allowAgentRead: input.allowAgentRead ?? true,
     }),

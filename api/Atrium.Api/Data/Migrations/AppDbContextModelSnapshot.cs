@@ -733,6 +733,30 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
             b.ToTable("chat_attachments", (string?)null);
         });
 
+        modelBuilder.Entity("Atrium.Api.Data.Entities.UniversityQuiz", b =>
+        {
+            b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid").HasColumnName("id");
+            b.Property<int>("AttemptCount").ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(0).HasColumnName("attempt_count");
+            b.Property<int?>("BestScore").HasColumnType("integer").HasColumnName("best_score");
+            b.Property<Guid>("CourseId").HasColumnType("uuid").HasColumnName("course_id");
+            b.Property<DateTimeOffset>("CreatedAt").HasColumnType("timestamp with time zone").HasColumnName("created_at");
+            b.Property<string>("Description").HasMaxLength(500).HasColumnType("character varying(500)").HasColumnName("description");
+            b.Property<DateTimeOffset?>("LastPlayedAt").HasColumnType("timestamp with time zone").HasColumnName("last_played_at");
+            b.Property<int?>("LastScore").HasColumnType("integer").HasColumnName("last_score");
+            b.Property<int>("QuestionCount").HasColumnType("integer").HasColumnName("question_count");
+            b.Property<string>("QuestionsJson").IsRequired().HasColumnType("text").HasColumnName("questions_json");
+            b.Property<string>("Title").IsRequired().HasMaxLength(200).HasColumnType("character varying(200)").HasColumnName("title");
+            b.Property<Guid?>("UniversityActivityItemId").HasColumnType("uuid").HasColumnName("university_activity_item_id");
+            b.Property<DateTimeOffset>("UpdatedAt").HasColumnType("timestamp with time zone").HasColumnName("updated_at");
+            b.Property<Guid>("UserId").HasColumnType("uuid").HasColumnName("user_id");
+
+            b.HasKey("Id");
+            b.HasIndex("CourseId");
+            b.HasIndex("UniversityActivityItemId");
+            b.HasIndex("UserId", "CourseId", "UniversityActivityItemId").HasDatabaseName("ix_university_quizzes_user_course_item");
+            b.ToTable("university_quizzes", (string?)null);
+        });
+
         modelBuilder.Entity("Atrium.Api.Data.Entities.UserPreferences", b =>
         {
             b.HasOne("Atrium.Api.Data.Entities.AiModel", "DefaultAiModel")
@@ -796,6 +820,27 @@ public sealed class AppDbContextModelSnapshot : ModelSnapshot
                 .IsRequired();
             b.Navigation("Message");
             b.Navigation("Thread");
+            b.Navigation("User");
+        });
+
+        modelBuilder.Entity("Atrium.Api.Data.Entities.UniversityQuiz", b =>
+        {
+            b.HasOne("Atrium.Api.Data.Entities.UniversityCourse", "Course")
+                .WithMany()
+                .HasForeignKey("CourseId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.HasOne("Atrium.Api.Data.Entities.UniversityActivityItem", "ActivityItem")
+                .WithMany()
+                .HasForeignKey("UniversityActivityItemId")
+                .OnDelete(DeleteBehavior.SetNull);
+            b.HasOne("Atrium.Api.Data.Entities.User", "User")
+                .WithMany()
+                .HasForeignKey("UserId")
+                .OnDelete(DeleteBehavior.Cascade)
+                .IsRequired();
+            b.Navigation("ActivityItem");
+            b.Navigation("Course");
             b.Navigation("User");
         });
 

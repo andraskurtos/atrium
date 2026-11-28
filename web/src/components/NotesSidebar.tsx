@@ -65,17 +65,17 @@ interface NotesSidebarProps {
   tags: NoteTagCount[];
   searchQuery: string;
   searchMode: NoteSearchMode;
-  activeTag: string | null;
+  selectedTags: string[];
   searchResults: NoteSummary[] | null;
   searching: boolean;
   selectedNoteId: string | null;
   onCloseMobile: () => void;
   onSearchChange: (q: string) => void;
   onSearchModeChange: (mode: NoteSearchMode) => void;
-  onSelectTag: (tag: string | null) => void;
+  onChangeSelectedTags: (tags: string[]) => void;
   onSelectNote: (noteId: string) => void;
   onSelectSearchResult: (noteId: string) => void;
-  onOpenUniversityItemNote: (itemId: string) => Promise<void>;
+  onCreateUniversityItemNote: (itemId: string) => Promise<void>;
   onViewPdf: (artifact: AttachmentSummary) => void;
   onOpenNoteSplit: (noteId: string) => void;
   onCreateCourseNote: (courseId: string) => Promise<void>;
@@ -101,17 +101,17 @@ export function NotesSidebar({
   tags,
   searchQuery,
   searchMode,
-  activeTag,
+  selectedTags,
   searchResults,
   searching,
   selectedNoteId,
   onCloseMobile,
   onSearchChange,
   onSearchModeChange,
-  onSelectTag,
+  onChangeSelectedTags,
   onSelectNote,
   onSelectSearchResult,
-  onOpenUniversityItemNote,
+  onCreateUniversityItemNote,
   onViewPdf,
   onOpenNoteSplit,
   onCreateCourseNote,
@@ -150,6 +150,35 @@ export function NotesSidebar({
   const [fileDropTargetKey, setFileDropTargetKey] = useState<string | null>(
     null,
   );
+  const [selectedContainer, setSelectedContainer] = useState<
+    | { kind: 'folder'; folderId: string; label: string }
+    | { kind: 'course'; courseId: string; label: string }
+    | { kind: 'university_item'; itemId: string; label: string }
+    | null
+  >(null);
+
+  const handleTopNewNote = () => {
+    if (!selectedContainer) {
+      void onCreateNote(null);
+      return;
+    }
+    if (selectedContainer.kind === 'folder') {
+      setExpandedNodes((prev) => ({ ...prev, [selectedContainer.folderId]: true }));
+      void onCreateNote(selectedContainer.folderId);
+    } else if (selectedContainer.kind === 'course') {
+      setExpandedNodes((prev) => ({
+        ...prev,
+        [`uni:course:${selectedContainer.courseId}`]: true,
+      }));
+      void onCreateCourseNote(selectedContainer.courseId);
+    } else {
+      setExpandedNodes((prev) => ({
+        ...prev,
+        [`uni:item:${selectedContainer.itemId}`]: true,
+      }));
+      void onCreateUniversityItemNote(selectedContainer.itemId);
+    }
+  };
 
   const artifactUploadInputRef = useRef<HTMLInputElement | null>(null);
   const pendingUploadOwnerRef = useRef<Omit<
@@ -271,7 +300,39 @@ export function NotesSidebar({
     }
   };
 
-  const isFiltering = Boolean(searchQuery.trim() || activeTag);
+  const isFiltering = Boolean(searchQuery.trim() || selectedTags.length > 0);
+
+  const MAX_VISIBLE_TAG_SUGGESTIONS = 8;
+  const matchingTags = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase().replace(/^#/, '');
+    if (!q) return tags;
+    return tags.filter((t) => t.tag.toLowerCase().includes(q));
+  }, [searchQuery, tags]);
+
+  const selectedTagSet = useMemo(() => new Set(selectedTags), [selectedTags]);
+  const allMatchingTagsSelected =
+    matchingTags.length > 0 &&
+    matchingTags.every((t) => selectedTagSet.has(t.tag));
+
+  const toggleTagSelection = (tag: string) => {
+    if (selectedTagSet.has(tag)) {
+      onChangeSelectedTags(selectedTags.filter((t) => t !== tag));
+    } else {
+      onChangeSelectedTags([...selectedTags, tag]);
+    }
+  };
+
+  const handleToggleAllMatchingTags = () => {
+    if (matchingTags.length === 0) return;
+    if (allMatchingTagsSelected) {
+      const matchSet = new Set(matchingTags.map((t) => t.tag));
+      onChangeSelectedTags(selectedTags.filter((t) => !matchSet.has(t)));
+    } else {
+      const next = new Set(selectedTags);
+      for (const t of matchingTags) next.add(t.tag);
+      onChangeSelectedTags(Array.from(next));
+    }
+  };
   const displayedSearchNotes = searchResults ?? [];
 
   const draggingNote = useMemo(
@@ -469,11 +530,16 @@ export function NotesSidebar({
     const isRenaming = renamingFolderId === folder.id;
     const isConfirmingDelete = confirmDeleteFolderId === folder.id;
     const isDropTarget = dropTargetFolderId === folder.id;
+    const isContainerSelected =
+      selectedContainer?.kind === 'folder' &&
+      selectedContainer.folderId === folder.id;
 
     return (
       <div key={folder.id} className="notes-tree-branch">
         <div
-          className={`notes-tree-folder-row ${isDropTarget ? 'is-drop-target' : ''}`}
+          className={`notes-tree-folder-row ${isDropTarget ? 'is-drop-target' : ''} ${
+            isContainerSelected ? 'is-selected-container' : ''
+          }`}
           style={{ paddingLeft: `${8 + depth * 12}px` }}
           onDragOver={(e) => handleFolderDragOver(e, folder.id)}
           onDragLeave={() => {
@@ -516,7 +582,14 @@ export function NotesSidebar({
             <button
               type="button"
               className="notes-tree-folder-name"
-              onClick={() => toggleExpand(folder.id, true)}
+              onClick={() => {
+                setSelectedContainer({
+                  kind: 'folder',
+                  folderId: folder.id,
+                  label: folder.name,
+                });
+                toggleExpand(folder.id, true);
+              }}
               onDoubleClick={() => {
                 setRenamingFolderId(folder.id);
                 setRenameDraft(folder.name);
@@ -659,7 +732,12 @@ export function NotesSidebar({
               id="notes-new-note-btn"
               type="button"
               className="btn btn-primary btn-xs"
-              onClick={() => void onCreateNote(null)}
+              onClick={handleTopNewNote}
+              title={
+                selectedContainer
+                  ? `New note in ${selectedContainer.label}`
+                  : 'New note'
+              }
             >
               <PlusIcon />
               <span>New note</span>
@@ -795,23 +873,62 @@ export function NotesSidebar({
             </button>
           </div>
 
-          {tags.length > 0 && (
-            <div className="notes-sidebar-tags" aria-label="Filter by tag">
-              {tags.slice(0, 12).map((t) => (
-                <button
-                  key={t.tag}
-                  type="button"
-                  className={`notes-tag-filter-chip ${
-                    activeTag === t.tag ? 'is-active' : ''
-                  }`}
-                  onClick={() =>
-                    onSelectTag(activeTag === t.tag ? null : t.tag)
-                  }
-                >
-                  <span>#{t.tag}</span>
-                  <span className="mono-num">{t.count}</span>
-                </button>
-              ))}
+          {searchMode === 'tags' && tags.length > 0 && (
+            <div
+              className="notes-tag-suggestions"
+              aria-label="Tag search suggestions"
+            >
+              <div className="notes-tag-suggestions-header">
+                <span className="meta-text">
+                  {matchingTags.length === 0
+                    ? 'No matching tags'
+                    : selectedTags.length > 0
+                      ? `${selectedTags.length} selected · ${matchingTags.length} matching`
+                      : `${matchingTags.length} matching ${matchingTags.length === 1 ? 'tag' : 'tags'}`}
+                </span>
+                {matchingTags.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs notes-tag-select-all-btn"
+                    onClick={handleToggleAllMatchingTags}
+                  >
+                    {allMatchingTagsSelected ? 'Deselect all' : 'Select all'}
+                  </button>
+                )}
+              </div>
+
+              {matchingTags.length > 0 && (
+                <div className="notes-tag-suggestions-list">
+                  {matchingTags
+                    .slice(0, MAX_VISIBLE_TAG_SUGGESTIONS)
+                    .map((t) => {
+                      const checked = selectedTagSet.has(t.tag);
+                      return (
+                        <label
+                          key={t.tag}
+                          className={`notes-tag-suggestion-row ${checked ? 'is-checked' : ''}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleTagSelection(t.tag)}
+                          />
+                          <span className="notes-tag-suggestion-name">
+                            #{t.tag}
+                          </span>
+                          <span className="meta-text mono-num">{t.count}</span>
+                        </label>
+                      );
+                    })}
+                </div>
+              )}
+
+              {matchingTags.length > MAX_VISIBLE_TAG_SUGGESTIONS && (
+                <div className="notes-tag-suggestions-more meta-text">
+                  Showing {MAX_VISIBLE_TAG_SUGGESTIONS} of {matchingTags.length}{' '}
+                  tags — &ldquo;{allMatchingTagsSelected ? 'Deselect all' : 'Select all'}&rdquo; applies to all {matchingTags.length}.
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -832,7 +949,7 @@ export function NotesSidebar({
                   className="btn btn-ghost btn-xs"
                   onClick={() => {
                     onSearchChange('');
-                    onSelectTag(null);
+                    onChangeSelectedTags([]);
                   }}
                 >
                   Clear
@@ -985,7 +1102,12 @@ export function NotesSidebar({
                                   return (
                                     <div key={cKey} className="notes-tree-branch">
                                       <div
-                                        className="notes-tree-folder-row"
+                                        className={`notes-tree-folder-row ${
+                                          selectedContainer?.kind === 'course' &&
+                                          selectedContainer.courseId === course.id
+                                            ? 'is-selected-container'
+                                            : ''
+                                        }`}
                                         style={{ paddingLeft: '20px' }}
                                         {...fileDropProps(`course:${course.id}`, { universityCourseId: course.id })}
                                       >
@@ -1002,9 +1124,14 @@ export function NotesSidebar({
                                         <button
                                           type="button"
                                           className="notes-tree-folder-name"
-                                          onClick={() =>
-                                            toggleExpand(cKey, false)
-                                          }
+                                          onClick={() => {
+                                            setSelectedContainer({
+                                              kind: 'course',
+                                              courseId: course.id,
+                                              label: course.name,
+                                            });
+                                            toggleExpand(cKey, false);
+                                          }}
                                           title={course.name}
                                         >
                                           <span
@@ -1115,26 +1242,27 @@ export function NotesSidebar({
                                                           ? [item.note]
                                                           : [];
                                                     const hasChildren =
-                                                      item.artifacts.length > 0 ||
-                                                      itemNotes.length > 1;
+                                                      itemNotes.length > 0 ||
+                                                      item.artifacts.length > 0;
                                                     const iOpen =
                                                       isNodeExpanded(
                                                         iKey,
-                                                        hasChildren,
+                                                        false,
                                                       );
-                                                    const isSelected =
-                                                      itemNotes.length === 1 &&
-                                                      selectedNoteId ===
-                                                        itemNotes[0].id;
+                                                    const isItemContainerSelected =
+                                                      selectedContainer?.kind ===
+                                                        'university_item' &&
+                                                      selectedContainer.itemId ===
+                                                        item.id;
                                                     return (
                                                       <div
                                                         key={iKey}
                                                         className="notes-tree-branch"
                                                       >
                                                         <div
-                                                          className={`notes-tree-folder-row notes-tree-item-row ${
-                                                            isSelected
-                                                              ? 'is-selected'
+                                                          className={`notes-tree-folder-row ${
+                                                            isItemContainerSelected
+                                                              ? 'is-selected-container'
                                                               : ''
                                                           }`}
                                                           style={{
@@ -1142,53 +1270,72 @@ export function NotesSidebar({
                                                           }}
                                                           {...fileDropProps(`item:${item.id}`, { universityActivityItemId: item.id })}
                                                         >
-                                                          {hasChildren ? (
-                                                            <button
-                                                              type="button"
-                                                              className={`notes-tree-chevron ${iOpen ? 'is-expanded' : ''}`}
-                                                              onClick={() =>
-                                                                toggleExpand(
-                                                                  iKey,
-                                                                  true,
-                                                                )
-                                                              }
-                                                              aria-label={`Toggle ${item.title} artifacts`}
-                                                            >
-                                                              <ChevronRightIcon />
-                                                            </button>
-                                                          ) : (
-                                                            <span
-                                                              className="notes-tree-chevron-spacer"
-                                                              aria-hidden="true"
-                                                            />
-                                                          )}
                                                           <button
                                                             type="button"
-                                                            className="notes-tree-folder-name notes-tree-item-note-btn"
-                                                            onClick={() => {
-                                                              if (item.note) {
-                                                                onSelectNote(
-                                                                  item.note.id,
-                                                                );
-                                                              } else {
-                                                                void onOpenUniversityItemNote(
-                                                                  item.id,
-                                                                );
-                                                              }
-                                                              onCloseMobile();
-                                                            }}
-                                                            title={
-                                                              item.note
-                                                                ? `Open note: ${item.title}`
-                                                                : `Create & open note for ${item.title}`
+                                                            className={`notes-tree-chevron ${iOpen ? 'is-expanded' : ''}`}
+                                                            onClick={() =>
+                                                              toggleExpand(
+                                                                iKey,
+                                                                false,
+                                                              )
                                                             }
+                                                            aria-label={`Toggle ${item.title}`}
                                                           >
-                                                            <NoteIcon className="notes-tree-icon" />
+                                                            <ChevronRightIcon />
+                                                          </button>
+                                                          <button
+                                                            type="button"
+                                                            className="notes-tree-folder-name"
+                                                            onClick={() => {
+                                                              setSelectedContainer(
+                                                                {
+                                                                  kind: 'university_item',
+                                                                  itemId:
+                                                                    item.id,
+                                                                  label:
+                                                                    item.title,
+                                                                },
+                                                              );
+                                                              toggleExpand(
+                                                                iKey,
+                                                                false,
+                                                              );
+                                                            }}
+                                                            title={`${item.title} (${itemNotes.length} notes, ${item.artifacts.length} files)`}
+                                                          >
                                                             <span>
                                                               {item.title}
                                                             </span>
                                                           </button>
                                                           <div className="notes-tree-folder-actions">
+                                                            <button
+                                                              type="button"
+                                                              className="btn btn-ghost btn-icon-sm"
+                                                              title={`New note in ${item.title}`}
+                                                              aria-label={`New note in ${item.title}`}
+                                                              onClick={() => {
+                                                                setSelectedContainer(
+                                                                  {
+                                                                    kind: 'university_item',
+                                                                    itemId:
+                                                                      item.id,
+                                                                    label:
+                                                                      item.title,
+                                                                  },
+                                                                );
+                                                                setExpandedNodes(
+                                                                  (prev) => ({
+                                                                    ...prev,
+                                                                    [iKey]: true,
+                                                                  }),
+                                                                );
+                                                                void onCreateUniversityItemNote(
+                                                                  item.id,
+                                                                );
+                                                              }}
+                                                            >
+                                                              <PlusIcon />
+                                                            </button>
                                                             <button
                                                               type="button"
                                                               className="btn btn-ghost btn-icon-sm"
@@ -1213,45 +1360,25 @@ export function NotesSidebar({
                                                             </button>
                                                           </div>
                                                         </div>
-                                                        {itemNotes.length > 1 &&
-                                                          iOpen &&
-                                                          itemNotes.map((n) => (
-                                                            <button
-                                                              key={n.id}
-                                                              type="button"
-                                                              className={`notes-tree-note-row ${
-                                                                selectedNoteId ===
-                                                                n.id
-                                                                  ? 'is-selected'
-                                                                  : ''
-                                                              }`}
-                                                              style={{
-                                                                paddingLeft:
-                                                                  '62px',
-                                                              }}
-                                                              onClick={() => {
-                                                                onSelectNote(
-                                                                  n.id,
-                                                                );
-                                                                onCloseMobile();
-                                                              }}
-                                                            >
-                                                              <NoteIcon className="notes-tree-icon" />
-                                                              <span className="notes-tree-note-title">
-                                                                {n.title}
-                                                              </span>
-                                                            </button>
-                                                          ))}
-                                                        {item.artifacts.length >
-                                                          0 &&
-                                                          iOpen &&
-                                                          item.artifacts.map(
-                                                            (art) =>
-                                                              renderArtifactButton(
-                                                                art,
-                                                                4,
-                                                              ),
-                                                          )}
+                                                        {iOpen && hasChildren && (
+                                                          <div className="notes-tree-children">
+                                                            {itemNotes.map(
+                                                              (n) =>
+                                                                renderNoteButton(
+                                                                  n,
+                                                                  4,
+                                                                  false,
+                                                                ),
+                                                            )}
+                                                            {item.artifacts.map(
+                                                              (art) =>
+                                                                renderArtifactButton(
+                                                                  art,
+                                                                  4,
+                                                                ),
+                                                            )}
+                                                          </div>
+                                                        )}
                                                       </div>
                                                     );
                                                   })}

@@ -35,11 +35,18 @@ import {
   type UpdateActivityItemInput,
   type UpdateCourseInput,
 } from '../lib/universityClient';
+import {
+  deleteUniversityQuiz,
+  getUniversityQuiz,
+  listCourseQuizzes,
+  recordQuizAttempt,
+} from '../lib/quizClient';
 import type {
   AttachmentSummary,
   AttendanceSummary,
   NoteSummary,
   PendingNoteTarget,
+  QuizGenerateOptions,
   StudyGuideJob,
   UniversityActivityItem,
   UniversityActivityType,
@@ -47,9 +54,13 @@ import type {
   UniversityCourse,
   UniversityCourseActivity,
   UniversityCourseStatus,
+  UniversityQuizDetail,
+  UniversityQuizSummary,
   UserCalendar,
 } from '../types/atrium';
 import { ArrowLeftIcon, ChatIcon, CloseIcon, GraduationCapIcon, PlusIcon } from './Icons';
+import { QuizGeneratorModal } from './QuizGeneratorModal';
+import { QuizPlayerModal } from './QuizPlayerModal';
 import { TimeInput } from './TimeInput';
 import { UniversityCalendarCard } from './UniversityCalendarCard';
 
@@ -110,6 +121,15 @@ interface UniversityPageProps {
     item: UniversityActivityItem,
   ) => void;
   onOpenStudyGuideThread?: (itemId: string) => void;
+  quizRefreshKey?: number;
+  quizJobs?: Record<string, StudyGuideJob>;
+  onGenerateQuiz?: (
+    course: UniversityCourse,
+    activity: UniversityCourseActivity | null,
+    item: UniversityActivityItem | null,
+    options: QuizGenerateOptions,
+  ) => void;
+  onOpenQuizThread?: (jobKey: string) => void;
   onAnnounce?: (message: string) => void;
 }
 
@@ -367,6 +387,10 @@ export function UniversityPage({
   studyGuideJobs = {},
   onGenerateStudyGuide,
   onOpenStudyGuideThread,
+  quizRefreshKey = 0,
+  quizJobs = {},
+  onGenerateQuiz,
+  onOpenQuizThread,
   onAnnounce,
 }: UniversityPageProps) {
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(
@@ -524,6 +548,20 @@ export function UniversityPage({
   const [pendingDeleteItemId, setPendingDeleteItemId] = useState<string | null>(
     null,
   );
+  const [courseQuizzes, setCourseQuizzes] = useState<UniversityQuizSummary[]>(
+    [],
+  );
+  const [quizGenTarget, setQuizGenTarget] = useState<{
+    course: UniversityCourse;
+    activity: UniversityCourseActivity | null;
+    item: UniversityActivityItem | null;
+    label: string;
+    scopeKind: 'lecture' | 'course';
+  } | null>(null);
+  const [activeQuiz, setActiveQuiz] = useState<UniversityQuizDetail | null>(
+    null,
+  );
+  const [loadingQuiz, setLoadingQuiz] = useState(false);
   const [busyActionIds, setBusyActionIds] = useState<Record<string, boolean>>(
     {},
   );
@@ -611,6 +649,70 @@ export function UniversityPage({
       setSelectedCourseId(initialCourseId);
     }
   }, [initialCourseId]);
+
+  useEffect(() => {
+    if (!selectedCourseId) {
+      setCourseQuizzes([]);
+      return;
+    }
+    let active = true;
+    void listCourseQuizzes(selectedCourseId)
+      .then((list) => {
+        if (active) setCourseQuizzes(list);
+      })
+      .catch(() => {
+        if (active) setCourseQuizzes([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedCourseId, quizRefreshKey]);
+
+  const courseWideQuizzes = useMemo(
+    () => courseQuizzes.filter((q) => !q.universityActivityItemId),
+    [courseQuizzes],
+  );
+
+  const itemQuizzesMap = useMemo(() => {
+    const map: Record<string, UniversityQuizSummary[]> = {};
+    for (const q of courseQuizzes) {
+      if (!q.universityActivityItemId) continue;
+      if (!map[q.universityActivityItemId]) map[q.universityActivityItemId] = [];
+      map[q.universityActivityItemId].push(q);
+    }
+    return map;
+  }, [courseQuizzes]);
+
+  const handleOpenQuiz = async (quizId: string) => {
+    setLoadingQuiz(true);
+    try {
+      const detail = await getUniversityQuiz(quizId);
+      setActiveQuiz(detail);
+    } catch (err) {
+      onAnnounce?.(
+        err instanceof Error ? err.message : 'Could not load quiz',
+      );
+    } finally {
+      setLoadingQuiz(false);
+    }
+  };
+
+  const handleRecordQuizAttempt = async (quizId: string, score: number) => {
+    const updated = await recordQuizAttempt(quizId, score);
+    setCourseQuizzes((prev) =>
+      prev.map((q) => (q.id === updated.id ? updated : q)),
+    );
+    setActiveQuiz((prev) =>
+      prev && prev.id === updated.id ? { ...prev, ...updated } : prev,
+    );
+  };
+
+  const handleDeleteQuiz = async (quizId: string) => {
+    await deleteUniversityQuiz(quizId);
+    setCourseQuizzes((prev) => prev.filter((q) => q.id !== quizId));
+    setActiveQuiz(null);
+    onAnnounce?.('Quiz deleted');
+  };
 
   useEffect(() => {
     const syncDialog = (
@@ -1470,6 +1572,51 @@ export function UniversityPage({
                     <strong>Course Notes &amp; Artifacts</strong>
                   </span>
                   <div className="uni-detail-actions">
+                    {onGenerateQuiz && (() => {
+                      const cJobKey = `course:${selectedCourse.id}`;
+                      const cJob = quizJobs[cJobKey];
+                      if (cJob?.status === 'generating') {
+                        return (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-xs"
+                            onClick={() => onOpenQuizThread?.(cJobKey)}
+                          >
+                            <span
+                              className="status-dot"
+                              data-state="checking"
+                              aria-hidden="true"
+                            />
+                            <span>Quiz progress</span>
+                          </button>
+                        );
+                      }
+                      return (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-xs"
+                          disabled={!isAiConfigured}
+                          onClick={() =>
+                            setQuizGenTarget({
+                              course: selectedCourse,
+                              activity: null,
+                              item: null,
+                              label: selectedCourse.code
+                                ? `${selectedCourse.code} · ${selectedCourse.name}`
+                                : selectedCourse.name,
+                              scopeKind: 'course',
+                            })
+                          }
+                          title={
+                            isAiConfigured
+                              ? 'Generate a comprehensive quiz across this entire course'
+                              : 'Configure AI Assistant in Account settings first'
+                          }
+                        >
+                          ✦ Course quiz
+                        </button>
+                      );
+                    })()}
                     {onOpenLinkedNote && (
                       <button
                         type="button"
@@ -1497,8 +1644,29 @@ export function UniversityPage({
                   </div>
                 </div>
 
-                {(courseNotes.length > 0 || courseArtifacts.length > 0) && (
+                {(courseNotes.length > 0 ||
+                  courseArtifacts.length > 0 ||
+                  courseWideQuizzes.length > 0) && (
                   <div className="uni-course-notes-list">
+                    {courseWideQuizzes.map((quiz) => (
+                      <button
+                        key={quiz.id}
+                        type="button"
+                        className="btn btn-ghost btn-xs quiz-chip"
+                        onClick={() => void handleOpenQuiz(quiz.id)}
+                        title={
+                          quiz.description ??
+                          `Play quiz (${quiz.questionCount} questions)`
+                        }
+                      >
+                        <span>📝 {quiz.title}</span>
+                        <span className="meta-text mono-num">
+                          {quiz.bestScore !== null
+                            ? `${quiz.bestScore}/${quiz.questionCount}`
+                            : `${quiz.questionCount}Q`}
+                        </span>
+                      </button>
+                    ))}
                     {courseNotes.map((note) => (
                       <button
                         key={note.id}
@@ -1767,8 +1935,32 @@ export function UniversityPage({
                                     )}
 
                                     {((itemNotesMap[item.id]?.length ?? 0) > 0 ||
-                                      (itemArtifactsMap[item.id]?.length ?? 0) > 0) && (
+                                      (itemArtifactsMap[item.id]?.length ?? 0) > 0 ||
+                                      (itemQuizzesMap[item.id]?.length ?? 0) > 0) && (
                                       <div className="uni-course-notes-list">
+                                        {(itemQuizzesMap[item.id] ?? []).map(
+                                          (quiz) => (
+                                            <button
+                                              key={quiz.id}
+                                              type="button"
+                                              className="btn btn-ghost btn-xs quiz-chip"
+                                              onClick={() =>
+                                                void handleOpenQuiz(quiz.id)
+                                              }
+                                              title={
+                                                quiz.description ??
+                                                `Play quiz (${quiz.questionCount} questions)`
+                                              }
+                                            >
+                                              <span>📝 {quiz.title}</span>
+                                              <span className="meta-text mono-num">
+                                                {quiz.bestScore !== null
+                                                  ? `${quiz.bestScore}/${quiz.questionCount}`
+                                                  : `${quiz.questionCount}Q`}
+                                              </span>
+                                            </button>
+                                          ),
+                                        )}
                                         {(itemNotesMap[item.id] ?? []).map(
                                           (note) => (
                                             <button
@@ -1875,6 +2067,54 @@ export function UniversityPage({
                                     </div>
 
                                     <div className="uni-item-row-actions">
+                                      {onGenerateQuiz && (() => {
+                                        const qJob = quizJobs[item.id];
+                                        if (qJob?.status === 'generating') {
+                                          return (
+                                            <button
+                                              type="button"
+                                              className="btn btn-secondary btn-compact"
+                                              onClick={() =>
+                                                onOpenQuizThread?.(item.id)
+                                              }
+                                              title={
+                                                qJob.statusText ||
+                                                'Generating quiz in background'
+                                              }
+                                            >
+                                              <span
+                                                className="status-dot"
+                                                data-state="checking"
+                                                aria-hidden="true"
+                                              />
+                                              <span>Quiz progress</span>
+                                            </button>
+                                          );
+                                        }
+                                        return (
+                                          <button
+                                            type="button"
+                                            className="btn btn-ghost btn-compact"
+                                            disabled={!isAiConfigured}
+                                            onClick={() =>
+                                              setQuizGenTarget({
+                                                course: selectedCourse,
+                                                activity,
+                                                item,
+                                                label: `${selectedCourse.code || selectedCourse.name} · ${item.title}`,
+                                                scopeKind: 'lecture',
+                                              })
+                                            }
+                                            title={
+                                              isAiConfigured
+                                                ? 'Customize and generate a playable quiz for this lecture'
+                                                : 'Configure AI Assistant in Account settings first'
+                                            }
+                                          >
+                                            📝 Quiz
+                                          </button>
+                                        );
+                                      })()}
                                       {onGenerateStudyGuide && (() => {
                                         const job = studyGuideJobs[item.id];
                                         if (job?.status === 'generating') {
@@ -2804,6 +3044,30 @@ export function UniversityPage({
           </div>
         </form>
       </dialog>
+
+      <QuizGeneratorModal
+        isOpen={Boolean(quizGenTarget)}
+        targetLabel={quizGenTarget?.label ?? ''}
+        scopeKind={quizGenTarget?.scopeKind ?? 'lecture'}
+        onClose={() => setQuizGenTarget(null)}
+        onSubmit={(opts) => {
+          if (!quizGenTarget || !onGenerateQuiz) return;
+          onGenerateQuiz(
+            quizGenTarget.course,
+            quizGenTarget.activity,
+            quizGenTarget.item,
+            opts,
+          );
+        }}
+      />
+
+      <QuizPlayerModal
+        quiz={activeQuiz}
+        loading={loadingQuiz}
+        onClose={() => setActiveQuiz(null)}
+        onRecordAttempt={handleRecordQuizAttempt}
+        onDelete={handleDeleteQuiz}
+      />
     </div>
   );
 }

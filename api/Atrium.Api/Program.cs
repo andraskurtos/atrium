@@ -250,6 +250,7 @@ app.MapTokenEndpoints();
 app.MapHouseholdEndpoints();
 app.MapCalendarEndpoints();
 app.MapUniversityEndpoints();
+app.MapQuizEndpoints();
 app.MapDayEndpoints();
 app.MapNoteEndpoints();
 app.MapAttachmentEndpoints();

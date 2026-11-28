@@ -177,6 +177,7 @@ public sealed class KnowledgeAndMcpTests
             "create_activity",
             "create_activity_item",
             "create_activity_items",
+            "create_quiz",
         };
 
         Assert.Equal(expectedTools.Length, tools.Count);

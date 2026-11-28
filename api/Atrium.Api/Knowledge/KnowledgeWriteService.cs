@@ -3,6 +3,8 @@ using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Atrium.Api.Attachments;
 using Atrium.Api.Auth;
@@ -1205,6 +1207,133 @@ public sealed partial class KnowledgeWriteService(
             p.Item.UpdatedAt)).ToList();
 
         return KnowledgeResult.Ok(new BatchCreateActivityItemsResponse(activity.Id, activity.CourseId, dtos.Count, dtos));
+    }
+
+    private static readonly JsonSerializerOptions QuizJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    public async Task<KnowledgeResult<UniversityQuizDetailDto>> CreateQuizAsync(
+        ClaimsPrincipal principal,
+        bool enforceAgentRules,
+        Guid? courseId,
+        Guid? universityActivityItemId,
+        string? title,
+        string? description,
+        IReadOnlyList<QuizQuestionDto> questions,
+        CancellationToken ct)
+    {
+        var userId = principal.GetUserId();
+        if (userId is null) return KnowledgeResult.Unauthorized<UniversityQuizDetailDto>();
+
+        var enforceScopes = ShouldEnforceAgentRules(principal, enforceAgentRules);
+        if (enforceScopes && !HasScope(principal, "university:write"))
+        {
+            return KnowledgeResult.Forbidden<UniversityQuizDetailDto>("Missing required scope: university:write");
+        }
+
+        var trimmedTitle = title?.Trim() ?? string.Empty;
+        if (trimmedTitle.Length is 0 or > 200)
+        {
+            return KnowledgeResult.BadRequest<UniversityQuizDetailDto>("Quiz title must be 1–200 characters.");
+        }
+
+        if (questions is null || questions.Count == 0 || questions.Count > 50)
+        {
+            return KnowledgeResult.BadRequest<UniversityQuizDetailDto>("Quiz must contain between 1 and 50 questions.");
+        }
+
+        Guid resolvedCourseId;
+        Guid? resolvedItemId = null;
+
+        if (universityActivityItemId.HasValue)
+        {
+            var item = await db.UniversityActivityItems
+                .AsNoTracking()
+                .FirstOrDefaultAsync(i => i.Id == universityActivityItemId.Value && i.UserId == userId.Value, ct);
+            if (item is null)
+            {
+                return KnowledgeResult.NotFound<UniversityQuizDetailDto>("University activity item not found.");
+            }
+
+            if (courseId.HasValue && courseId.Value != item.CourseId)
+            {
+                return KnowledgeResult.BadRequest<UniversityQuizDetailDto>("Activity item does not belong to the specified course.");
+            }
+
+            resolvedCourseId = item.CourseId;
+            resolvedItemId = item.Id;
+        }
+        else if (courseId.HasValue)
+        {
+            var courseExists = await db.UniversityCourses
+                .AsNoTracking()
+                .AnyAsync(c => c.Id == courseId.Value && c.UserId == userId.Value, ct);
+            if (!courseExists)
+            {
+                return KnowledgeResult.NotFound<UniversityQuizDetailDto>("University course not found.");
+            }
+
+            resolvedCourseId = courseId.Value;
+        }
+        else
+        {
+            return KnowledgeResult.BadRequest<UniversityQuizDetailDto>("Either courseId or universityActivityItemId is required.");
+        }
+
+        var normalizedQuestions = new List<QuizQuestionDto>(questions.Count);
+        for (var i = 0; i < questions.Count; i++)
+        {
+            var q = questions[i];
+            var prompt = q?.Prompt?.Trim() ?? string.Empty;
+            if (prompt.Length == 0)
+            {
+                return KnowledgeResult.BadRequest<UniversityQuizDetailDto>($"Question #{i + 1}: prompt is required.");
+            }
+
+            var options = q?.Options?.Select(o => o?.Trim() ?? string.Empty).Where(o => o.Length > 0).ToList() ?? [];
+            if (options.Count < 2 || options.Count > 6)
+            {
+                return KnowledgeResult.BadRequest<UniversityQuizDetailDto>($"Question #{i + 1}: must have 2–6 non-empty options.");
+            }
+
+            if (q!.CorrectIndex < 0 || q.CorrectIndex >= options.Count)
+            {
+                return KnowledgeResult.BadRequest<UniversityQuizDetailDto>($"Question #{i + 1}: correctIndex ({q.CorrectIndex}) is out of range (0..{options.Count - 1}).");
+            }
+
+            var explanation = string.IsNullOrWhiteSpace(q.Explanation)
+                ? "See the course material for details."
+                : q.Explanation.Trim();
+            var sourceRef = string.IsNullOrWhiteSpace(q.SourceReference) ? null : q.SourceReference.Trim();
+
+            normalizedQuestions.Add(new QuizQuestionDto(prompt, options, q.CorrectIndex, explanation, sourceRef));
+        }
+
+        var cleanDesc = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
+        if (cleanDesc is not null && cleanDesc.Length > 500) cleanDesc = cleanDesc[..500];
+
+        var now = DateTimeOffset.UtcNow;
+        var entity = new UniversityQuiz
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId.Value,
+            CourseId = resolvedCourseId,
+            UniversityActivityItemId = resolvedItemId,
+            Title = trimmedTitle,
+            Description = cleanDesc,
+            QuestionsJson = JsonSerializer.Serialize(normalizedQuestions, QuizJsonOptions),
+            QuestionCount = normalizedQuestions.Count,
+            AttemptCount = 0,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        db.UniversityQuizzes.Add(entity);
+        await db.SaveChangesAsync(ct);
+
+        return KnowledgeResult.Ok(QuizEndpoints.ToDetailDto(entity));
     }
 
     private async Task<ExtractedPdfImageDto> SaveExtractedInlineImageAsync(

@@ -15,6 +15,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<UniversityCourse> UniversityCourses => Set<UniversityCourse>();
     public DbSet<UniversityCourseActivity> UniversityCourseActivities => Set<UniversityCourseActivity>();
     public DbSet<UniversityActivityItem> UniversityActivityItems => Set<UniversityActivityItem>();
+    public DbSet<UniversityQuiz> UniversityQuizzes => Set<UniversityQuiz>();
     public DbSet<DailyCheckItem> DailyCheckItems => Set<DailyCheckItem>();
     public DbSet<DailyNote> DailyNotes => Set<DailyNote>();
     public DbSet<NoteFolder> NoteFolders => Set<NoteFolder>();
@@ -755,6 +756,44 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .WithMany(m => m.Attachments)
                 .HasForeignKey(a => a.MessageId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UniversityQuiz>(entity =>
+        {
+            entity.ToTable("university_quizzes");
+            entity.HasKey(q => q.Id);
+            entity.Property(q => q.Id).HasColumnName("id");
+            entity.Property(q => q.UserId).HasColumnName("user_id");
+            entity.Property(q => q.CourseId).HasColumnName("course_id");
+            entity.Property(q => q.UniversityActivityItemId).HasColumnName("university_activity_item_id");
+            entity.Property(q => q.Title).HasColumnName("title").HasMaxLength(200).IsRequired();
+            entity.Property(q => q.Description).HasColumnName("description").HasMaxLength(500);
+            entity.Property(q => q.QuestionsJson).HasColumnName("questions_json").HasColumnType("text").IsRequired();
+            entity.Property(q => q.QuestionCount).HasColumnName("question_count");
+            entity.Property(q => q.AttemptCount).HasColumnName("attempt_count").HasDefaultValue(0);
+            entity.Property(q => q.LastScore).HasColumnName("last_score");
+            entity.Property(q => q.BestScore).HasColumnName("best_score");
+            entity.Property(q => q.LastPlayedAt).HasColumnName("last_played_at");
+            entity.Property(q => q.CreatedAt).HasColumnName("created_at");
+            entity.Property(q => q.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(q => new { q.UserId, q.CourseId, q.UniversityActivityItemId })
+                .HasDatabaseName("ix_university_quizzes_user_course_item");
+
+            entity.HasOne(q => q.User)
+                .WithMany()
+                .HasForeignKey(q => q.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(q => q.Course)
+                .WithMany()
+                .HasForeignKey(q => q.CourseId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(q => q.ActivityItem)
+                .WithMany()
+                .HasForeignKey(q => q.UniversityActivityItemId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         if (string.Equals(Database.ProviderName, "Microsoft.EntityFrameworkCore.Sqlite", StringComparison.Ordinal))
