@@ -176,6 +176,7 @@ public sealed class KnowledgeAndMcpTests
             "create_course",
             "create_activity",
             "create_activity_item",
+            "create_activity_items",
         };
 
         Assert.Equal(expectedTools.Length, tools.Count);
@@ -645,5 +646,45 @@ public sealed class KnowledgeAndMcpTests
         var createdEvent = JsonSerializer.Deserialize<CalendarEventDto>(evJson, JsonOptions);
         Assert.NotNull(createdEvent);
         Assert.Equal("OS Office Hours", createdEvent.Title);
+
+        // 5. Batch create_activity_items creates multiple scheduled items + calendar events and enforces 50-item limit
+        var batchItems = Enumerable.Range(2, 4).Select(i => new
+        {
+            title = $"Lecture {i}",
+            theme = $"Topic {i}",
+            sequenceNumber = i,
+            startAt = new DateTimeOffset(2026, 9, 8, 10, 15, 0, TimeSpan.Zero).AddDays((i - 1) * 7).ToString("O"),
+            endAt = new DateTimeOffset(2026, 9, 8, 12, 0, 0, TimeSpan.Zero).AddDays((i - 1) * 7).ToString("O"),
+            location = "IE220",
+        }).ToArray();
+
+        var (batchErr, batchJson) = await CallMcpToolAsync(client, writePat, "create_activity_items", new
+        {
+            activityId = createdItem.ActivityId,
+            items = batchItems,
+        });
+        Assert.False(batchErr, batchJson);
+        var batchRes = JsonSerializer.Deserialize<BatchCreateActivityItemsResponse>(batchJson, JsonOptions);
+        Assert.NotNull(batchRes);
+        Assert.Equal(4, batchRes.CreatedCount);
+        Assert.Equal(4, batchRes.Items.Count);
+        Assert.All(batchRes.Items, it => Assert.NotNull(it.CalendarEventId));
+
+        // Read-only PAT is denied
+        var (roBatchErr, _) = await CallMcpToolAsync(client, readOnlyPat, "create_activity_items", new
+        {
+            activityId = createdItem.ActivityId,
+            items = batchItems,
+        });
+        Assert.True(roBatchErr);
+
+        // > 50 items rejected
+        var tooMany = Enumerable.Range(1, 51).Select(i => new { title = $"Item {i}" }).ToArray();
+        var (limitErr, _) = await CallMcpToolAsync(client, writePat, "create_activity_items", new
+        {
+            activityId = createdItem.ActivityId,
+            items = tooMany,
+        });
+        Assert.True(limitErr);
     }
 }

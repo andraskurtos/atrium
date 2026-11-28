@@ -1,9 +1,23 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { getInitials } from '../data/mockData';
+import {
+  createAiModel,
+  createAiProvider,
+  deleteAiModel,
+  deleteAiProvider,
+  discoverProviderModels,
+  getAiConfig,
+  updateAiDefaults,
+  updateAiModel,
+  updateAiProvider,
+} from '../lib/aiConfigClient';
 import { ApiError, formatRelativeTime, type CreateInvitePayload } from '../lib/authClient';
 import type {
   AccountPreferences,
   AgentToken,
+  AiConfig,
+  AiModel,
+  AiProvider,
   ApiState,
   HouseholdMember,
   InviteItem,
@@ -11,6 +25,7 @@ import type {
   ThemePreference,
   UpdatePreferencesPayload,
   UserProfile,
+  WebSearchProviderKind,
 } from '../types/atrium';
 import {
   ArrowLeftIcon,
@@ -29,6 +44,7 @@ import { LocalStatusCard } from './LocalStatusCard';
 interface AccountPageProps {
   profile: UserProfile;
   preferences: AccountPreferences;
+  aiConfig: AiConfig | null;
   theme: ThemePreference;
   agentTokens: AgentToken[];
   sessions: SessionItem[];
@@ -47,6 +63,7 @@ interface AccountPageProps {
     avatarDataUrl: string | null;
   }) => Promise<void>;
   onUpdatePreferences: (next: UpdatePreferencesPayload) => Promise<void>;
+  onAiConfigChange: (next: AiConfig) => void;
   onSetTheme: (theme: ThemePreference) => void;
   onChangePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   onCreateToken: (name: string, scopes: string[]) => Promise<string>;
@@ -93,6 +110,7 @@ const AVAILABLE_SCOPES = [
 export function AccountPage({
   profile,
   preferences,
+  aiConfig,
   theme,
   agentTokens,
   sessions,
@@ -104,6 +122,7 @@ export function AccountPage({
   onBackToDashboard,
   onUpdateProfile,
   onUpdatePreferences,
+  onAiConfigChange,
   onSetTheme,
   onChangePassword,
   onCreateToken,
@@ -140,56 +159,219 @@ export function AccountPage({
     setTimezone(profile.timezone);
   }, [profile]);
 
-  // AI Inference settings state
-  const [aiInferenceUrl, setAiInferenceUrl] = useState(
-    preferences.aiInferenceUrl ?? '',
-  );
-  const [aiModel, setAiModel] = useState(preferences.aiModel ?? '');
-  const [aiApiKeyInput, setAiApiKeyInput] = useState('');
-  const [showAiApiKey, setShowAiApiKey] = useState(false);
+  // Multi-provider AI & Web Search settings state
+  const [showAddProvider, setShowAddProvider] = useState(false);
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
+  const [providerName, setProviderName] = useState('');
+  const [providerBaseUrl, setProviderBaseUrl] = useState('');
+  const [providerApiKey, setProviderApiKey] = useState('');
+  const [clearProviderKey, setClearProviderKey] = useState(false);
+  const [showProviderKey, setShowProviderKey] = useState(false);
   const [savingAiSettings, setSavingAiSettings] = useState(false);
   const [aiSettingsError, setAiSettingsError] = useState('');
 
-  useEffect(() => {
-    setAiInferenceUrl(preferences.aiInferenceUrl ?? '');
-    setAiModel(preferences.aiModel ?? '');
-  }, [preferences.aiInferenceUrl, preferences.aiModel]);
+  // Per-provider add-model state
+  const [addingModelForProviderId, setAddingModelForProviderId] = useState<string | null>(null);
+  const [newModelId, setNewModelId] = useState('');
+  const [newModelDisplayName, setNewModelDisplayName] = useState('');
+  const [newModelVision, setNewModelVision] = useState(false);
+  const [discoveredByProvider, setDiscoveredByProvider] = useState<Record<string, string[]>>({});
+  const [discoveringProviderId, setDiscoveringProviderId] = useState<string | null>(null);
 
-  async function handleSaveAiSettings(e: FormEvent) {
+  // Defaults + Web Search state
+  const [defaultModelId, setDefaultModelId] = useState<string>(aiConfig?.defaultModelId ?? '');
+  const [defaultVisionModelId, setDefaultVisionModelId] = useState<string>(
+    aiConfig?.defaultVisionModelId ?? '',
+  );
+  const [webSearchProvider, setWebSearchProvider] = useState<WebSearchProviderKind>(
+    aiConfig?.webSearch.provider ?? 'duckduckgo',
+  );
+  const [webSearchUrl, setWebSearchUrl] = useState<string>(aiConfig?.webSearch.url ?? '');
+  const [webSearchApiKey, setWebSearchApiKey] = useState('');
+  const [showWebSearchKey, setShowWebSearchKey] = useState(false);
+
+  useEffect(() => {
+    if (!aiConfig) return;
+    setDefaultModelId(aiConfig.defaultModelId ?? '');
+    setDefaultVisionModelId(aiConfig.defaultVisionModelId ?? '');
+    setWebSearchProvider(aiConfig.webSearch.provider ?? 'duckduckgo');
+    setWebSearchUrl(aiConfig.webSearch.url ?? '');
+  }, [aiConfig]);
+
+  async function refreshAiConfig() {
+    const fresh = await getAiConfig();
+    onAiConfigChange(fresh);
+  }
+
+  function startEditProvider(provider: AiProvider) {
+    setEditingProviderId(provider.id);
+    setShowAddProvider(true);
+    setProviderName(provider.name);
+    setProviderBaseUrl(provider.baseUrl);
+    setProviderApiKey('');
+    setClearProviderKey(false);
+    setAiSettingsError('');
+  }
+
+  function resetProviderForm() {
+    setShowAddProvider(false);
+    setEditingProviderId(null);
+    setProviderName('');
+    setProviderBaseUrl('');
+    setProviderApiKey('');
+    setClearProviderKey(false);
+  }
+
+  async function handleSaveProvider(e: FormEvent) {
     e.preventDefault();
     setAiSettingsError('');
     setSavingAiSettings(true);
     try {
-      await onUpdatePreferences({
-        ...preferences,
-        aiInferenceUrl: aiInferenceUrl.trim(),
-        aiModel: aiModel.trim(),
-        aiApiKey: aiApiKeyInput.trim() || undefined,
-      });
-      setAiApiKeyInput('');
-      onAnnounce('AI Assistant settings saved');
+      if (editingProviderId) {
+        await updateAiProvider(editingProviderId, {
+          name: providerName.trim(),
+          baseUrl: providerBaseUrl.trim(),
+          apiKey: providerApiKey.trim() || undefined,
+          clearApiKey: clearProviderKey,
+        });
+        onAnnounce('AI provider updated');
+      } else {
+        await createAiProvider({
+          name: providerName.trim(),
+          baseUrl: providerBaseUrl.trim(),
+          apiKey: providerApiKey.trim() || undefined,
+        });
+        onAnnounce('AI provider added');
+      }
+      resetProviderForm();
+      await refreshAiConfig();
     } catch (err) {
       setAiSettingsError(
-        err instanceof ApiError ? err.message : 'Failed to save AI settings.',
+        err instanceof ApiError ? err.message : 'Failed to save AI provider.',
       );
     } finally {
       setSavingAiSettings(false);
     }
   }
 
-  async function handleClearAiApiKey() {
+  async function handleDeleteProvider(provider: AiProvider) {
     setAiSettingsError('');
     setSavingAiSettings(true);
     try {
-      await onUpdatePreferences({
-        ...preferences,
-        clearAiApiKey: true,
-      });
-      setAiApiKeyInput('');
-      onAnnounce('AI API key cleared');
+      await deleteAiProvider(provider.id);
+      await refreshAiConfig();
+      onAnnounce(`Removed provider ${provider.name}`);
     } catch (err) {
       setAiSettingsError(
-        err instanceof ApiError ? err.message : 'Failed to clear API key.',
+        err instanceof ApiError ? err.message : 'Failed to remove provider.',
+      );
+    } finally {
+      setSavingAiSettings(false);
+    }
+  }
+
+  async function handleDiscoverModels(providerId: string) {
+    setAiSettingsError('');
+    setDiscoveringProviderId(providerId);
+    try {
+      const res = await discoverProviderModels(providerId);
+      if (res.error) {
+        setAiSettingsError(res.error);
+      } else {
+        setDiscoveredByProvider((prev) => ({ ...prev, [providerId]: res.models }));
+        setAddingModelForProviderId(providerId);
+        onAnnounce(`Found ${res.models.length} models`);
+      }
+    } catch (err) {
+      setAiSettingsError(
+        err instanceof ApiError ? err.message : 'Could not fetch models from provider.',
+      );
+    } finally {
+      setDiscoveringProviderId(null);
+    }
+  }
+
+  async function handleAddModel(e: FormEvent, providerId: string) {
+    e.preventDefault();
+    setAiSettingsError('');
+    setSavingAiSettings(true);
+    try {
+      await createAiModel({
+        providerId,
+        modelId: newModelId.trim(),
+        displayName: newModelDisplayName.trim() || undefined,
+        supportsVision: newModelVision,
+      });
+      setNewModelId('');
+      setNewModelDisplayName('');
+      setNewModelVision(false);
+      setAddingModelForProviderId(null);
+      await refreshAiConfig();
+      onAnnounce('Model added');
+    } catch (err) {
+      setAiSettingsError(
+        err instanceof ApiError ? err.message : 'Failed to add model.',
+      );
+    } finally {
+      setSavingAiSettings(false);
+    }
+  }
+
+  async function handleToggleModelVision(model: AiModel) {
+    setAiSettingsError('');
+    setSavingAiSettings(true);
+    try {
+      await updateAiModel(model.id, {
+        modelId: model.modelId,
+        displayName: model.displayName,
+        supportsVision: !model.supportsVision,
+        sortOrder: model.sortOrder,
+      });
+      await refreshAiConfig();
+    } catch (err) {
+      setAiSettingsError(
+        err instanceof ApiError ? err.message : 'Failed to update model.',
+      );
+    } finally {
+      setSavingAiSettings(false);
+    }
+  }
+
+  async function handleDeleteModel(model: AiModel) {
+    setAiSettingsError('');
+    setSavingAiSettings(true);
+    try {
+      await deleteAiModel(model.id);
+      await refreshAiConfig();
+      onAnnounce(`Removed model ${model.displayName}`);
+    } catch (err) {
+      setAiSettingsError(
+        err instanceof ApiError ? err.message : 'Failed to delete model.',
+      );
+    } finally {
+      setSavingAiSettings(false);
+    }
+  }
+
+  async function handleSaveAiDefaults(e: FormEvent, clearWebKey = false) {
+    e.preventDefault();
+    setAiSettingsError('');
+    setSavingAiSettings(true);
+    try {
+      const updated = await updateAiDefaults({
+        defaultModelId: defaultModelId || null,
+        defaultVisionModelId: defaultVisionModelId || null,
+        webSearchProvider,
+        webSearchUrl: webSearchUrl.trim() || null,
+        webSearchApiKey: clearWebKey ? undefined : webSearchApiKey.trim() || undefined,
+        clearWebSearchApiKey: clearWebKey,
+      });
+      onAiConfigChange(updated);
+      setWebSearchApiKey('');
+      onAnnounce(clearWebKey ? 'Web search API key cleared' : 'AI defaults & web search saved');
+    } catch (err) {
+      setAiSettingsError(
+        err instanceof ApiError ? err.message : 'Failed to save AI defaults.',
       );
     } finally {
       setSavingAiSettings(false);
@@ -1095,109 +1277,431 @@ export function AccountPage({
           </div>
         </section>
 
-        {/* 5. AI Assistant (OpenAI-Compatible Inference) */}
+        {/* 5. AI Assistant (Multi-Provider Models & Web Search) */}
         <section className="card" aria-labelledby="ai-assistant-heading">
           <div className="card-header">
             <div className="card-header-group">
               <h2 id="ai-assistant-heading" className="card-title">
                 AI Assistant
               </h2>
-              <span className="pill-accent">OpenAI API</span>
+              <span className="pill-accent">Multi-Provider</span>
             </div>
-            <span className="meta-text">
-              {preferences.aiInferenceUrl && preferences.aiModel
-                ? 'Configured'
-                : 'Not configured'}
-            </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-xs"
+              onClick={() => {
+                if (showAddProvider) {
+                  resetProviderForm();
+                } else {
+                  setEditingProviderId(null);
+                  setShowAddProvider(true);
+                }
+              }}
+            >
+              <PlusIcon />
+              <span>{showAddProvider ? 'Cancel' : 'Add Provider'}</span>
+            </button>
           </div>
 
-          <form className="settings-form" onSubmit={(e) => void handleSaveAiSettings(e)}>
-            <div className="form-grid-2">
-              <div className="form-field">
-                <label className="field-label" htmlFor="account-ai-url">
-                  Inference Base URL
-                </label>
-                <input
-                  id="account-ai-url"
-                  type="url"
-                  className="input mono-num"
-                  value={aiInferenceUrl}
-                  onChange={(e) => setAiInferenceUrl(e.target.value)}
-                  placeholder="https://api.openai.com/v1 or http://localhost:11434/v1"
-                  maxLength={500}
-                />
-              </div>
+          {aiSettingsError && (
+            <p className="field-error" role="alert">
+              {aiSettingsError}
+            </p>
+          )}
 
-              <div className="form-field">
-                <label className="field-label" htmlFor="account-ai-model">
-                  Model Name
-                </label>
-                <input
-                  id="account-ai-model"
-                  type="text"
-                  className="input mono-num"
-                  value={aiModel}
-                  onChange={(e) => setAiModel(e.target.value)}
-                  placeholder="gpt-4o-mini, llama3.2, qwen2.5…"
-                  maxLength={120}
-                />
+          {showAddProvider && (
+            <form
+              className="card-soft ai-provider-form"
+              onSubmit={(e) => void handleSaveProvider(e)}
+            >
+              <div className="form-grid-2">
+                <div className="form-field">
+                  <label className="field-label" htmlFor="ai-provider-name">
+                    Provider Name
+                  </label>
+                  <input
+                    id="ai-provider-name"
+                    type="text"
+                    className="input"
+                    value={providerName}
+                    onChange={(e) => setProviderName(e.target.value)}
+                    placeholder="OpenRouter, OpenAI, Local Ollama…"
+                    maxLength={80}
+                    required
+                  />
+                </div>
+                <div className="form-field">
+                  <label className="field-label" htmlFor="ai-provider-url">
+                    Base URL
+                  </label>
+                  <input
+                    id="ai-provider-url"
+                    type="url"
+                    className="input mono-num"
+                    value={providerBaseUrl}
+                    onChange={(e) => setProviderBaseUrl(e.target.value)}
+                    placeholder="https://openrouter.ai/api/v1"
+                    maxLength={500}
+                    required
+                  />
+                </div>
               </div>
-            </div>
-
-            <div className="form-field">
-              <div className="field-label-row">
-                <label className="field-label" htmlFor="account-ai-key">
-                  API Key{' '}
-                  <span className="meta-text">
-                    ({preferences.hasAiApiKey ? 'Saved · encrypted' : 'Optional for local servers'})
-                  </span>
-                </label>
-                <div className="avatar-actions">
+              <div className="form-field">
+                <div className="field-label-row">
+                  <label className="field-label" htmlFor="ai-provider-key">
+                    API Key{' '}
+                    <span className="meta-text">
+                      (Encrypted at rest · optional for local servers)
+                    </span>
+                  </label>
                   <button
                     type="button"
                     className="btn btn-ghost btn-xs"
-                    onClick={() => setShowAiApiKey((prev) => !prev)}
+                    onClick={() => setShowProviderKey((p) => !p)}
                   >
-                    {showAiApiKey ? <EyeOffIcon /> : <EyeIcon />}
-                    <span>{showAiApiKey ? 'Hide' : 'Show'}</span>
+                    {showProviderKey ? <EyeOffIcon /> : <EyeIcon />}
+                    <span>{showProviderKey ? 'Hide' : 'Show'}</span>
                   </button>
-                  {preferences.hasAiApiKey && (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      disabled={savingAiSettings}
-                      onClick={() => void handleClearAiApiKey()}
-                    >
-                      Clear key
-                    </button>
-                  )}
                 </div>
+                <input
+                  id="ai-provider-key"
+                  type={showProviderKey ? 'text' : 'password'}
+                  className="input mono-num"
+                  value={providerApiKey}
+                  onChange={(e) => {
+                    setProviderApiKey(e.target.value);
+                    setClearProviderKey(false);
+                  }}
+                  placeholder={
+                    editingProviderId
+                      ? 'Leave empty to keep existing key'
+                      : 'sk-…'
+                  }
+                  autoComplete="off"
+                />
+                {editingProviderId && (
+                  <label className="check-label-inline">
+                    <input
+                      type="checkbox"
+                      checked={clearProviderKey}
+                      onChange={(e) => setClearProviderKey(e.target.checked)}
+                    />
+                    <span className="meta-text">Clear saved API key</span>
+                  </label>
+                )}
               </div>
-              <input
-                id="account-ai-key"
-                type={showAiApiKey ? 'text' : 'password'}
-                className="input mono-num"
-                value={aiApiKeyInput}
-                onChange={(e) => setAiApiKeyInput(e.target.value)}
-                placeholder={
-                  preferences.hasAiApiKey
-                    ? '•••••••••••••••• (enter new key to replace)'
-                    : 'sk-… (leave empty for local Ollama / LM Studio)'
-                }
-                autoComplete="off"
-                maxLength={512}
-              />
+              <div className="form-footer">
+                <span className="meta-text">
+                  OpenAI-compatible `/chat/completions` endpoint.
+                </span>
+                <button
+                  type="submit"
+                  className="btn btn-primary btn-xs"
+                  disabled={savingAiSettings}
+                >
+                  {editingProviderId ? 'Update Provider' : 'Save Provider'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Configured Providers & Models */}
+          <div className="ai-providers-list">
+            {(aiConfig?.providers ?? []).length === 0 ? (
+              <p className="meta-text">
+                No AI providers configured yet. Click <strong>Add Provider</strong> to connect OpenAI, OpenRouter, Ollama, or any OpenAI-compatible server.
+              </p>
+            ) : (
+              (aiConfig?.providers ?? []).map((provider) => {
+                const providerModels = (aiConfig?.models ?? []).filter(
+                  (m) => m.providerId === provider.id,
+                );
+                const discovered = discoveredByProvider[provider.id] ?? [];
+                const isAddingModel = addingModelForProviderId === provider.id;
+
+                return (
+                  <div key={provider.id} className="card-soft ai-provider-card">
+                    <div className="ai-provider-header">
+                      <div>
+                        <div className="ai-provider-title-row">
+                          <strong>{provider.name}</strong>
+                          <span className="meta-text">
+                            {provider.hasApiKey ? 'Key saved' : 'No key'}
+                          </span>
+                        </div>
+                        <div className="meta-text mono-num">{provider.baseUrl}</div>
+                      </div>
+                      <div className="avatar-actions">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          disabled={discoveringProviderId === provider.id}
+                          onClick={() => void handleDiscoverModels(provider.id)}
+                        >
+                          {discoveringProviderId === provider.id
+                            ? 'Fetching…'
+                            : 'Fetch models'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-xs"
+                          onClick={() => {
+                            setAddingModelForProviderId(
+                              isAddingModel ? null : provider.id,
+                            );
+                            setNewModelId('');
+                            setNewModelDisplayName('');
+                            setNewModelVision(false);
+                          }}
+                        >
+                          + Model
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          onClick={() => startEditProvider(provider)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          disabled={savingAiSettings}
+                          onClick={() => void handleDeleteProvider(provider)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+
+                    {providerModels.length > 0 && (
+                      <ul className="ai-models-list">
+                        {providerModels.map((model) => (
+                          <li key={model.id} className="ai-model-row">
+                            <div className="ai-model-info">
+                              <span className="row-title">{model.displayName}</span>
+                              {model.displayName !== model.modelId && (
+                                <span className="meta-text mono-num">{model.modelId}</span>
+                              )}
+                            </div>
+                            <div className="avatar-actions">
+                              <button
+                                type="button"
+                                className={`mode-chip ${model.supportsVision ? 'is-active' : ''}`}
+                                disabled={savingAiSettings}
+                                onClick={() => void handleToggleModelVision(model)}
+                                title="Toggle vision / image input support"
+                              >
+                                {model.supportsVision ? 'Vision ✓' : 'Text only'}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-xs"
+                                disabled={savingAiSettings}
+                                onClick={() => void handleDeleteModel(model)}
+                                aria-label={`Remove ${model.displayName}`}
+                              >
+                                ×
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {isAddingModel && (
+                      <form
+                        className="ai-model-add-form"
+                        onSubmit={(e) => void handleAddModel(e, provider.id)}
+                      >
+                        <div className="form-grid-2">
+                          <div className="form-field">
+                            <label className="field-label">Model ID</label>
+                            <input
+                              type="text"
+                              className="input mono-num"
+                              list={`discovered-${provider.id}`}
+                              value={newModelId}
+                              onChange={(e) => setNewModelId(e.target.value)}
+                              placeholder="gpt-4o, openai/gpt-4o-mini, qwen2.5…"
+                              required
+                            />
+                            {discovered.length > 0 && (
+                              <datalist id={`discovered-${provider.id}`}>
+                                {discovered.map((id) => (
+                                  <option key={id} value={id} />
+                                ))}
+                              </datalist>
+                            )}
+                          </div>
+                          <div className="form-field">
+                            <label className="field-label">Display Name (optional)</label>
+                            <input
+                              type="text"
+                              className="input"
+                              value={newModelDisplayName}
+                              onChange={(e) => setNewModelDisplayName(e.target.value)}
+                              placeholder="Defaults to Model ID"
+                            />
+                          </div>
+                        </div>
+                        <div className="form-footer">
+                          <label className="check-label-inline">
+                            <input
+                              type="checkbox"
+                              checked={newModelVision}
+                              onChange={(e) => setNewModelVision(e.target.checked)}
+                            />
+                            <span className="meta-text">Supports vision (image inputs)</span>
+                          </label>
+                          <button
+                            type="submit"
+                            className="btn btn-primary btn-xs"
+                            disabled={savingAiSettings}
+                          >
+                            Add Model
+                          </button>
+                        </div>
+                      </form>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Defaults & Web Search */}
+          <form
+            className="settings-form ai-defaults-form"
+            onSubmit={(e) => void handleSaveAiDefaults(e, false)}
+          >
+            <div className="form-grid-2">
+              <div className="form-field">
+                <label className="field-label" htmlFor="ai-default-model">
+                  Default Model
+                </label>
+                <select
+                  id="ai-default-model"
+                  className="input"
+                  value={defaultModelId}
+                  onChange={(e) => setDefaultModelId(e.target.value)}
+                >
+                  <option value="">Auto (first configured)</option>
+                  {(aiConfig?.models ?? []).map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.displayName} ({m.providerName})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-field">
+                <label className="field-label" htmlFor="ai-default-vision-model">
+                  Default Vision Model
+                </label>
+                <select
+                  id="ai-default-vision-model"
+                  className="input"
+                  value={defaultVisionModelId}
+                  onChange={(e) => setDefaultVisionModelId(e.target.value)}
+                >
+                  <option value="">None configured</option>
+                  {(aiConfig?.models ?? [])
+                    .filter((m) => m.supportsVision)
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.displayName} ({m.providerName})
+                      </option>
+                    ))}
+                </select>
+              </div>
             </div>
 
-            {aiSettingsError && (
-              <p className="field-error" role="alert">
-                {aiSettingsError}
-              </p>
-            )}
+            <div className="form-grid-2">
+              <div className="form-field">
+                <label className="field-label" htmlFor="ai-web-search-provider">
+                  Web Search Provider
+                </label>
+                <select
+                  id="ai-web-search-provider"
+                  className="input"
+                  value={webSearchProvider}
+                  onChange={(e) =>
+                    setWebSearchProvider(e.target.value as WebSearchProviderKind)
+                  }
+                >
+                  <option value="duckduckgo">DuckDuckGo (Built-in, no key)</option>
+                  <option value="tavily">Tavily Search (API key)</option>
+                  <option value="brave">Brave Search (API key)</option>
+                  <option value="searxng">SearXNG (Self-hosted URL)</option>
+                </select>
+              </div>
+
+              {webSearchProvider === 'searxng' && (
+                <div className="form-field">
+                  <label className="field-label" htmlFor="ai-web-search-url">
+                    SearXNG Base URL
+                  </label>
+                  <input
+                    id="ai-web-search-url"
+                    type="url"
+                    className="input mono-num"
+                    value={webSearchUrl}
+                    onChange={(e) => setWebSearchUrl(e.target.value)}
+                    placeholder="http://localhost:8888"
+                    required
+                  />
+                </div>
+              )}
+
+              {webSearchProvider !== 'duckduckgo' && (
+                <div className="form-field">
+                  <div className="field-label-row">
+                    <label className="field-label" htmlFor="ai-web-search-key">
+                      Search API Key{' '}
+                      <span className="meta-text">
+                        ({aiConfig?.webSearch.hasApiKey ? 'Saved · encrypted' : 'Optional for SearXNG'})
+                      </span>
+                    </label>
+                    <div className="avatar-actions">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        onClick={() => setShowWebSearchKey((p) => !p)}
+                      >
+                        {showWebSearchKey ? <EyeOffIcon /> : <EyeIcon />}
+                      </button>
+                      {aiConfig?.webSearch.hasApiKey && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-xs"
+                          disabled={savingAiSettings}
+                          onClick={(e) => void handleSaveAiDefaults(e, true)}
+                        >
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <input
+                    id="ai-web-search-key"
+                    type={showWebSearchKey ? 'text' : 'password'}
+                    className="input mono-num"
+                    value={webSearchApiKey}
+                    onChange={(e) => setWebSearchApiKey(e.target.value)}
+                    placeholder={
+                      aiConfig?.webSearch.hasApiKey
+                        ? '•••••••• (enter new key to replace)'
+                        : 'API key'
+                    }
+                    autoComplete="off"
+                  />
+                </div>
+              )}
+            </div>
 
             <div className="form-footer">
               <span className="meta-text">
-                Used by the right-hand chat sidebar via OpenAI Chat Completions.
+                Image attachments auto-route to your Default Vision Model when a text-only model is selected.
               </span>
               <button
                 id="account-save-ai-btn"
@@ -1205,7 +1709,7 @@ export function AccountPage({
                 className="btn btn-primary"
                 disabled={savingAiSettings}
               >
-                {savingAiSettings ? 'Saving…' : 'Save AI Settings'}
+                {savingAiSettings ? 'Saving…' : 'Save Defaults & Search'}
               </button>
             </div>
           </form>

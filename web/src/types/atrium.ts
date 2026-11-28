@@ -326,12 +326,61 @@ export interface ChatCitation {
   pageLabel?: string | null;
 }
 
+export interface ChatAttachment {
+  id: string;
+  fileName: string;
+  contentType: string;
+  kind: 'image' | 'ics' | 'document';
+  sizeBytes: number;
+  summary?: string | null;
+  url: string;
+  createdAt: string;
+}
+
+export interface AiProvider {
+  id: string;
+  name: string;
+  baseUrl: string;
+  hasApiKey: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AiModel {
+  id: string;
+  providerId: string;
+  providerName: string;
+  modelId: string;
+  displayName: string;
+  supportsVision: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type WebSearchProviderKind = 'duckduckgo' | 'tavily' | 'brave' | 'searxng';
+
+export interface WebSearchConfig {
+  provider: WebSearchProviderKind;
+  url?: string | null;
+  hasApiKey: boolean;
+}
+
+export interface AiConfig {
+  providers: AiProvider[];
+  models: AiModel[];
+  defaultModelId: string | null;
+  defaultVisionModelId: string | null;
+  webSearch: WebSearchConfig;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   reasoning?: string | null;
   citations?: ChatCitation[];
+  attachments?: ChatAttachment[];
   error?: boolean;
   createdAt?: string;
 }
@@ -348,6 +397,7 @@ export interface ChatThreadSummary {
 
 export interface ChatThreadDetail extends ChatThreadSummary {
   messages: ChatMessage[];
+  lastModelId?: string | null;
 }
 
 export interface ChatScope {

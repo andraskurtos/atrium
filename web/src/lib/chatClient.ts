@@ -1,5 +1,6 @@
 import { ApiError, apiFetch, authenticatedRawFetch } from './authClient';
 import type {
+  ChatAttachment,
   ChatCitation,
   ChatMutationEvent,
   ChatThreadDetail,
@@ -10,6 +11,10 @@ export interface StreamChatOptions {
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   courseId?: string | null;
   threadId?: string | null;
+  modelId?: string | null;
+  attachmentIds?: string[];
+  enableWebSearch?: boolean;
+  allowWriteTools?: boolean;
   signal?: AbortSignal;
   onThread?: (thread: ChatThreadSummary) => void;
   onStatus?: (message: string) => void;
@@ -43,6 +48,54 @@ export async function deleteChatThread(id: string): Promise<void> {
   await apiFetch<void>(`/api/chat/threads/${id}`, { method: 'DELETE' });
 }
 
+export async function uploadChatAttachment(file: File): Promise<ChatAttachment> {
+  const form = new FormData();
+  form.append('file', file);
+  const response = await authenticatedRawFetch('/api/chat/attachments', {
+    method: 'POST',
+    body: form,
+  });
+  if (!response.ok) {
+    let message = `Attachment upload failed (${response.status}).`;
+    try {
+      const body = (await response.json()) as { error?: string };
+      if (body?.error) message = body.error;
+    } catch {
+      // Ignore non-JSON error
+    }
+    throw new ApiError(response.status, message);
+  }
+  return (await response.json()) as ChatAttachment;
+}
+
+export async function fetchChatAttachmentObjectUrl(id: string): Promise<string> {
+  const response = await authenticatedRawFetch(`/api/chat/attachments/${id}`, {
+    method: 'GET',
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, 'Could not load attachment.');
+  }
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+}
+
+export async function downloadChatAttachment(
+  id: string,
+  fileName: string,
+): Promise<void> {
+  const objectUrl = await fetchChatAttachmentObjectUrl(id);
+  try {
+    const a = document.createElement('a');
+    a.href = objectUrl;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  }
+}
+
 export async function streamChat(options: StreamChatOptions): Promise<void> {
   const response = await authenticatedRawFetch('/api/chat/stream', {
     method: 'POST',
@@ -50,6 +103,13 @@ export async function streamChat(options: StreamChatOptions): Promise<void> {
       messages: options.messages,
       courseId: options.courseId ?? null,
       threadId: options.threadId ?? null,
+      modelId: options.modelId ?? null,
+      attachmentIds:
+        options.attachmentIds && options.attachmentIds.length > 0
+          ? options.attachmentIds
+          : null,
+      enableWebSearch: options.enableWebSearch ?? true,
+      allowWriteTools: options.allowWriteTools ?? true,
     }),
     signal: options.signal,
   });

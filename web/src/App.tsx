@@ -30,6 +30,7 @@ import {
 } from './data/mockData';
 import { useApiHealth } from './hooks/useApiHealth';
 import { useTheme } from './hooks/useTheme';
+import { getAiConfig } from './lib/aiConfigClient';
 import {
   changePassword,
   clearAccessToken,
@@ -113,9 +114,11 @@ import {
 import type {
   AccountPreferences,
   AgentToken,
+  AiConfig,
   AppView,
   CalendarEvent,
   CaptureKind,
+  ChatAttachment,
   ChatMessage,
   ChatScope,
   ChatThreadSummary,
@@ -690,6 +693,10 @@ export function App() {
   };
 
   // Collapsible & Fullscreenable AI Chat Sidebar with persisted history
+  const [aiConfig, setAiConfig] = useState<AiConfig | null>(null);
+  const [selectedChatModelId, setSelectedChatModelId] = useState<string | null>(null);
+  const [chatEnableWebSearch, setChatEnableWebSearch] = useState(true);
+  const [chatAllowWriteTools, setChatAllowWriteTools] = useState(true);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isChatFullscreen, setIsChatFullscreen] = useState(false);
   const [chatScope, setChatScope] = useState<ChatScope>({ courseId: null });
@@ -703,9 +710,36 @@ export function App() {
   const [studyGuideJobs, setStudyGuideJobs] = useState<Record<string, StudyGuideJob>>({});
   const chatAbortRef = useRef<AbortController | null>(null);
 
-  const isAiConfigured = Boolean(
-    preferences.aiInferenceUrl?.trim() && preferences.aiModel?.trim(),
-  );
+  useEffect(() => {
+    if (!profile) {
+      setAiConfig(null);
+      setSelectedChatModelId(null);
+      return;
+    }
+    void getAiConfig()
+      .then((cfg) => {
+        setAiConfig(cfg);
+        setSelectedChatModelId((prev) =>
+          prev && cfg.models.some((m) => m.id === prev)
+            ? prev
+            : cfg.defaultModelId ?? cfg.models[0]?.id ?? null,
+        );
+      })
+      .catch(() => undefined);
+  }, [profile]);
+
+  const handleAiConfigChange = useCallback((next: AiConfig) => {
+    setAiConfig(next);
+    setSelectedChatModelId((prev) =>
+      prev && next.models.some((m) => m.id === prev)
+        ? prev
+        : next.defaultModelId ?? next.models[0]?.id ?? null,
+    );
+  }, []);
+
+  const isAiConfigured = aiConfig !== null
+    ? aiConfig.models.length > 0
+    : Boolean(preferences.aiInferenceUrl?.trim() && preferences.aiModel?.trim());
 
   const refreshChatThreads = useCallback(async () => {
     try {
@@ -752,6 +786,9 @@ export function App() {
         courseLabel: detail.courseLabel ?? null,
       });
       setChatMessages(detail.messages);
+      if (detail.lastModelId) {
+        setSelectedChatModelId(detail.lastModelId);
+      }
     } catch {
       announce('Could not load chat conversation');
     } finally {
@@ -776,7 +813,7 @@ export function App() {
   );
 
   const handleSendChat = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, attachments: ChatAttachment[] = []) => {
       if (chatStreaming) return;
       const scopeCourseId = chatScope.courseId;
       const targetThreadId = activeChatThreadId;
@@ -784,6 +821,7 @@ export function App() {
         id: `u_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         role: 'user',
         content: prompt,
+        attachments: attachments.length > 0 ? attachments : undefined,
       };
       const assistantId = `a_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       const assistantMsg: ChatMessage = {
@@ -812,6 +850,10 @@ export function App() {
           messages: historyPayload,
           courseId: scopeCourseId,
           threadId: targetThreadId,
+          modelId: selectedChatModelId,
+          attachmentIds: attachments.map((a) => a.id),
+          enableWebSearch: chatEnableWebSearch,
+          allowWriteTools: chatAllowWriteTools,
           signal: controller.signal,
           onThread: (thread) => {
             setActiveChatThreadId(thread.id);
@@ -890,6 +932,8 @@ export function App() {
     },
     [
       activeChatThreadId,
+      chatAllowWriteTools,
+      chatEnableWebSearch,
       chatMessages,
       chatScope.courseId,
       chatStreaming,
@@ -897,6 +941,7 @@ export function App() {
       loadDayData,
       loadUniversityData,
       refreshChatThreads,
+      selectedChatModelId,
       selectedDateKey,
     ],
   );
@@ -1709,6 +1754,7 @@ export function App() {
         <AccountPage
           profile={profile}
           preferences={preferences}
+          aiConfig={aiConfig}
           theme={theme}
           agentTokens={agentTokens}
           sessions={sessions}
@@ -1720,6 +1766,7 @@ export function App() {
           onBackToDashboard={() => navigateTo('dashboard')}
           onUpdateProfile={handleUpdateProfile}
           onUpdatePreferences={handleUpdatePreferences}
+          onAiConfigChange={handleAiConfigChange}
           onSetTheme={setTheme}
           onChangePassword={handleChangePassword}
           onCreateToken={handleCreateToken}
@@ -2127,7 +2174,15 @@ export function App() {
         isFullscreen={isChatFullscreen}
         scope={chatScope}
         isConfigured={isAiConfigured}
-        modelLabel={preferences.aiModel}
+        modelLabel={
+          aiConfig?.models.find((m) => m.id === selectedChatModelId)?.displayName ??
+          preferences.aiModel
+        }
+        models={aiConfig?.models ?? []}
+        selectedModelId={selectedChatModelId}
+        defaultVisionModelId={aiConfig?.defaultVisionModelId ?? null}
+        enableWebSearch={chatEnableWebSearch}
+        allowWriteTools={chatAllowWriteTools}
         messages={chatMessages}
         threads={chatThreads}
         activeThreadId={activeChatThreadId}
@@ -2147,7 +2202,10 @@ export function App() {
         onNewChat={handleNewChat}
         onSelectThread={(id) => void handleSelectChatThread(id)}
         onDeleteThread={(id) => void handleDeleteChatThread(id)}
-        onSend={(prompt) => void handleSendChat(prompt)}
+        onSelectModel={(id) => setSelectedChatModelId(id)}
+        onToggleWebSearch={() => setChatEnableWebSearch((prev) => !prev)}
+        onToggleWriteTools={() => setChatAllowWriteTools((prev) => !prev)}
+        onSend={(prompt, attachments) => void handleSendChat(prompt, attachments)}
         onStop={handleStopChat}
         onOpenSettings={() => {
           setIsChatOpen(false);

@@ -32,6 +32,22 @@ public sealed record ExtractPdfImagesResponse(
     Guid NoteId,
     IReadOnlyList<ExtractedPdfImageDto> Images);
 
+public sealed record BatchActivityItemInput(
+    string Title,
+    string? Theme = null,
+    string? Notes = null,
+    int? SequenceNumber = null,
+    DateTimeOffset? StartAt = null,
+    DateTimeOffset? EndAt = null,
+    bool IsAllDay = false,
+    string? Location = null);
+
+public sealed record BatchCreateActivityItemsResponse(
+    Guid ActivityId,
+    Guid CourseId,
+    int CreatedCount,
+    IReadOnlyList<UniversityActivityItemDto> Items);
+
 public sealed partial class KnowledgeWriteService(
     AppDbContext db,
     IAttachmentStorage storage)
@@ -1046,6 +1062,149 @@ public sealed partial class KnowledgeWriteService(
             item.MetadataJson,
             item.CreatedAt,
             item.UpdatedAt));
+    }
+
+    public async Task<KnowledgeResult<BatchCreateActivityItemsResponse>> CreateActivityItemsBatchAsync(
+        ClaimsPrincipal principal,
+        bool enforceAgentRules,
+        Guid activityId,
+        IReadOnlyList<BatchActivityItemInput> items,
+        CancellationToken ct)
+    {
+        var userId = principal.GetUserId();
+        if (userId is null) return KnowledgeResult.Unauthorized<BatchCreateActivityItemsResponse>();
+
+        var enforceScopes = ShouldEnforceAgentRules(principal, enforceAgentRules);
+        if (enforceScopes && !HasScope(principal, "university:write"))
+        {
+            return KnowledgeResult.Forbidden<BatchCreateActivityItemsResponse>("Missing required scope: university:write");
+        }
+
+        if (items is null || items.Count == 0)
+        {
+            return KnowledgeResult.BadRequest<BatchCreateActivityItemsResponse>("At least 1 item is required.");
+        }
+
+        if (items.Count > 50)
+        {
+            return KnowledgeResult.BadRequest<BatchCreateActivityItemsResponse>("At most 50 items can be created per batch call.");
+        }
+
+        var activity = await db.UniversityCourseActivities
+            .Include(a => a.Course)
+            .FirstOrDefaultAsync(a => a.Id == activityId && a.UserId == userId.Value, ct);
+        if (activity is null)
+        {
+            return KnowledgeResult.NotFound<BatchCreateActivityItemsResponse>("University course activity not found.");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        UserCalendar? uniCalendar = null;
+        var createdPairs = new List<(UniversityActivityItem Item, CalendarEvent? Event)>(items.Count);
+
+        for (var idx = 0; idx < items.Count; idx++)
+        {
+            var entry = items[idx];
+            var trimmedTitle = entry.Title?.Trim() ?? string.Empty;
+            if (trimmedTitle.Length is 0 or > 200)
+            {
+                return KnowledgeResult.BadRequest<BatchCreateActivityItemsResponse>($"Item #{idx + 1}: title must be 1–200 characters.");
+            }
+
+            if (entry.StartAt.HasValue != entry.EndAt.HasValue)
+            {
+                return KnowledgeResult.BadRequest<BatchCreateActivityItemsResponse>($"Item #{idx + 1}: both startAt and endAt must be provided together.");
+            }
+
+            if (entry.StartAt.HasValue && entry.EndAt.HasValue && entry.EndAt.Value <= entry.StartAt.Value)
+            {
+                return KnowledgeResult.BadRequest<BatchCreateActivityItemsResponse>($"Item #{idx + 1}: endAt must be after startAt.");
+            }
+
+            var cleanTheme = string.IsNullOrWhiteSpace(entry.Theme) ? null : entry.Theme.Trim();
+            if (cleanTheme is not null && cleanTheme.Length > 200) cleanTheme = cleanTheme[..200];
+
+            var cleanNotes = string.IsNullOrWhiteSpace(entry.Notes) ? null : entry.Notes.Trim();
+            if (cleanNotes is not null && cleanNotes.Length > 2000) cleanNotes = cleanNotes[..2000];
+
+            var cleanLocation = string.IsNullOrWhiteSpace(entry.Location)
+                ? activity.DefaultLocation
+                : entry.Location.Trim();
+            if (cleanLocation is not null && cleanLocation.Length > 200) cleanLocation = cleanLocation[..200];
+
+            CalendarEvent? linkedEvent = null;
+            if (entry.StartAt.HasValue && entry.EndAt.HasValue)
+            {
+                uniCalendar ??= await EnsureUniversityCalendarAsync(userId.Value, ct);
+                var prefix = !string.IsNullOrWhiteSpace(activity.Course.Code) ? activity.Course.Code : activity.Course.Name;
+                var eventTitle = $"{prefix} · {trimmedTitle}";
+                if (eventTitle.Length > 200) eventTitle = eventTitle[..200];
+
+                var descBuilder = new StringBuilder(activity.Title ?? UniversityConstants.GetDefaultActivityLabel(activity.ActivityType));
+                if (cleanTheme is not null) descBuilder.Append("\nTheme: ").Append(cleanTheme);
+                if (cleanNotes is not null) descBuilder.Append("\nNotes: ").Append(cleanNotes);
+
+                linkedEvent = new CalendarEvent
+                {
+                    Id = Guid.NewGuid(),
+                    CalendarId = uniCalendar.Id,
+                    UserId = userId.Value,
+                    Title = eventTitle,
+                    Description = descBuilder.ToString(),
+                    Location = cleanLocation,
+                    StartAt = entry.StartAt.Value.ToUniversalTime(),
+                    EndAt = entry.EndAt.Value.ToUniversalTime(),
+                    IsAllDay = entry.IsAllDay,
+                    Timezone = uniCalendar.Timezone,
+                    Status = "confirmed",
+                    Source = UniversityConstants.CalendarEventSource,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                };
+                db.CalendarEvents.Add(linkedEvent);
+            }
+
+            var item = new UniversityActivityItem
+            {
+                Id = Guid.NewGuid(),
+                ActivityId = activity.Id,
+                CourseId = activity.CourseId,
+                UserId = userId.Value,
+                CalendarEventId = linkedEvent?.Id,
+                CalendarEvent = linkedEvent,
+                Title = trimmedTitle,
+                Theme = cleanTheme,
+                Notes = cleanNotes,
+                SequenceNumber = entry.SequenceNumber,
+                AttendanceStatus = "pending",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            db.UniversityActivityItems.Add(item);
+            createdPairs.Add((item, linkedEvent));
+        }
+
+        await db.SaveChangesAsync(ct);
+
+        var dtos = createdPairs.Select(p => new UniversityActivityItemDto(
+            p.Item.Id,
+            p.Item.ActivityId,
+            p.Item.CourseId,
+            p.Item.CalendarEventId,
+            p.Item.Title,
+            p.Item.Theme,
+            p.Item.Notes,
+            p.Item.SequenceNumber,
+            p.Item.AttendanceStatus,
+            p.Event?.StartAt,
+            p.Event?.EndAt,
+            p.Event?.IsAllDay ?? false,
+            p.Event?.Location,
+            p.Item.MetadataJson,
+            p.Item.CreatedAt,
+            p.Item.UpdatedAt)).ToList();
+
+        return KnowledgeResult.Ok(new BatchCreateActivityItemsResponse(activity.Id, activity.CourseId, dtos.Count, dtos));
     }
 
     private async Task<ExtractedPdfImageDto> SaveExtractedInlineImageAsync(

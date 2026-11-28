@@ -2,6 +2,9 @@ import {
   useEffect,
   useRef,
   useState,
+  type ChangeEvent,
+  type ClipboardEvent,
+  type DragEvent,
   type FormEvent,
   type KeyboardEvent,
 } from 'react';
@@ -11,8 +14,15 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { downloadAttachment } from '../lib/attachmentsClient';
 import { formatRelativeTime } from '../lib/authClient';
+import {
+  downloadChatAttachment,
+  fetchChatAttachmentObjectUrl,
+  uploadChatAttachment,
+} from '../lib/chatClient';
 import { normalizeBlockMathFences } from '../lib/markdownUtils';
 import type {
+  AiModel,
+  ChatAttachment,
   ChatCitation,
   ChatMessage,
   ChatScope,
@@ -20,12 +30,65 @@ import type {
 } from '../types/atrium';
 import { ChatIcon, CloseIcon, PlusIcon } from './Icons';
 
+function ChatImageThumb({ attachment }: { attachment: ChatAttachment }) {
+  const [src, setSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let url: string | null = null;
+    void fetchChatAttachmentObjectUrl(attachment.id)
+      .then((objectUrl) => {
+        if (!active) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        url = objectUrl;
+        setSrc(objectUrl);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      active = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [attachment.id]);
+
+  if (!src) {
+    return (
+      <span className="chat-attachment-chip">
+        <span aria-hidden="true">🖼️</span>
+        <span>{attachment.fileName}</span>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      className="chat-attachment-thumb-btn"
+      onClick={() => void downloadChatAttachment(attachment.id, attachment.fileName)}
+      title={`Download ${attachment.fileName}`}
+    >
+      <img
+        src={src}
+        alt={attachment.fileName}
+        className="chat-attachment-thumb"
+      />
+    </button>
+  );
+}
+
 interface ChatSidebarProps {
   isOpen: boolean;
   isFullscreen: boolean;
   scope: ChatScope;
   isConfigured: boolean;
   modelLabel?: string | null;
+  models: AiModel[];
+  selectedModelId: string | null;
+  defaultVisionModelId: string | null;
+  enableWebSearch: boolean;
+  allowWriteTools: boolean;
   messages: ChatMessage[];
   threads: ChatThreadSummary[];
   activeThreadId: string | null;
@@ -38,7 +101,10 @@ interface ChatSidebarProps {
   onNewChat: () => void;
   onSelectThread: (threadId: string) => void;
   onDeleteThread: (threadId: string) => void;
-  onSend: (prompt: string) => void;
+  onSelectModel: (modelId: string) => void;
+  onToggleWebSearch: () => void;
+  onToggleWriteTools: () => void;
+  onSend: (prompt: string, attachments: ChatAttachment[]) => void;
   onStop: () => void;
   onOpenSettings: () => void;
   onOpenNote: (noteId: string) => void;
@@ -50,6 +116,11 @@ export function ChatSidebar({
   scope,
   isConfigured,
   modelLabel,
+  models,
+  selectedModelId,
+  defaultVisionModelId,
+  enableWebSearch,
+  allowWriteTools,
   messages,
   threads,
   activeThreadId,
@@ -62,6 +133,9 @@ export function ChatSidebar({
   onNewChat,
   onSelectThread,
   onDeleteThread,
+  onSelectModel,
+  onToggleWebSearch,
+  onToggleWriteTools,
   onSend,
   onStop,
   onOpenSettings,
@@ -69,8 +143,13 @@ export function ChatSidebar({
 }: ChatSidebarProps) {
   const [draft, setDraft] = useState('');
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -105,21 +184,96 @@ export function ChatSidebar({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isOpen, isFullscreen, onClose, onToggleFullscreen]);
 
+  async function handleUploadFiles(fileList: FileList | File[]) {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    const remainingSlots = 5 - pendingAttachments.length;
+    if (remainingSlots <= 0) {
+      setUploadError('Maximum 5 attachments per message.');
+      return;
+    }
+
+    const toUpload = files.slice(0, remainingSlots);
+    setUploadError(null);
+    setUploadingFiles(true);
+    try {
+      const uploaded: ChatAttachment[] = [];
+      for (const file of toUpload) {
+        const dto = await uploadChatAttachment(file);
+        uploaded.push(dto);
+      }
+      setPendingAttachments((prev) => [...prev, ...uploaded]);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'File upload failed.');
+    } finally {
+      setUploadingFiles(false);
+    }
+  }
+
+  function handleFileInputChange(e: ChangeEvent<HTMLInputElement>) {
+    if (e.target.files) {
+      void handleUploadFiles(e.target.files);
+    }
+    e.target.value = '';
+  }
+
+  function handlePaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    const files: File[] = [];
+    for (let i = 0; i < items.length; i += 1) {
+      if (items[i].kind === 'file') {
+        const f = items[i].getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      void handleUploadFiles(files);
+    }
+  }
+
+  function handleDragOver(e: DragEvent<HTMLElement>) {
+    e.preventDefault();
+    if (!isDragOver) setIsDragOver(true);
+  }
+
+  function handleDragLeave(e: DragEvent<HTMLElement>) {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+    setIsDragOver(false);
+  }
+
+  function handleDrop(e: DragEvent<HTMLElement>) {
+    e.preventDefault();
+    setIsDragOver(false);
+    if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+      void handleUploadFiles(e.dataTransfer.files);
+    }
+  }
+
+  function submitDraft() {
+    const trimmed = draft.trim();
+    if ((!trimmed && pendingAttachments.length === 0) || streaming || !isConfigured || uploadingFiles) {
+      return;
+    }
+    const prompt = trimmed || 'Analyze the attached file(s).';
+    const atts = pendingAttachments;
+    setDraft('');
+    setPendingAttachments([]);
+    setUploadError(null);
+    onSend(prompt, atts);
+  }
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const trimmed = draft.trim();
-    if (!trimmed || streaming || !isConfigured) return;
-    setDraft('');
-    onSend(trimmed);
+    submitDraft();
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      const trimmed = draft.trim();
-      if (!trimmed || streaming || !isConfigured) return;
-      setDraft('');
-      onSend(trimmed);
+      submitDraft();
     }
   }
 
@@ -145,10 +299,18 @@ export function ChatSidebar({
         />
       )}
       <aside
-        className={`chat-sidebar-drawer ${isFullscreen ? 'is-fullscreen' : ''}`}
+        className={`chat-sidebar-drawer ${isFullscreen ? 'is-fullscreen' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
         role="complementary"
         aria-label="Atrium AI Assistant"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       >
+        {isDragOver && (
+          <div className="chat-drop-overlay" aria-hidden="true">
+            <span>Drop files (.ics, PDF, DOCX, images…) to attach</span>
+          </div>
+        )}
         <header className="chat-sidebar-header">
           <div className="chat-sidebar-title-group">
             {isFullscreen && (
@@ -379,7 +541,33 @@ export function ChatSidebar({
                             </div>
                           </>
                         ) : (
-                          <p className="chat-user-text">{msg.content}</p>
+                          <>
+                            {msg.attachments && msg.attachments.length > 0 && (
+                              <div className="chat-msg-attachments">
+                                {msg.attachments.map((att) =>
+                                  att.kind === 'image' ? (
+                                    <ChatImageThumb key={att.id} attachment={att} />
+                                  ) : (
+                                    <button
+                                      key={att.id}
+                                      type="button"
+                                      className="chat-attachment-chip"
+                                      onClick={() =>
+                                        void downloadChatAttachment(att.id, att.fileName)
+                                      }
+                                      title={att.summary ?? `Download ${att.fileName}`}
+                                    >
+                                      <span aria-hidden="true">
+                                        {att.kind === 'ics' ? '📅' : '📎'}
+                                      </span>
+                                      <span>{att.fileName}</span>
+                                    </button>
+                                  ),
+                                )}
+                              </div>
+                            )}
+                            <p className="chat-user-text">{msg.content}</p>
+                          </>
                         )}
 
                         {msg.citations && msg.citations.length > 0 && (
@@ -431,6 +619,69 @@ export function ChatSidebar({
 
             <form className="chat-sidebar-composer" onSubmit={handleSubmit}>
               <div className="chat-composer-inner">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  accept=".ics,.pdf,.docx,.pptx,.txt,.md,.csv,.json,.png,.jpg,.jpeg,.webp"
+                  onChange={handleFileInputChange}
+                />
+
+                {pendingAttachments.length > 0 && (
+                  <div className="chat-pending-attachments">
+                    {pendingAttachments.map((att) => (
+                      <span key={att.id} className="chat-attachment-chip is-pending">
+                        <span aria-hidden="true">
+                          {att.kind === 'image'
+                            ? '🖼️'
+                            : att.kind === 'ics'
+                              ? '📅'
+                              : '📎'}
+                        </span>
+                        <span className="chat-attachment-name">{att.fileName}</span>
+                        <button
+                          type="button"
+                          className="chat-attachment-remove"
+                          onClick={() =>
+                            setPendingAttachments((prev) =>
+                              prev.filter((x) => x.id !== att.id),
+                            )
+                          }
+                          aria-label={`Remove ${att.fileName}`}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {uploadError && (
+                  <p className="field-error chat-upload-error" role="alert">
+                    {uploadError}
+                  </p>
+                )}
+
+                {(() => {
+                  const hasPendingImage = pendingAttachments.some(
+                    (a) => a.kind === 'image',
+                  );
+                  if (!hasPendingImage) return null;
+                  const activeModel = models.find((m) => m.id === selectedModelId);
+                  if (activeModel?.supportsVision) return null;
+                  const visionFallback = models.find(
+                    (m) => m.id === defaultVisionModelId && m.supportsVision,
+                  );
+                  return (
+                    <p className="meta-text chat-vision-hint">
+                      {visionFallback
+                        ? `Images will auto-route to ${visionFallback.displayName}.`
+                        : 'No vision model configured — enable a vision model in Account → AI Assistant.'}
+                    </p>
+                  );
+                })()}
+
                 <textarea
                   ref={inputRef}
                   className="input chat-composer-input"
@@ -439,18 +690,72 @@ export function ChatSidebar({
                   disabled={!isConfigured || streaming || loadingThread}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={handleKeyDown}
+                  onPaste={handlePaste}
                   placeholder={
                     !isConfigured
                       ? 'Configure AI settings in Account first…'
                       : isCourseScoped
                         ? `Ask about ${scope.courseLabel || 'this course'}…`
-                        : 'Ask about your day, notes, or slides…'
+                        : 'Ask anything, paste a syllabus link, or drop a Neptun .ics…'
                   }
                 />
                 <div className="chat-composer-footer">
-                  <span className="meta-text">
-                    Enter to send · Shift+Enter newline
-                  </span>
+                  <div className="chat-composer-tools">
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs chat-attach-btn"
+                      disabled={!isConfigured || streaming || uploadingFiles}
+                      onClick={() => fileInputRef.current?.click()}
+                      title="Attach .ics, PDF, DOCX, PPTX, text, or image"
+                      aria-label="Attach file"
+                    >
+                      {uploadingFiles ? 'Uploading…' : '📎'}
+                    </button>
+                    <button
+                      type="button"
+                      className={`chat-mode-toggle ${enableWebSearch ? 'is-active' : ''}`}
+                      disabled={streaming}
+                      aria-pressed={enableWebSearch}
+                      onClick={onToggleWebSearch}
+                      title={
+                        enableWebSearch
+                          ? 'Web search enabled (click to disable)'
+                          : 'Web search disabled (click to enable)'
+                      }
+                    >
+                      🌐 Web
+                    </button>
+                    <button
+                      type="button"
+                      className={`chat-mode-toggle ${allowWriteTools ? 'is-active' : ''}`}
+                      disabled={streaming}
+                      aria-pressed={allowWriteTools}
+                      onClick={onToggleWriteTools}
+                      title={
+                        allowWriteTools
+                          ? 'Assistant can read and create/edit items (click for Read-only)'
+                          : 'Assistant is Read-only (click to allow Read + Write)'
+                      }
+                    >
+                      {allowWriteTools ? 'Read + Write' : 'Read-only'}
+                    </button>
+                    {models.length > 0 && (
+                      <select
+                        className="chat-model-picker"
+                        aria-label="Select AI model"
+                        value={selectedModelId ?? models[0]?.id ?? ''}
+                        disabled={streaming}
+                        onChange={(e) => onSelectModel(e.target.value)}
+                      >
+                        {models.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.displayName}
+                            {m.supportsVision ? ' · Vision' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                   {streaming ? (
                     <button
                       type="button"
@@ -463,7 +768,12 @@ export function ChatSidebar({
                     <button
                       type="submit"
                       className="btn btn-primary btn-xs"
-                      disabled={!isConfigured || loadingThread || !draft.trim()}
+                      disabled={
+                        !isConfigured ||
+                        loadingThread ||
+                        uploadingFiles ||
+                        (!draft.trim() && pendingAttachments.length === 0)
+                      }
                     >
                       Send
                     </button>

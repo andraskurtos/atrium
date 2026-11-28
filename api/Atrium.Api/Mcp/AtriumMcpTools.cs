@@ -441,6 +441,65 @@ public sealed class AtriumMcpTools(
         return ToToolResult(result);
     }
 
+    public sealed record McpBatchActivityItemDto(
+        string Title,
+        string? Theme = null,
+        string? Notes = null,
+        int? SequenceNumber = null,
+        string? StartAt = null,
+        string? EndAt = null,
+        bool IsAllDay = false,
+        string? Location = null);
+
+    [McpServerTool(Name = "create_activity_items", ReadOnly = false, Destructive = false)]
+    [Description("Batch-create up to 50 lectures, labs, assignments, or exams for a university course activity in one call (optionally scheduling each on the University calendar). Requires university:write scope.")]
+    public async Task<CallToolResult> CreateActivityItemsAsync(
+        [Description("Owning university course activity GUID.")] Guid activityId,
+        [Description("Array of 1–50 items to create.")] IReadOnlyList<McpBatchActivityItemDto> items,
+        CancellationToken ct = default)
+    {
+        var principal = GetPrincipal();
+        if (principal is null) return ErrorResult("Unauthorized.");
+
+        if (items is null || items.Count == 0)
+        {
+            return ErrorResult("At least 1 item is required.");
+        }
+
+        var parsedItems = new List<BatchActivityItemInput>(items.Count);
+        for (var i = 0; i < items.Count; i++)
+        {
+            var entry = items[i];
+            if (!TryParseOptionalDateTimeOffset(entry.StartAt, out var parsedStart))
+            {
+                return ErrorResult($"Item #{i + 1}: invalid 'startAt' ISO-8601 timestamp.");
+            }
+
+            if (!TryParseOptionalDateTimeOffset(entry.EndAt, out var parsedEnd))
+            {
+                return ErrorResult($"Item #{i + 1}: invalid 'endAt' ISO-8601 timestamp.");
+            }
+
+            parsedItems.Add(new BatchActivityItemInput(
+                entry.Title,
+                entry.Theme,
+                entry.Notes,
+                entry.SequenceNumber,
+                parsedStart,
+                parsedEnd,
+                entry.IsAllDay,
+                entry.Location));
+        }
+
+        var result = await writeService.CreateActivityItemsBatchAsync(
+            principal,
+            enforceAgentRules: true,
+            activityId,
+            parsedItems,
+            ct);
+        return ToToolResult(result);
+    }
+
     private ClaimsPrincipal? GetPrincipal() => httpContextAccessor.HttpContext?.User;
 
     private static CallToolResult ToToolResult<T>(KnowledgeResult<T> result)

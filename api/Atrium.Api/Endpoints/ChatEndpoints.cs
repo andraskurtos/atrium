@@ -4,6 +4,7 @@ using Atrium.Api.Auth;
 using Atrium.Api.Chat;
 using Atrium.Api.Data;
 using Atrium.Api.Data.Entities;
+using Atrium.Api.Storage;
 using Microsoft.EntityFrameworkCore;
 
 namespace Atrium.Api.Endpoints;
@@ -66,6 +67,7 @@ public static class ChatEndpoints
                 .AsNoTracking()
                 .Include(t => t.Course)
                 .Include(t => t.Messages)
+                    .ThenInclude(m => m.Attachments)
                 .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId.Value, ct);
 
             if (thread is null) return Results.NotFound();
@@ -82,13 +84,15 @@ public static class ChatEndpoints
                 thread.Title,
                 thread.CreatedAt,
                 thread.UpdatedAt,
-                messages));
+                messages,
+                thread.LastModelId));
         });
 
         group.MapDelete("/threads/{id:guid}", async (
             Guid id,
             ClaimsPrincipal principal,
             AppDbContext db,
+            ChatAttachmentService attachmentService,
             CancellationToken ct) =>
         {
             var userId = principal.GetUserId();
@@ -99,9 +103,68 @@ public static class ChatEndpoints
 
             if (thread is null) return Results.NotFound();
 
+            await attachmentService.DeleteThreadFilesAsync(userId.Value, thread.Id, ct);
             db.ChatThreads.Remove(thread);
             await db.SaveChangesAsync(ct);
             return Results.NoContent();
+        });
+
+        group.MapPost("/attachments", async (
+            HttpRequest httpRequest,
+            ClaimsPrincipal principal,
+            AppDbContext db,
+            ChatAttachmentService attachmentService,
+            CancellationToken ct) =>
+        {
+            var userId = principal.GetUserId();
+            if (userId is null) return Results.Unauthorized();
+
+            if (!httpRequest.HasFormContentType)
+            {
+                return Results.BadRequest(new { error = "Expected multipart/form-data upload." });
+            }
+
+            var form = await httpRequest.ReadFormAsync(ct);
+            var file = form.Files.GetFile("file") ?? (form.Files.Count > 0 ? form.Files[0] : null);
+            if (file is null)
+            {
+                return Results.BadRequest(new { error = "No file was uploaded." });
+            }
+
+            var userTz = await db.Users
+                .AsNoTracking()
+                .Where(u => u.Id == userId.Value)
+                .Select(u => u.Timezone)
+                .FirstOrDefaultAsync(ct) ?? "UTC";
+
+            var result = await attachmentService.UploadAsync(userId.Value, file, userTz, ct);
+            if (!result.Success || result.Attachment is null)
+            {
+                return Results.BadRequest(new { error = result.Error ?? "Upload failed." });
+            }
+
+            return Results.Created(result.Attachment.Url, result.Attachment);
+        }).DisableAntiforgery();
+
+        group.MapGet("/attachments/{id:guid}", async (
+            Guid id,
+            ClaimsPrincipal principal,
+            AppDbContext db,
+            IAttachmentStorage storage,
+            CancellationToken ct) =>
+        {
+            var userId = principal.GetUserId();
+            if (userId is null) return Results.Unauthorized();
+
+            var att = await db.ChatAttachments
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.Id == id && a.UserId == userId.Value, ct);
+            if (att is null) return Results.NotFound();
+
+            var stream = await storage.OpenReadAsync(att.StorageKey, ct);
+            if (stream is null) return Results.NotFound();
+
+            return Results.File(stream, att.ContentType, att.FileName);
         });
 
         group.MapPost("/stream", async (
@@ -109,7 +172,8 @@ public static class ChatEndpoints
             HttpContext httpContext,
             ClaimsPrincipal principal,
             AppDbContext db,
-            SecretProtector secretProtector,
+            AiConfigService aiConfigService,
+            ChatAttachmentService attachmentService,
             OpenAiChatService chatService,
             CancellationToken ct) =>
         {
@@ -139,17 +203,26 @@ public static class ChatEndpoints
                 normalizedMessages.Add(new ChatMessageInput(role, content));
             }
 
-            var prefs = await db.UserPreferences
-                .AsNoTracking()
-                .FirstOrDefaultAsync(p => p.UserId == userId.Value, ct);
+            var attCheck = await attachmentService.ValidateAttachmentIdsAsync(
+                userId.Value,
+                request.ThreadId,
+                request.AttachmentIds,
+                ct);
+            if (!attCheck.Success)
+            {
+                return Results.BadRequest(new { error = attCheck.Error ?? "Invalid attachment IDs." });
+            }
 
-            if (prefs is null
-                || string.IsNullOrWhiteSpace(prefs.AiInferenceUrl)
-                || string.IsNullOrWhiteSpace(prefs.AiModel))
+            var resolvedModel = await aiConfigService.ResolveModelForChatAsync(
+                userId.Value,
+                request.ModelId,
+                attCheck.HasImages,
+                ct);
+            if (!resolvedModel.Success || resolvedModel.Model is null)
             {
                 return Results.BadRequest(new
                 {
-                    error = "AI Assistant is not configured yet. Add an Inference URL and Model name in Account → AI Assistant.",
+                    error = resolvedModel.ErrorMessage ?? "AI Assistant is not configured yet.",
                 });
             }
 
@@ -191,6 +264,7 @@ public static class ChatEndpoints
                     Id = Guid.NewGuid(),
                     UserId = userId.Value,
                     CourseId = effectiveCourseId,
+                    LastModelId = resolvedModel.UserSelectedModelId,
                     Title = BuildThreadTitle(latestUserPrompt),
                     CreatedAt = now,
                     UpdatedAt = now,
@@ -199,10 +273,11 @@ public static class ChatEndpoints
             }
             else
             {
+                thread.LastModelId = resolvedModel.UserSelectedModelId;
                 thread.UpdatedAt = now;
             }
 
-            db.ChatMessages.Add(new ChatMessageEntity
+            var userMsg = new ChatMessageEntity
             {
                 Id = Guid.NewGuid(),
                 ThreadId = thread.Id,
@@ -210,15 +285,31 @@ public static class ChatEndpoints
                 Role = "user",
                 Content = latestUserPrompt,
                 CreatedAt = now,
-            });
+            };
+            db.ChatMessages.Add(userMsg);
             await db.SaveChangesAsync(ct);
+
+            if (request.AttachmentIds is { Count: > 0 })
+            {
+                await attachmentService.BindToMessageAsync(
+                    userId.Value,
+                    thread.Id,
+                    userMsg.Id,
+                    request.AttachmentIds,
+                    ct);
+            }
 
             var existingCount = await db.ChatMessages
                 .AsNoTracking()
                 .CountAsync(m => m.ThreadId == thread.Id && m.UserId == userId.Value, ct);
 
+            var userTimezone = await db.Users
+                .AsNoTracking()
+                .Where(u => u.Id == userId.Value)
+                .Select(u => u.Timezone)
+                .FirstOrDefaultAsync(ct) ?? "UTC";
+
             var courseLabel = FormatCourseLabel(courseEntity);
-            var apiKey = secretProtector.Unprotect(prefs.AiApiKeyEncrypted);
 
             httpContext.Response.StatusCode = StatusCodes.Status200OK;
             httpContext.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
@@ -245,17 +336,31 @@ public static class ChatEndpoints
                     existingCount),
             });
 
+            if (resolvedModel.SwitchedToVision)
+            {
+                await WriteEventAsync(new
+                {
+                    type = "status",
+                    message = $"Switched to {resolvedModel.Model.DisplayName} for image input…",
+                });
+            }
+
             var summary = await chatService.StreamChatAsync(
                 principal,
                 userId.Value,
-                prefs.AiInferenceUrl,
-                prefs.AiModel,
-                apiKey,
+                resolvedModel.Model.BaseUrl,
+                resolvedModel.Model.ModelId,
+                resolvedModel.Model.ApiKey,
                 normalizedMessages,
                 effectiveCourseId,
                 courseLabel,
                 WriteEventAsync,
-                ct);
+                ct,
+                threadId: thread.Id,
+                supportsVision: resolvedModel.Model.SupportsVision,
+                userTimezone: userTimezone,
+                enableWebSearch: request.EnableWebSearch,
+                allowWriteTools: request.AllowWriteTools);
 
             var trimmedReply = summary.AssistantText.Trim();
             var trimmedReasoning = string.IsNullOrWhiteSpace(summary.ReasoningText) ? null : summary.ReasoningText.Trim();
@@ -320,6 +425,11 @@ public static class ChatEndpoints
             }
         }
 
-        return new ChatMessageDto(m.Id, m.Role, m.Content, m.Reasoning, citations, m.CreatedAt);
+        var attachments = m.Attachments
+            .OrderBy(a => a.CreatedAt)
+            .Select(ChatAttachmentService.ToDto)
+            .ToList();
+
+        return new ChatMessageDto(m.Id, m.Role, m.Content, m.Reasoning, citations, m.CreatedAt, attachments);
     }
 }

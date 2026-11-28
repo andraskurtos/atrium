@@ -24,6 +24,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<AttachmentTextChunk> AttachmentTextChunks => Set<AttachmentTextChunk>();
     public DbSet<ChatThread> ChatThreads => Set<ChatThread>();
     public DbSet<ChatMessageEntity> ChatMessages => Set<ChatMessageEntity>();
+    public DbSet<ChatAttachment> ChatAttachments => Set<ChatAttachment>();
+    public DbSet<AiProvider> AiProviders => Set<AiProvider>();
+    public DbSet<AiModel> AiModels => Set<AiModel>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -69,11 +72,26 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(p => p.AiInferenceUrl).HasColumnName("ai_inference_url").HasMaxLength(500);
             entity.Property(p => p.AiModel).HasColumnName("ai_model").HasMaxLength(120);
             entity.Property(p => p.AiApiKeyEncrypted).HasColumnName("ai_api_key_encrypted").HasColumnType("text");
+            entity.Property(p => p.DefaultAiModelId).HasColumnName("default_ai_model_id");
+            entity.Property(p => p.DefaultVisionModelId).HasColumnName("default_vision_model_id");
+            entity.Property(p => p.WebSearchProvider).HasColumnName("web_search_provider").HasMaxLength(32);
+            entity.Property(p => p.WebSearchUrl).HasColumnName("web_search_url").HasMaxLength(500);
+            entity.Property(p => p.WebSearchApiKeyEncrypted).HasColumnName("web_search_api_key_encrypted").HasColumnType("text");
 
             entity.HasOne(p => p.User)
                 .WithOne(u => u.Preferences)
                 .HasForeignKey<UserPreferences>(p => p.UserId)
                 .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(p => p.DefaultAiModel)
+                .WithMany()
+                .HasForeignKey(p => p.DefaultAiModelId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasOne(p => p.DefaultVisionModel)
+                .WithMany()
+                .HasForeignKey(p => p.DefaultVisionModelId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<RefreshSession>(entity =>
@@ -619,6 +637,59 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
                 .WithMany()
                 .HasForeignKey(t => t.CourseId)
                 .OnDelete(DeleteBehavior.SetNull);
+
+            entity.Property(t => t.LastModelId).HasColumnName("last_model_id");
+            entity.HasOne(t => t.LastModel)
+                .WithMany()
+                .HasForeignKey(t => t.LastModelId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AiProvider>(entity =>
+        {
+            entity.ToTable("ai_providers");
+            entity.HasKey(p => p.Id);
+            entity.Property(p => p.Id).HasColumnName("id");
+            entity.Property(p => p.UserId).HasColumnName("user_id");
+            entity.Property(p => p.Name).HasColumnName("name").HasMaxLength(80).IsRequired();
+            entity.Property(p => p.BaseUrl).HasColumnName("base_url").HasMaxLength(500).IsRequired();
+            entity.Property(p => p.ApiKeyEncrypted).HasColumnName("api_key_encrypted").HasColumnType("text");
+            entity.Property(p => p.CreatedAt).HasColumnName("created_at");
+            entity.Property(p => p.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(p => p.UserId).HasDatabaseName("ix_ai_providers_user");
+
+            entity.HasOne(p => p.User)
+                .WithMany()
+                .HasForeignKey(p => p.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AiModel>(entity =>
+        {
+            entity.ToTable("ai_models");
+            entity.HasKey(m => m.Id);
+            entity.Property(m => m.Id).HasColumnName("id");
+            entity.Property(m => m.UserId).HasColumnName("user_id");
+            entity.Property(m => m.ProviderId).HasColumnName("provider_id");
+            entity.Property(m => m.ModelId).HasColumnName("model_id").HasMaxLength(160).IsRequired();
+            entity.Property(m => m.DisplayName).HasColumnName("display_name").HasMaxLength(120).IsRequired();
+            entity.Property(m => m.SupportsVision).HasColumnName("supports_vision").HasDefaultValue(false);
+            entity.Property(m => m.SortOrder).HasColumnName("sort_order").HasDefaultValue(0);
+            entity.Property(m => m.CreatedAt).HasColumnName("created_at");
+            entity.Property(m => m.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(m => new { m.UserId, m.ProviderId }).HasDatabaseName("ix_ai_models_user_provider");
+
+            entity.HasOne(m => m.User)
+                .WithMany()
+                .HasForeignKey(m => m.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(m => m.Provider)
+                .WithMany(p => p.Models)
+                .HasForeignKey(m => m.ProviderId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ChatMessageEntity>(entity =>
@@ -645,6 +716,44 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasOne(m => m.User)
                 .WithMany()
                 .HasForeignKey(m => m.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ChatAttachment>(entity =>
+        {
+            entity.ToTable("chat_attachments");
+            entity.HasKey(a => a.Id);
+            entity.Property(a => a.Id).HasColumnName("id");
+            entity.Property(a => a.UserId).HasColumnName("user_id");
+            entity.Property(a => a.ThreadId).HasColumnName("thread_id");
+            entity.Property(a => a.MessageId).HasColumnName("message_id");
+            entity.Property(a => a.FileName).HasColumnName("file_name").HasMaxLength(255).IsRequired();
+            entity.Property(a => a.ContentType).HasColumnName("content_type").HasMaxLength(120).IsRequired();
+            entity.Property(a => a.Kind).HasColumnName("kind").HasMaxLength(24).IsRequired();
+            entity.Property(a => a.SizeBytes).HasColumnName("size_bytes");
+            entity.Property(a => a.StorageKey).HasColumnName("storage_key").HasMaxLength(500).IsRequired();
+            entity.Property(a => a.ExtractedText).HasColumnName("extracted_text").HasColumnType("text");
+            entity.Property(a => a.MetadataJson).HasColumnName("metadata_json").HasColumnType("text");
+            entity.Property(a => a.CreatedAt).HasColumnName("created_at");
+
+            entity.HasIndex(a => new { a.UserId, a.ThreadId })
+                .HasDatabaseName("ix_chat_attachments_user_thread");
+            entity.HasIndex(a => a.MessageId)
+                .HasDatabaseName("ix_chat_attachments_message");
+
+            entity.HasOne(a => a.User)
+                .WithMany()
+                .HasForeignKey(a => a.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(a => a.Thread)
+                .WithMany(t => t.Attachments)
+                .HasForeignKey(a => a.ThreadId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(a => a.Message)
+                .WithMany(m => m.Attachments)
+                .HasForeignKey(a => a.MessageId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

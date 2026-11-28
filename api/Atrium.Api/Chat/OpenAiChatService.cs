@@ -16,11 +16,13 @@ public sealed partial class OpenAiChatService(
     IHttpClientFactory httpClientFactory,
     KnowledgeReadService knowledge,
     KnowledgeWriteService writeService,
+    ChatAttachmentService attachmentService,
+    WebToolsService webToolsService,
     AppDbContext db,
     ILogger<OpenAiChatService> logger)
 {
     public const string HttpClientName = "AtriumOpenAiChat";
-    private const int MaxToolRounds = 12;
+    private const int MaxToolRounds = 16;
     private const int MaxToolOutputChars = 24_000;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -35,22 +37,117 @@ public sealed partial class OpenAiChatService(
         Guid? courseId,
         string? courseName,
         Func<object, Task> writeEventAsync,
-        CancellationToken ct)
+        CancellationToken ct,
+        Guid? threadId = null,
+        bool supportsVision = false,
+        string userTimezone = "UTC",
+        bool enableWebSearch = true,
+        bool allowWriteTools = true)
     {
         var citations = new Dictionary<(string SourceType, Guid Id), ChatCitationDto>();
         var totalAssistantText = new StringBuilder();
         var totalReasoningText = new StringBuilder();
+
+        var systemPrompt = BuildSystemPrompt(courseId, courseName, enableWebSearch, allowWriteTools);
+        if (threadId.HasValue)
+        {
+            var manifest = await attachmentService.BuildThreadManifestAsync(userId, threadId.Value, ct);
+            if (!string.IsNullOrWhiteSpace(manifest))
+            {
+                systemPrompt = systemPrompt + "\n\n" + manifest;
+            }
+        }
+
         var conversation = new List<JsonObject>
         {
             new()
             {
                 ["role"] = "system",
-                ["content"] = BuildSystemPrompt(courseId, courseName),
+                ["content"] = systemPrompt,
             },
         };
 
-        foreach (var msg in messages)
+        var userImagesByTurn = await LoadUserTurnImagesAsync(userId, threadId, ct);
+        var userTurnIndices = new List<int>();
+        for (var i = 0; i < messages.Count; i++)
         {
+            if (messages[i].Role == "user") userTurnIndices.Add(i);
+        }
+
+        // Pre-allocate image data URLs newest-first up to the 8 MB history budget when vision is enabled
+        var resolvedImageParts = new Dictionary<int, List<(string FileName, string? DataUrl)>>();
+        long remainingBudget = ChatAttachmentService.MaxHistoryImageBudgetBytes;
+        for (var uIdx = userTurnIndices.Count - 1; uIdx >= 0; uIdx--)
+        {
+            var msgIdx = userTurnIndices[uIdx];
+            if (!userImagesByTurn.TryGetValue(uIdx, out var imgs) || imgs.Count == 0) continue;
+
+            var list = new List<(string FileName, string? DataUrl)>(imgs.Count);
+            foreach (var img in imgs)
+            {
+                if (supportsVision && img.SizeBytes <= remainingBudget)
+                {
+                    var (dataUrl, byteLen) = await attachmentService.LoadImageDataUrlAsync(img, ct);
+                    if (dataUrl is not null && byteLen <= remainingBudget)
+                    {
+                        remainingBudget -= byteLen;
+                        list.Add((img.FileName, dataUrl));
+                        continue;
+                    }
+                }
+
+                list.Add((img.FileName, null));
+            }
+
+            resolvedImageParts[msgIdx] = list;
+        }
+
+        for (var i = 0; i < messages.Count; i++)
+        {
+            var msg = messages[i];
+            if (resolvedImageParts.TryGetValue(i, out var imgList) && imgList.Count > 0)
+            {
+                var inlineImages = imgList.Where(x => x.DataUrl is not null).ToList();
+                var textPlaceholders = imgList.Where(x => x.DataUrl is null).Select(x => $"[Image attached: {x.FileName}]").ToList();
+                var augmentedText = textPlaceholders.Count > 0
+                    ? msg.Content + "\n" + string.Join("\n", textPlaceholders)
+                    : msg.Content;
+
+                if (inlineImages.Count > 0)
+                {
+                    var parts = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["type"] = "text",
+                            ["text"] = augmentedText,
+                        },
+                    };
+                    foreach (var (_, dataUrl) in inlineImages)
+                    {
+                        parts.Add(new JsonObject
+                        {
+                            ["type"] = "image_url",
+                            ["image_url"] = new JsonObject { ["url"] = dataUrl },
+                        });
+                    }
+
+                    conversation.Add(new JsonObject
+                    {
+                        ["role"] = msg.Role,
+                        ["content"] = parts,
+                    });
+                    continue;
+                }
+
+                conversation.Add(new JsonObject
+                {
+                    ["role"] = msg.Role,
+                    ["content"] = augmentedText,
+                });
+                continue;
+            }
+
             conversation.Add(new JsonObject
             {
                 ["role"] = msg.Role,
@@ -58,7 +155,7 @@ public sealed partial class OpenAiChatService(
             });
         }
 
-        var tools = BuildToolsSchema(courseId.HasValue);
+        var tools = BuildToolsSchema(courseId.HasValue, enableWebSearch, allowWriteTools);
         var endpointUrl = ResolveCompletionsUrl(inferenceBaseUrl);
         var client = httpClientFactory.CreateClient(HttpClientName);
         var needsParagraphBreak = false;
@@ -188,11 +285,11 @@ public sealed partial class OpenAiChatService(
                     HadError: false);
             }
 
-            // Record assistant tool_calls turn
+            // Record assistant tool_calls turn (preserving provider-specific fields such as Gemini thought_signature)
             var toolCallsArray = new JsonArray();
             foreach (var tc in roundResult.ToolCalls)
             {
-                toolCallsArray.Add(new JsonObject
+                var tcObj = new JsonObject
                 {
                     ["id"] = tc.Id,
                     ["type"] = "function",
@@ -201,7 +298,18 @@ public sealed partial class OpenAiChatService(
                         ["name"] = tc.Name,
                         ["arguments"] = tc.Arguments,
                     },
-                });
+                };
+                if (tc.ExtraContent is not null)
+                {
+                    tcObj["extra_content"] = tc.ExtraContent.DeepClone();
+                }
+
+                if (!string.IsNullOrEmpty(tc.ThoughtSignature))
+                {
+                    tcObj["thought_signature"] = tc.ThoughtSignature;
+                }
+
+                toolCallsArray.Add(tcObj);
             }
 
             var assistantTurn = new JsonObject
@@ -209,6 +317,16 @@ public sealed partial class OpenAiChatService(
                 ["role"] = "assistant",
                 ["tool_calls"] = toolCallsArray,
             };
+            if (roundResult.ExtraContent is not null)
+            {
+                assistantTurn["extra_content"] = roundResult.ExtraContent.DeepClone();
+            }
+
+            if (roundResult.ReasoningDetails is not null && roundResult.ReasoningDetails.Count > 0)
+            {
+                assistantTurn["reasoning_details"] = roundResult.ReasoningDetails.DeepClone();
+            }
+
             if (!string.IsNullOrEmpty(roundResult.AssistantText))
             {
                 assistantTurn["content"] = roundResult.AssistantText;
@@ -223,7 +341,7 @@ public sealed partial class OpenAiChatService(
             foreach (var tc in roundResult.ToolCalls)
             {
                 await writeEventAsync(new { type = "status", message = DescribeToolStatus(tc.Name, courseName) });
-                var toolOutput = await ExecuteToolAsync(principal, userId, tc.Name, tc.Arguments, courseId, citations, writeEventAsync, ct);
+                var toolOutput = await ExecuteToolAsync(principal, userId, threadId, userTimezone, enableWebSearch, allowWriteTools, tc.Name, tc.Arguments, courseId, citations, writeEventAsync, ct);
                 if (toolOutput.Length > MaxToolOutputChars)
                 {
                     toolOutput = toolOutput[..MaxToolOutputChars] + "\n...[truncated]";
@@ -261,14 +379,21 @@ public sealed partial class OpenAiChatService(
         public string Type { get; } = "reasoning";
     }
 
-    private sealed record AccumulatedToolCall(string Id, string Name, string Arguments);
+    private sealed record AccumulatedToolCall(
+        string Id,
+        string Name,
+        string Arguments,
+        JsonNode? ExtraContent = null,
+        string? ThoughtSignature = null);
 
     private sealed record StreamRoundResult(
         bool Success,
         HttpStatusCode? StatusCode,
         string? ErrorMessage,
         string AssistantText,
-        List<AccumulatedToolCall> ToolCalls);
+        List<AccumulatedToolCall> ToolCalls,
+        JsonNode? ExtraContent = null,
+        JsonArray? ReasoningDetails = null);
 
     private async Task<StreamRoundResult> SendStreamingRoundAsync(
         HttpClient client,
@@ -326,7 +451,9 @@ public sealed partial class OpenAiChatService(
             }
 
             var assistantText = new StringBuilder();
-            var toolBuilders = new SortedDictionary<int, (string Id, string Name, StringBuilder Args)>();
+            var toolBuilders = new SortedDictionary<int, (string Id, string Name, StringBuilder Args, JsonNode? ExtraContent, string? ThoughtSignature)>();
+            JsonNode? messageExtraContent = null;
+            JsonArray? reasoningDetails = null;
             var thinkSplitter = new ThinkTagSplitter();
 
             await using var stream = await res.Content.ReadAsStreamAsync(ct);
@@ -383,6 +510,21 @@ public sealed partial class OpenAiChatService(
                         }
                     }
 
+                    if (delta.TryGetProperty("extra_content", out var msgExtraEl) && msgExtraEl.ValueKind != JsonValueKind.Null)
+                    {
+                        messageExtraContent = JsonNode.Parse(msgExtraEl.GetRawText());
+                    }
+
+                    if (delta.TryGetProperty("reasoning_details", out var rdEl) && rdEl.ValueKind == JsonValueKind.Array)
+                    {
+                        reasoningDetails ??= [];
+                        foreach (var item in rdEl.EnumerateArray())
+                        {
+                            var node = JsonNode.Parse(item.GetRawText());
+                            if (node is not null) reasoningDetails.Add(node);
+                        }
+                    }
+
                     if (delta.TryGetProperty("tool_calls", out var tcArray) && tcArray.ValueKind == JsonValueKind.Array)
                     {
                         foreach (var tcEl in tcArray.EnumerateArray())
@@ -393,13 +535,24 @@ public sealed partial class OpenAiChatService(
 
                             if (!toolBuilders.TryGetValue(idx, out var builder))
                             {
-                                builder = (string.Empty, string.Empty, new StringBuilder());
+                                builder = (string.Empty, string.Empty, new StringBuilder(), null, null);
                             }
 
                             if (tcEl.TryGetProperty("id", out var idEl) && idEl.ValueKind == JsonValueKind.String)
                             {
                                 var idVal = idEl.GetString();
                                 if (!string.IsNullOrEmpty(idVal)) builder.Id = idVal;
+                            }
+
+                            if (tcEl.TryGetProperty("extra_content", out var tcExtraEl) && tcExtraEl.ValueKind != JsonValueKind.Null)
+                            {
+                                builder.ExtraContent = JsonNode.Parse(tcExtraEl.GetRawText());
+                            }
+
+                            if (tcEl.TryGetProperty("thought_signature", out var tsEl) && tsEl.ValueKind == JsonValueKind.String)
+                            {
+                                var tsVal = tsEl.GetString();
+                                if (!string.IsNullOrEmpty(tsVal)) builder.ThoughtSignature = tsVal;
                             }
 
                             if (tcEl.TryGetProperty("function", out var fnEl) && fnEl.ValueKind == JsonValueKind.Object)
@@ -445,10 +598,12 @@ public sealed partial class OpenAiChatService(
                 .Select((kvp, i) => new AccumulatedToolCall(
                     string.IsNullOrWhiteSpace(kvp.Value.Id) ? $"call_{i}" : kvp.Value.Id,
                     kvp.Value.Name,
-                    kvp.Value.Args.Length == 0 ? "{}" : kvp.Value.Args.ToString()))
+                    kvp.Value.Args.Length == 0 ? "{}" : kvp.Value.Args.ToString(),
+                    kvp.Value.ExtraContent,
+                    kvp.Value.ThoughtSignature))
                 .ToList();
 
-            return new StreamRoundResult(true, res.StatusCode, null, assistantText.ToString(), finalizedCalls);
+            return new StreamRoundResult(true, res.StatusCode, null, assistantText.ToString(), finalizedCalls, messageExtraContent, reasoningDetails);
         }
     }
 
@@ -464,6 +619,13 @@ public sealed partial class OpenAiChatService(
                 ? cEl.GetString() ?? string.Empty
                 : string.Empty;
 
+            JsonNode? messageExtraContent = message.TryGetProperty("extra_content", out var msgExtraEl) && msgExtraEl.ValueKind != JsonValueKind.Null
+                ? JsonNode.Parse(msgExtraEl.GetRawText())
+                : null;
+            JsonArray? reasoningDetails = message.TryGetProperty("reasoning_details", out var rdEl) && rdEl.ValueKind == JsonValueKind.Array
+                ? JsonNode.Parse(rdEl.GetRawText()) as JsonArray
+                : null;
+
             var calls = new List<AccumulatedToolCall>();
             if (message.TryGetProperty("tool_calls", out var tcEl) && tcEl.ValueKind == JsonValueKind.Array)
             {
@@ -474,9 +636,15 @@ public sealed partial class OpenAiChatService(
                     var fn = item.GetProperty("function");
                     var name = fn.GetProperty("name").GetString() ?? string.Empty;
                     var args = fn.TryGetProperty("arguments", out var aEl) ? aEl.GetString() ?? "{}" : "{}";
+                    var extraContent = item.TryGetProperty("extra_content", out var ecEl) && ecEl.ValueKind != JsonValueKind.Null
+                        ? JsonNode.Parse(ecEl.GetRawText())
+                        : null;
+                    var thoughtSig = item.TryGetProperty("thought_signature", out var tsEl) && tsEl.ValueKind == JsonValueKind.String
+                        ? tsEl.GetString()
+                        : null;
                     if (!string.IsNullOrWhiteSpace(name))
                     {
-                        calls.Add(new AccumulatedToolCall(id, name, args));
+                        calls.Add(new AccumulatedToolCall(id, name, args, extraContent, thoughtSig));
                     }
 
                     i++;
@@ -507,7 +675,7 @@ public sealed partial class OpenAiChatService(
                 }
             }
 
-            return new StreamRoundResult(true, HttpStatusCode.OK, null, cleanedText.Length > 0 ? cleanedText.ToString() : text, calls);
+            return new StreamRoundResult(true, HttpStatusCode.OK, null, cleanedText.Length > 0 ? cleanedText.ToString() : text, calls, messageExtraContent, reasoningDetails);
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
         {
@@ -515,9 +683,27 @@ public sealed partial class OpenAiChatService(
         }
     }
 
+    private static readonly HashSet<string> WriteToolNames = new(StringComparer.Ordinal)
+    {
+        "create_note",
+        "update_note",
+        "extract_pdf_images",
+        "create_checklist_item",
+        "toggle_checklist_item",
+        "create_event",
+        "create_course",
+        "create_activity",
+        "create_activity_item",
+        "create_activity_items",
+    };
+
     private async Task<string> ExecuteToolAsync(
         ClaimsPrincipal principal,
         Guid userId,
+        Guid? threadId,
+        string userTimezone,
+        bool enableWebSearch,
+        bool allowWriteTools,
         string toolName,
         string argumentsJson,
         Guid? lockedCourseId,
@@ -525,6 +711,15 @@ public sealed partial class OpenAiChatService(
         Func<object, Task> writeEventAsync,
         CancellationToken ct)
     {
+        if (!allowWriteTools && WriteToolNames.Contains(toolName))
+        {
+            return JsonSerializer.Serialize(new { error = "Write tools are disabled (chat is in Read-only mode)." }, JsonOptions);
+        }
+
+        if (!enableWebSearch && string.Equals(toolName, "web_search", StringComparison.Ordinal))
+        {
+            return JsonSerializer.Serialize(new { error = "Web search is disabled for this chat." }, JsonOptions);
+        }
         JsonDocument argsDoc;
         try
         {
@@ -538,63 +733,79 @@ public sealed partial class OpenAiChatService(
         using (argsDoc)
         {
             var root = argsDoc.RootElement;
-
-            if (lockedCourseId.HasValue)
+            try
             {
+                if (lockedCourseId.HasValue)
+                {
+                    return toolName switch
+                    {
+                        "get_course" => await RunGetCourseAsync(principal, lockedCourseId.Value, ct),
+                        "search_knowledge" => await RunSearchKnowledgeAsync(principal, root, lockedCourseId, citations, ct),
+                        "read_note" => await RunReadNoteAsync(principal, root, lockedCourseId, citations, ct),
+                        "list_artifacts" => await RunListArtifactsAsync(principal, userId, root, lockedCourseId, ct),
+                        "read_artifact_text" => await RunReadArtifactTextAsync(principal, userId, root, lockedCourseId, citations, ct),
+                        "create_note" => await RunCreateNoteAsync(principal, userId, root, lockedCourseId, citations, writeEventAsync, ct),
+                        "update_note" => await RunUpdateNoteAsync(principal, userId, root, lockedCourseId, citations, writeEventAsync, ct),
+                        "extract_pdf_images" => await RunExtractPdfImagesAsync(principal, userId, root, lockedCourseId, ct),
+                        "create_activity_item" => await RunCreateActivityItemAsync(principal, userId, root, lockedCourseId, writeEventAsync, ct),
+                        "create_activity_items" => await RunCreateActivityItemsBatchAsync(principal, userId, root, lockedCourseId, writeEventAsync, ct),
+                        "web_search" => await webToolsService.WebSearchAsync(userId, GetOptionalString(root, "query") ?? string.Empty, GetOptionalInt(root, "maxResults", 5), ct),
+                        "fetch_url" => await webToolsService.FetchUrlAsync(GetOptionalString(root, "url") ?? string.Empty, GetOptionalInt(root, "maxChars", 16_000), ct),
+                        "query_chat_ics" => await RunQueryChatIcsAsync(userId, threadId, userTimezone, root, ct),
+                        "read_chat_attachment" => await RunReadChatAttachmentAsync(userId, threadId, root, ct),
+                        _ => JsonSerializer.Serialize(new { error = "Tool is not available in course-scoped chat." }, JsonOptions),
+                    };
+                }
+
                 return toolName switch
                 {
-                    "get_course" => await RunGetCourseAsync(principal, lockedCourseId.Value, ct),
-                    "search_knowledge" => await RunSearchKnowledgeAsync(principal, root, lockedCourseId, citations, ct),
-                    "read_note" => await RunReadNoteAsync(principal, root, lockedCourseId, citations, ct),
-                    "list_artifacts" => await RunListArtifactsAsync(principal, userId, root, lockedCourseId, ct),
-                    "read_artifact_text" => await RunReadArtifactTextAsync(principal, userId, root, lockedCourseId, citations, ct),
-                    "create_note" => await RunCreateNoteAsync(principal, userId, root, lockedCourseId, citations, writeEventAsync, ct),
-                    "update_note" => await RunUpdateNoteAsync(principal, userId, root, lockedCourseId, citations, writeEventAsync, ct),
-                    "extract_pdf_images" => await RunExtractPdfImagesAsync(principal, userId, root, lockedCourseId, ct),
-                    "create_activity_item" => await RunCreateActivityItemAsync(principal, userId, root, lockedCourseId, writeEventAsync, ct),
-                    _ => JsonSerializer.Serialize(new { error = "Tool is not available in course-scoped chat." }, JsonOptions),
+                    "get_day" => SerializeResult(await knowledge.GetDayAsync(principal, false, GetOptionalString(root, "date"), ct)),
+                    "list_events" => SerializeResult(await knowledge.ListEventsAsync(
+                        principal,
+                        false,
+                        GetOptionalDateTimeOffset(root, "from"),
+                        GetOptionalDateTimeOffset(root, "to"),
+                        GetOptionalGuid(root, "calendarId"),
+                        ct)),
+                    "list_courses" => SerializeResult(await knowledge.ListCoursesAsync(
+                        principal,
+                        false,
+                        GetOptionalString(root, "semester"),
+                        GetOptionalString(root, "status"),
+                        ct)),
+                    "get_course" => await RunGetCourseAsync(principal, GetOptionalGuid(root, "courseId"), ct),
+                    "list_notes_tree" => SerializeResult(await knowledge.ListNotesTreeAsync(
+                        principal,
+                        false,
+                        GetOptionalBool(root, "includeUniversity", true),
+                        GetOptionalBool(root, "includeEvents", true),
+                        GetOptionalBool(root, "includeDaily", true),
+                        ct)),
+                    "read_note" => await RunReadNoteAsync(principal, root, null, citations, ct),
+                    "list_artifacts" => await RunListArtifactsAsync(principal, userId, root, null, ct),
+                    "read_artifact_text" => await RunReadArtifactTextAsync(principal, userId, root, null, citations, ct),
+                    "search_knowledge" => await RunSearchKnowledgeAsync(principal, root, null, citations, ct),
+                    "create_note" => await RunCreateNoteAsync(principal, userId, root, null, citations, writeEventAsync, ct),
+                    "update_note" => await RunUpdateNoteAsync(principal, userId, root, null, citations, writeEventAsync, ct),
+                    "extract_pdf_images" => await RunExtractPdfImagesAsync(principal, userId, root, null, ct),
+                    "create_checklist_item" => await RunCreateChecklistItemAsync(principal, root, writeEventAsync, ct),
+                    "toggle_checklist_item" => await RunToggleChecklistItemAsync(principal, root, writeEventAsync, ct),
+                    "create_event" => await RunCreateEventAsync(principal, root, writeEventAsync, ct),
+                    "create_course" => await RunCreateCourseAsync(principal, root, writeEventAsync, ct),
+                    "create_activity" => await RunCreateActivityAsync(principal, root, writeEventAsync, ct),
+                    "create_activity_item" => await RunCreateActivityItemAsync(principal, userId, root, null, writeEventAsync, ct),
+                    "create_activity_items" => await RunCreateActivityItemsBatchAsync(principal, userId, root, null, writeEventAsync, ct),
+                    "web_search" => await webToolsService.WebSearchAsync(userId, GetOptionalString(root, "query") ?? string.Empty, GetOptionalInt(root, "maxResults", 5), ct),
+                    "fetch_url" => await webToolsService.FetchUrlAsync(GetOptionalString(root, "url") ?? string.Empty, GetOptionalInt(root, "maxChars", 16_000), ct),
+                    "query_chat_ics" => await RunQueryChatIcsAsync(userId, threadId, userTimezone, root, ct),
+                    "read_chat_attachment" => await RunReadChatAttachmentAsync(userId, threadId, root, ct),
+                    _ => JsonSerializer.Serialize(new { error = $"Unknown tool: {toolName}" }, JsonOptions),
                 };
             }
-
-            return toolName switch
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                "get_day" => SerializeResult(await knowledge.GetDayAsync(principal, false, GetOptionalString(root, "date"), ct)),
-                "list_events" => SerializeResult(await knowledge.ListEventsAsync(
-                    principal,
-                    false,
-                    GetOptionalDateTimeOffset(root, "from"),
-                    GetOptionalDateTimeOffset(root, "to"),
-                    GetOptionalGuid(root, "calendarId"),
-                    ct)),
-                "list_courses" => SerializeResult(await knowledge.ListCoursesAsync(
-                    principal,
-                    false,
-                    GetOptionalString(root, "semester"),
-                    GetOptionalString(root, "status"),
-                    ct)),
-                "get_course" => await RunGetCourseAsync(principal, GetOptionalGuid(root, "courseId"), ct),
-                "list_notes_tree" => SerializeResult(await knowledge.ListNotesTreeAsync(
-                    principal,
-                    false,
-                    GetOptionalBool(root, "includeUniversity", true),
-                    GetOptionalBool(root, "includeEvents", true),
-                    GetOptionalBool(root, "includeDaily", true),
-                    ct)),
-                "read_note" => await RunReadNoteAsync(principal, root, null, citations, ct),
-                "list_artifacts" => await RunListArtifactsAsync(principal, userId, root, null, ct),
-                "read_artifact_text" => await RunReadArtifactTextAsync(principal, userId, root, null, citations, ct),
-                "search_knowledge" => await RunSearchKnowledgeAsync(principal, root, null, citations, ct),
-                "create_note" => await RunCreateNoteAsync(principal, userId, root, null, citations, writeEventAsync, ct),
-                "update_note" => await RunUpdateNoteAsync(principal, userId, root, null, citations, writeEventAsync, ct),
-                "extract_pdf_images" => await RunExtractPdfImagesAsync(principal, userId, root, null, ct),
-                "create_checklist_item" => await RunCreateChecklistItemAsync(principal, root, writeEventAsync, ct),
-                "toggle_checklist_item" => await RunToggleChecklistItemAsync(principal, root, writeEventAsync, ct),
-                "create_event" => await RunCreateEventAsync(principal, root, writeEventAsync, ct),
-                "create_course" => await RunCreateCourseAsync(principal, root, writeEventAsync, ct),
-                "create_activity" => await RunCreateActivityAsync(principal, root, writeEventAsync, ct),
-                "create_activity_item" => await RunCreateActivityItemAsync(principal, userId, root, null, writeEventAsync, ct),
-                _ => JsonSerializer.Serialize(new { error = $"Unknown tool: {toolName}" }, JsonOptions),
-            };
+                return JsonSerializer.Serialize(new { error = $"Tool '{toolName}' failed: {ex.Message}" }, JsonOptions);
+            }
         }
     }
 
@@ -909,6 +1120,155 @@ public sealed partial class OpenAiChatService(
         return SerializeResult(result);
     }
 
+    private async Task<string> RunCreateActivityItemsBatchAsync(
+        ClaimsPrincipal principal,
+        Guid userId,
+        JsonElement root,
+        Guid? lockedCourseId,
+        Func<object, Task> writeEventAsync,
+        CancellationToken ct)
+    {
+        var activityId = GetOptionalGuid(root, "activityId");
+        if (!activityId.HasValue)
+        {
+            return JsonSerializer.Serialize(new { error = "activityId is required." }, JsonOptions);
+        }
+
+        if (lockedCourseId.HasValue)
+        {
+            var belongs = await db.UniversityCourseActivities.AnyAsync(
+                a => a.Id == activityId.Value && a.UserId == userId && a.CourseId == lockedCourseId.Value,
+                ct);
+            if (!belongs)
+            {
+                return JsonSerializer.Serialize(new { error = "Access denied: activity does not belong to the selected course." }, JsonOptions);
+            }
+        }
+
+        if (!root.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array)
+        {
+            return JsonSerializer.Serialize(new { error = "items array is required." }, JsonOptions);
+        }
+
+        var batch = new List<BatchActivityItemInput>();
+        foreach (var itemEl in itemsEl.EnumerateArray())
+        {
+            if (itemEl.ValueKind != JsonValueKind.Object) continue;
+            int? seq = itemEl.TryGetProperty("sequenceNumber", out var seqEl) && seqEl.TryGetInt32(out var sv) ? sv : null;
+            batch.Add(new BatchActivityItemInput(
+                GetOptionalString(itemEl, "title") ?? string.Empty,
+                GetOptionalString(itemEl, "theme"),
+                GetOptionalString(itemEl, "notes"),
+                seq,
+                GetOptionalDateTimeOffset(itemEl, "startAt"),
+                GetOptionalDateTimeOffset(itemEl, "endAt"),
+                GetOptionalBool(itemEl, "isAllDay", false),
+                GetOptionalString(itemEl, "location")));
+        }
+
+        var result = await writeService.CreateActivityItemsBatchAsync(principal, false, activityId.Value, batch, ct);
+        if (result.IsSuccess && result.Value is not null)
+        {
+            await writeEventAsync(new
+            {
+                type = "mutation",
+                domain = "university",
+                id = result.Value.ActivityId,
+                title = $"Created {result.Value.CreatedCount} items",
+            });
+        }
+
+        return SerializeResult(result);
+    }
+
+    private async Task<string> RunQueryChatIcsAsync(
+        Guid userId,
+        Guid? threadId,
+        string userTimezone,
+        JsonElement root,
+        CancellationToken ct)
+    {
+        if (!threadId.HasValue)
+        {
+            return JsonSerializer.Serialize(new { error = "No active chat thread." }, JsonOptions);
+        }
+
+        var attId = GetOptionalGuid(root, "attachmentId");
+        if (!attId.HasValue)
+        {
+            return JsonSerializer.Serialize(new { error = "attachmentId is required." }, JsonOptions);
+        }
+
+        return await attachmentService.QueryIcsAsync(
+            userId,
+            threadId.Value,
+            attId.Value,
+            GetOptionalString(root, "query"),
+            GetOptionalString(root, "startDate"),
+            GetOptionalString(root, "endDate"),
+            GetOptionalInt(root, "limit", 40),
+            userTimezone,
+            ct);
+    }
+
+    private async Task<string> RunReadChatAttachmentAsync(
+        Guid userId,
+        Guid? threadId,
+        JsonElement root,
+        CancellationToken ct)
+    {
+        if (!threadId.HasValue)
+        {
+            return JsonSerializer.Serialize(new { error = "No active chat thread." }, JsonOptions);
+        }
+
+        var attId = GetOptionalGuid(root, "attachmentId");
+        if (!attId.HasValue)
+        {
+            return JsonSerializer.Serialize(new { error = "attachmentId is required." }, JsonOptions);
+        }
+
+        return await attachmentService.ReadAttachmentAsync(
+            userId,
+            threadId.Value,
+            attId.Value,
+            GetOptionalString(root, "query"),
+            GetOptionalInt(root, "offset", 0),
+            GetOptionalInt(root, "maxChars", 12_000),
+            ct);
+    }
+
+    private async Task<Dictionary<int, List<Data.Entities.ChatAttachment>>> LoadUserTurnImagesAsync(
+        Guid userId,
+        Guid? threadId,
+        CancellationToken ct)
+    {
+        var map = new Dictionary<int, List<Data.Entities.ChatAttachment>>();
+        if (!threadId.HasValue) return map;
+
+        var userMessages = (await db.ChatMessages
+            .AsNoTracking()
+            .Include(m => m.Attachments)
+            .Where(m => m.ThreadId == threadId.Value && m.UserId == userId && m.Role == "user")
+            .ToListAsync(ct))
+            .OrderBy(m => m.CreatedAt)
+            .ToList();
+
+        for (var i = 0; i < userMessages.Count; i++)
+        {
+            var imgs = userMessages[i].Attachments
+                .Where(a => a.Kind == ChatAttachmentKinds.Image)
+                .OrderBy(a => a.CreatedAt)
+                .ToList();
+            if (imgs.Count > 0)
+            {
+                map[i] = imgs;
+            }
+        }
+
+        return map;
+    }
+
     private async Task<string> RunGetCourseAsync(ClaimsPrincipal principal, Guid? courseId, CancellationToken ct)
     {
         if (!courseId.HasValue)
@@ -1121,31 +1481,47 @@ public sealed partial class OpenAiChatService(
         return sb.Length == 0 ? "(No matching notes or artifacts found.)" : sb.ToString();
     }
 
-    private static string BuildSystemPrompt(Guid? courseId, string? courseName)
+    private static string BuildSystemPrompt(
+        Guid? courseId,
+        string? courseName,
+        bool enableWebSearch = true,
+        bool allowWriteTools = true)
     {
         var todayUtc = DateTimeOffset.UtcNow.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var modeNotes = new StringBuilder();
+        if (!allowWriteTools)
+        {
+            modeNotes.AppendLine("MODE: Read-only. You cannot create, edit, or modify any notes, events, tasks, or university items in this chat.");
+        }
+
+        if (!enableWebSearch)
+        {
+            modeNotes.AppendLine("WEB SEARCH: Disabled for this chat (do not attempt web searches; you may still read explicit URLs sent by the user via `fetch_url`).");
+        }
+
+        var extraDirectives = modeNotes.Length > 0 ? "\n" + modeNotes.ToString().TrimEnd() : string.Empty;
+
         if (courseId.HasValue)
         {
             return $"""
                 You are Atrium's study assistant. Today's UTC date is {todayUtc}.
-                You are strictly scoped to the university course "{courseName ?? "Selected Course"}" (courseId: {courseId.Value}).
-                You have both read tools (`search_knowledge`, `get_course`, `read_note`, `list_artifacts`, `read_artifact_text`) and write tools (`create_note`, `update_note`, `extract_pdf_images`, `create_activity_item`) scoped to this course.
-                Use your read tools to inspect exact course notes and uploaded slides/PDFs before answering or creating study guides, and use your write tools when asked to create/update notes, embed PDF figures, or add lecture items.
+                You are strictly scoped to the university course "{courseName ?? "Selected Course"}" (courseId: {courseId.Value}).{extraDirectives}
+                Use your available tools to inspect exact course notes and uploaded slides/PDFs before answering.
                 Be concise, cite the note title or slide/page label when referencing material, and say clearly if the course materials do not contain the answer.
-                Format chat replies for a narrow sidebar (prefer short bullet lists or compact 2-3 column tables), while using rich Markdown (headings, Obsidian callouts, GFM tables, code blocks, LaTeX, and embedded PDF figures) inside notes created via `create_note`/`update_note`.
+                Format chat replies for a narrow sidebar (prefer short bullet lists or compact 2-3 column tables), while using rich Markdown (headings, Obsidian callouts, GFM tables, code blocks, LaTeX, and embedded PDF figures) inside notes when write tools are enabled.
                 """;
         }
 
         return $"""
-            You are Atrium's personal assistant. Today's UTC date is {todayUtc}.
-            You can read AND create/update the user's daily checklist, calendar events, university courses/activities/lectures, Markdown notes, and uploaded study artifacts (including extracting diagrams from PDFs into notes via `extract_pdf_images`).
-            Always use your read tools to look up real data before answering, and use your write tools (`create_note`, `update_note`, `extract_pdf_images`, `create_checklist_item`, `toggle_checklist_item`, `create_event`, `create_course`, `create_activity`, `create_activity_item`) whenever the user asks you to create or update items.
-            Be concise, helpful, and cite the note title or file/page label when referencing knowledge base items.
+            You are Atrium's personal assistant. Today's UTC date is {todayUtc}.{extraDirectives}
+            Always use your read tools to look up real data before answering (daily checklist, calendar events, university courses/lectures, Markdown notes, uploaded study artifacts, attached chat files via `query_chat_ics`/`read_chat_attachment`, and links via `fetch_url`).
+            When write tools are enabled and the user asks you to set up a university course from a syllabus URL and/or attached .ics calendar: (1) call `fetch_url` on the syllabus link, (2) call `query_chat_ics` (first without query if needed to inspect distinct course names, then filtered for the target course), (3) call `create_course` and `create_activity` for each component (lecture, laboratory, practice, midterm, homework_assignment, exam, etc.), and (4) call `create_activity_items` in batches (up to 50 items per call) to populate all dated lectures, labs, and assessments with themes, notes, and rooms.
+            Be concise, helpful, and cite the note title, URL, or file/page label when referencing material.
             Format chat replies for a narrow sidebar (prefer short bullet lists or compact 2-3 column tables), while using rich Markdown inside notes created via `create_note`/`update_note`.
             """;
     }
 
-    private static JsonArray BuildToolsSchema(bool courseScopedOnly)
+    private static JsonArray BuildToolsSchema(bool courseScopedOnly, bool enableWebSearch = true, bool allowWriteTools = true)
     {
         var arr = new JsonArray();
 
@@ -1356,6 +1732,95 @@ public sealed partial class OpenAiChatService(
                 ["courseId", "activityType"]));
         }
 
+        arr.Add(BuildTool(
+            "create_activity_items",
+            "Batch-create up to 50 lectures, labs, assignments, or exams for a university course activity in one call (optionally scheduling each on the University calendar).",
+            new JsonObject
+            {
+                ["activityId"] = new JsonObject { ["type"] = "string" },
+                ["items"] = new JsonObject
+                {
+                    ["type"] = "array",
+                    ["items"] = new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["properties"] = new JsonObject
+                        {
+                            ["title"] = new JsonObject { ["type"] = "string" },
+                            ["theme"] = new JsonObject { ["type"] = "string" },
+                            ["notes"] = new JsonObject { ["type"] = "string" },
+                            ["sequenceNumber"] = new JsonObject { ["type"] = "integer" },
+                            ["startAt"] = new JsonObject { ["type"] = "string" },
+                            ["endAt"] = new JsonObject { ["type"] = "string" },
+                            ["isAllDay"] = new JsonObject { ["type"] = "boolean" },
+                            ["location"] = new JsonObject { ["type"] = "string" },
+                        },
+                        ["required"] = new JsonArray("title"),
+                    },
+                },
+            },
+            ["activityId", "items"]));
+
+        arr.Add(BuildTool(
+            "web_search",
+            "Search the web for current information, references, or documentation.",
+            new JsonObject
+            {
+                ["query"] = new JsonObject { ["type"] = "string" },
+                ["maxResults"] = new JsonObject { ["type"] = "integer", ["description"] = "Number of results (1-10, default 5)." },
+            },
+            ["query"]));
+
+        arr.Add(BuildTool(
+            "fetch_url",
+            "Fetch and read a public http(s) web page (converting HTML headings and tables to clean Markdown), or extract text/events from a direct PDF/ICS URL.",
+            new JsonObject
+            {
+                ["url"] = new JsonObject { ["type"] = "string" },
+                ["maxChars"] = new JsonObject { ["type"] = "integer", ["description"] = "Max characters to return (1000-24000, default 16000)." },
+            },
+            ["url"]));
+
+        arr.Add(BuildTool(
+            "query_chat_ics",
+            "Query and filter events from an .ics calendar file attached to this chat thread (omit query to see distinct event summaries and counts).",
+            new JsonObject
+            {
+                ["attachmentId"] = new JsonObject { ["type"] = "string" },
+                ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Optional keyword filter across summary, description, and location." },
+                ["startDate"] = new JsonObject { ["type"] = "string", ["description"] = "Optional yyyy-MM-dd start date filter." },
+                ["endDate"] = new JsonObject { ["type"] = "string", ["description"] = "Optional yyyy-MM-dd end date filter." },
+                ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max events to return (1-100, default 40)." },
+            },
+            ["attachmentId"]));
+
+        arr.Add(BuildTool(
+            "read_chat_attachment",
+            "Read text excerpts or search inside a document file (.pdf, .docx, .pptx, .txt, .md, .csv, .json) attached to this chat thread.",
+            new JsonObject
+            {
+                ["attachmentId"] = new JsonObject { ["type"] = "string" },
+                ["query"] = new JsonObject { ["type"] = "string", ["description"] = "Optional keyword to search within the file." },
+                ["offset"] = new JsonObject { ["type"] = "integer", ["description"] = "Character offset when reading sequentially." },
+                ["maxChars"] = new JsonObject { ["type"] = "integer", ["description"] = "Max characters to return (500-20000, default 12000)." },
+            },
+            ["attachmentId"]));
+
+        if (!allowWriteTools || !enableWebSearch)
+        {
+            var filtered = new JsonArray();
+            foreach (var node in arr)
+            {
+                var name = node?["function"]?["name"]?.GetValue<string>();
+                if (name is null) continue;
+                if (!allowWriteTools && WriteToolNames.Contains(name)) continue;
+                if (!enableWebSearch && string.Equals(name, "web_search", StringComparison.Ordinal)) continue;
+                filtered.Add(node!.DeepClone());
+            }
+
+            return filtered;
+        }
+
         return arr;
     }
 
@@ -1416,6 +1881,11 @@ public sealed partial class OpenAiChatService(
         "create_course" => "Creating university course…",
         "create_activity" => "Adding course activity…",
         "create_activity_item" => "Adding lecture/item…",
+        "create_activity_items" => "Batch-creating course items…",
+        "web_search" => "Searching the web…",
+        "fetch_url" => "Reading web page…",
+        "query_chat_ics" => "Inspecting attached calendar…",
+        "read_chat_attachment" => "Reading attached file…",
         _ => "Looking up information…",
     };
 
